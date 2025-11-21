@@ -1,0 +1,42 @@
+{
+  "Points": [
+    {
+      "Pixel": {
+        "IsEmpty": false,
+        "X": 128.36798,
+        "Y": 115.20693
+      },
+      "Easting": 391262.0,
+      "Northing": 5517085.0
+    },
+    {
+      "Pixel": {
+        "IsEmpty": false,
+        "X": 2465.094,
+        "Y": 93.12277
+      },
+      "Easting": 411851.0,
+      "Northing": 5516912.0
+    },
+    {
+      "Pixel": {
+        "IsEmpty": false,
+        "X": 149.35942,
+        "Y": 2152.5784
+      },
+      "Easting": 391112.0,
+      "Northing": 5499149.0
+    },
+    {
+      "Pixel": {
+        "IsEmpty": false,
+        "X": 2405.7275,
+        "Y": 2093.2048
+      },
+      "Easting": 411009.0,
+      "Northing": 5499306.0
+    }
+  ],
+  "MapWidth": 2528,
+  "MapHeight": 2296
+}
