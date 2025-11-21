@@ -30,7 +30,7 @@ namespace Maps
             // Сучасний підхід для .NET 6+ - автоматично застосовує налаштування з .csproj
             ApplicationConfiguration.Initialize();
 
-            // TEST MSG
+            // TEST MSG 1
             // Запуск головної форми
             Application.Run(new Maps());
         }
