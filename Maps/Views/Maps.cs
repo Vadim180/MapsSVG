@@ -2,6 +2,7 @@
 using CoordinateSharp;
 using Maps.Models;
 using Maps.Services;
+using Maps.Views;
 using Newtonsoft.Json;
 using Svg;
 using System;
@@ -303,6 +304,22 @@ namespace Maps
             ConfigureSettingsEvents(settingsControl);
             panelSettingsView.Controls.Add(settingsControl);
             if (timer.Enabled) timer.Stop(); // при виході з головної — стоп
+        }
+
+        private void BtnShowGMap_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                using (var gmapForm = new SimpleGMapForm())
+                {
+                    gmapForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Помилка відкриття GMap: {ex.Message}", "Помилка", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void Timer_Tick(object sender, EventArgs e)

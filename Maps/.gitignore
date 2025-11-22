@@ -32,6 +32,13 @@ bld/
 [Oo]ut/
 [Ll]og/
 [Ll]ogs/
+*.svg
+
+# Ignore [Oo]bj and  [Bb]in , [Dd]ebug, and [Rr]elease folders in all subdirectories
+**/[Oo]bj/
+**/[Bb]in/
+**/[Dd]ebug/
+**/[Rr]elease/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

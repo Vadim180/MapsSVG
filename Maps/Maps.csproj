@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -24,6 +24,11 @@
     <PackageReference Include="SharpDX.DXGI" Version="4.2.0" />
     <PackageReference Include="Svg" Version="3.4.7" />
     <PackageReference Include="System.IO.Ports" Version="9.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj" />
+    <ProjectReference Include="..\GMap.NET\GMap.NET.WindowsForms\GMap.NET.WindowsForms.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -24,13 +24,11 @@ namespace Maps
     internal static class Program
     {
         [STAThread]
-
         static void Main()
         {
             // Сучасний підхід для .NET 6+ - автоматично застосовує налаштування з .csproj
             ApplicationConfiguration.Initialize();
 
-            // TEST MSG 1
             // Запуск головної форми
             Application.Run(new Maps());
         }
