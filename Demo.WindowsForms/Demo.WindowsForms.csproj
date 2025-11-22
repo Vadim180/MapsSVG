@@ -1,0 +1,61 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+    <PropertyGroup>
+        <AssemblyTitle>Demo.WindowsForms</AssemblyTitle>
+        <Description>Demo for GMap.NET.WindowsForms</Description>
+        <Product>Demo.WindowsForms</Product>
+		<TargetFrameworks>net48;netcoreapp3.1;net10.0-windows</TargetFrameworks>
+        <UseWindowsForms>true</UseWindowsForms>
+        <OutputType>WinExe</OutputType>
+        <SignAssembly>False</SignAssembly>
+        <AssemblyOriginatorKeyFile>../../sn.snk</AssemblyOriginatorKeyFile>
+        <DefineConstants>MONO_disabled;SQLite;$(DefineConstants)</DefineConstants>
+        <Prefer32Bit>false</Prefer32Bit>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <NuGetAudit>False</NuGetAudit>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+        <OutputPath>..\..\Build\Debug\</OutputPath>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+        <OutputPath>..\..\Build\Release\</OutputPath>
+    </PropertyGroup>
+
+	<PropertyGroup>
+		<NoWarn>SYSLIB0011</NoWarn>
+	</PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="System.Data.SQLite" Version="1.0.117" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj" />
+        <ProjectReference Include="..\GMap.NET\GMap.NET.WindowsForms\GMap.NET.WindowsForms.csproj" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(TargetFramework)' == 'net46'">
+        <Reference Include="System.Design" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Update="Properties\Resources.Designer.cs">
+            <DesignTime>True</DesignTime>
+            <AutoGen>True</AutoGen>
+            <DependentUpon>Resources.resx</DependentUpon>
+        </Compile>
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="..\References\Web\LeafletJS\**" LinkBase="leafletjs\dist" />
+        <None Remove="leafletjs\**" />
+        <EmbeddedResource Include="leafletjs\**" />
+        <EmbeddedResource Update="Properties\Resources.resx">
+            <Generator>ResXFileCodeGenerator</Generator>
+            <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+        </EmbeddedResource>
+    </ItemGroup>
+
+</Project>

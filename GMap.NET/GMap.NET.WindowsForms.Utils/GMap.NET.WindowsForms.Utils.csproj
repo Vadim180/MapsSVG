@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>GMap.NET.WinForms.Utils</PackageId>
+    <Product>GMap.NET.WinForms.Utils</Product>
+    <AssemblyTitle>GMap.NET.WinForms.Utils</AssemblyTitle>
+    <RootNamespace>GMap.NET</RootNamespace>
+    <TargetFrameworks>net46;net461;net462;net47;net471;net472;net48;net481</TargetFrameworks>
+    <UseWindowsForms>true</UseWindowsForms>
+      
+    <PackageReleaseNotes>
+        - ObjectExtensions LINQPad
+        Use .DumpMarkers() or .DumpRoute() to add markers or route lines to a map in a new result pane
+    </PackageReleaseNotes>    
+  </PropertyGroup>
+
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net\d'))">
+        <DefineConstants>NETFRAMEWORK</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netstandard\d'))">
+        <DefineConstants>NETSTANDARD</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netcoreapp\d'))">
+        <DefineConstants>NETCORE</DefineConstants>
+    </PropertyGroup>
+    
+  <ItemGroup>    
+    <PackageReference Include="LINQPad" Version="5.46.0" />    
+    <PackageReference Include="Polylines" Version="1.0.0" />
+    <PackageReference Include="System.ValueTuple" Version="4.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GMap.NET.Core\GMap.NET.Core.csproj" />
+    <ProjectReference Include="..\GMap.NET.WindowsForms\GMap.NET.WindowsForms.csproj" />
+  </ItemGroup>
+
+</Project>
