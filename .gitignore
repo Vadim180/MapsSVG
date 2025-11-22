@@ -3,3 +3,11 @@
 ################################################################################
 
 /.vs
+/Demo.WindowsForms/obj
+/GMap.NET/GMap.NET.Avalonia/obj
+/GMap.NET/GMap.NET.Core/bin/Debug
+/GMap.NET/GMap.NET.Windows/obj
+/GMap.NET/GMap.NET.WindowsForms/bin/Debug
+/GMap.NET/GMap.NET.WindowsForms/obj
+/GMap.NET/GMap.NET.WindowsForms.Utils/obj
+/GMap.NET/GMap.NET.WindowsPresentation/obj
