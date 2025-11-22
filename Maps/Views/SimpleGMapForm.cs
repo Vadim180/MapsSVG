@@ -103,9 +103,6 @@ namespace Maps.Views
             mapControl.OnMapZoomChanged += MapControl_OnMapZoomChanged;
             mapControl.MouseMove += MapControl_MouseMove;
 
-            // Ініціалізуємо custom overlay
-            mapControl.Overlays.Add(overlay = new GMapOverlay("markers"));
-
 
             this.Controls.Add(mapControl);
             this.Controls.Add(controlPanel);
@@ -115,6 +112,10 @@ namespace Maps.Views
         {
             try
             {
+
+                // Ініціалізуємо custom overlay
+                mapControl.Overlays.Add(overlay = new GMapOverlay("markers"));
+
                 // Налаштування карти
                 mapControl.MapProvider = GMapProviders.OpenStreetMap;
                 mapControl.Position = new PointLatLng(50.4501, 30.5234); // Київ за замовчуванням
@@ -179,7 +180,12 @@ namespace Maps.Views
                     break;
             }
 
-            mapControl.ReloadMap();
+            // Reload map only when control and form are created/shown.
+            // Calling ReloadMap before the form is loaded causes GMap to warn and do nothing.
+            if (this.IsHandleCreated && mapControl.IsHandleCreated)
+            {
+                mapControl.ReloadMap();
+            }
         }
 
         private void BtnZoomIn_Click(object sender, EventArgs e)

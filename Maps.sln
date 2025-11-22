@@ -5,11 +5,13 @@ VisualStudioVersion = 18.3.11218.70
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Maps", "Maps\Maps.csproj", "{E7FDAE3D-5245-6115-9E90-556D1165ED51}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.Core", "..\Maps\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj", "{4E133D2D-07FD-C68B-2DBA-797A081445B2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.Core", "GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj", "{4E133D2D-07FD-C68B-2DBA-797A081445B2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.WindowsForms", "..\Maps\GMap.NET\GMap.NET.WindowsForms\GMap.NET.WindowsForms.csproj", "{527D0F41-2560-1D0A-6A9F-C9B33B43E270}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.WindowsForms", "GMap.NET\GMap.NET.WindowsForms\GMap.NET.WindowsForms.csproj", "{527D0F41-2560-1D0A-6A9F-C9B33B43E270}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Demo.WindowsForms", "..\Maps\Demo.WindowsForms\Demo.WindowsForms.csproj", "{5E1DFC9A-F008-612D-1077-A2147DE8C8D2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Demo.WindowsForms", "Demo.WindowsForms\Demo.WindowsForms.csproj", "{5E1DFC9A-F008-612D-1077-A2147DE8C8D2}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "GMap.NET", "GMap.NET", "{FC7D783C-052F-6D74-7626-11FB310BEB27}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -36,6 +38,11 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{4E133D2D-07FD-C68B-2DBA-797A081445B2} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
+		{527D0F41-2560-1D0A-6A9F-C9B33B43E270} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
+		{5E1DFC9A-F008-612D-1077-A2147DE8C8D2} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {172697EC-9615-40CA-80C9-CF863FE3EEC7}
