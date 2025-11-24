@@ -13,11 +13,22 @@ using System.Globalization;
 using System.IO;
 using System.Windows.Forms;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
+using GMap.NET;
+using GMap.NET.MapProviders;
+using GMap.NET.WindowsForms;
 
 namespace Maps
 {
     public partial class Maps : Form
     {
+        private GMapControl gmap;      // наша картова контрола
+        private bool gmapInitialized;  // щоб ініціалізувати тільки один раз
+        private RectLatLng _allowedArea;   // область, в межах якої живе карта
+        private bool _isAdjustingPosition;   // <-- додай це
+        private PointLatLng _lastValidPosition;
+        private Point _lastMouse;
+        private bool _isDragging = false;
+
         private static readonly Random random = new Random();
         private List<ReferencePoint> referencePoints = new(); // Список точок для зберігання координат
         private double[] eastingCoeffs;  // для X
@@ -248,6 +259,197 @@ namespace Maps
         }
         private int frameCount = 0; // Додаємо змінну для підрахунку кадрів
 
+        private void InitGMap()
+        {
+            if (gmapInitialized)
+                return;
+
+            gmap = new GMapControl();
+
+            // базові налаштування карти
+            GMaps.Instance.Mode = AccessMode.ServerAndCache;
+            gmap.MapProvider = GMapProviders.OpenStreetMap;
+
+            // розміщуємо всередині panelMap
+            gmap.Name = "gmapControl";
+            gmap.Dock = DockStyle.Fill;   // заповнює всю панель
+
+            gmap.CanDragMap = true;                 // дозволити drag
+            gmap.DragButton = MouseButtons.Left;    // тягнемо ЛІВОЮ кнопкою
+
+            gmap.Bearing = 0;
+            gmap.CanDragMap = false;
+            gmap.MarkersEnabled = true;
+            gmap.PolygonsEnabled = true;
+            gmap.RoutesEnabled = true;
+            gmap.ShowCenter = false;      // не малювати хрестик по центру
+
+            // додаємо на панель
+            // важливо: додаємо ПЕРШИМ, щоб поверх нього лишились твої label-и (кут, серва)
+            panelMap.Controls.Add(gmap);
+            panelMap.Controls.SetChildIndex(gmap, 0);
+
+            // якщо хочеш – сховаємо pictureBox1, щоб не заважав
+            pictureBox1.Visible = false;
+
+            // налаштування карти
+            GMaps.Instance.Mode = AccessMode.ServerAndCache;   // сервер + кеш
+            gmap.MapProvider = GMapProviders.OpenStreetMap;    // відкриті карти (без ключа)
+
+            // стартова позиція – став будь-які координати
+            // приклад: Київ
+            gmap.Position = new PointLatLng(50.4501, 30.5234);
+
+            gmap.MinZoom = 3;
+            gmap.MaxZoom = 20;
+            gmap.Zoom = 10;
+
+            // УВАГА: RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat)
+            // top = більша широта (північ), bottom = менша (південь)
+            // left = менша довгота (захід), right = більша (схід)
+            // --- ТВОЯ ОБЛАСТЬ, В ЯКІЙ МОЖНА ПЕРЕТЯГУВАТИ КАРТУ ---
+            double topLat = 49.814536;  // північ (верх)
+            double leftLng = 37.33012;   // захід (ліво)
+            double bottomLat = 49.55683;   // південь (низ)
+            double rightLng = 37.843171;  // схід (право)
+
+            _allowedArea = RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
+
+            // 3) Зумимо так, щоб вся область влізла у вікно
+            // Центр дозволеної області
+            double centerLat = (topLat + bottomLat) / 2.0;
+            double centerLng = (leftLng + rightLng) / 2.0;
+
+            // Виставляємо позицію карти в центр рамки
+            gmap.Position = new PointLatLng(centerLat, centerLng);
+
+            _lastValidPosition = gmap.Position;
+
+            // Зум можеш підібрати під себе:
+            gmap.Zoom = 11;   // або інше значення, яке тобі зручно
+
+            // 4) Підписуємось на зміну позиції – будемо "затискати" центр у межах рамки
+            //gmap.OnPositionChanged += Gmap_OnPositionChanged;
+            gmap.OnMapDrag += Gmap_OnMapDrag;
+            gmap.MouseDown += Gmap_MouseDown;
+            gmap.MouseMove += Gmap_MouseMove;
+            gmap.MouseUp += Gmap_MouseUp;
+
+            gmapInitialized = true;
+        }
+
+        private void Gmap_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = true;
+                _lastMouse = e.Location;
+            }
+        }
+
+        private void Gmap_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isDragging)
+                return;
+
+            // якщо ще нема ViewArea або allowedArea – нічого не робимо
+            if (gmap.ViewArea.IsEmpty || _allowedArea.IsEmpty)
+                return;
+
+            // Поточний центр
+            PointLatLng current = gmap.Position;
+
+            // Розрахунок зміщення миші
+            int dx = e.X - _lastMouse.X;
+            int dy = e.Y - _lastMouse.Y;
+
+            // Переводимо пікселі в градуси
+            var view = gmap.ViewArea;
+            double latPerPixel = view.HeightLat / gmap.Height; // НЕ Height
+            double lngPerPixel = view.WidthLng / gmap.Width;  // НЕ Width
+
+            double newLat = current.Lat - dy * latPerPixel; // Lat, НЕ lat
+            double newLng = current.Lng - dx * lngPerPixel; // Lng, НЕ lng
+
+            // Перевіряємо межі
+            if (newLat > _allowedArea.Top) newLat = _allowedArea.Top;
+            if (newLat < _allowedArea.Bottom) newLat = _allowedArea.Bottom;
+
+            if (newLng < _allowedArea.Left) newLng = _allowedArea.Left;
+            if (newLng > _allowedArea.Right) newLng = _allowedArea.Right;
+
+            // Ставимо нову позицію
+            gmap.Position = new PointLatLng(newLat, newLng);
+
+            // Оновлюємо останню позицію миші
+            _lastMouse = e.Location;
+        }
+
+        private void Gmap_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = false;
+            }
+        }
+
+        private void Gmap_OnMapDrag()
+        {
+            var pos = gmap.Position;
+
+            // Якщо всередині дозволеної області — оновлюємо lastValid
+            if (_allowedArea.Contains(pos))
+            {
+                _lastValidPosition = pos;
+            }
+            else
+            {
+                // Якщо поза межею — негайно повертаємо на останню дозволену
+                gmap.Position = _lastValidPosition;
+            }
+        }
+
+        //private void Gmap_OnPositionChanged(PointLatLng pos)
+        //{
+        //    // щоб не зловити рекурсію, коли ми самі міняємо Position
+        //    if (_isAdjustingPosition)
+        //        return;
+
+        //    if (_allowedArea.IsEmpty)
+        //        return;
+
+        //    // якщо всередині прямокутника — нічого не робимо
+        //    if (_allowedArea.Contains(pos))
+        //        return;
+
+        //    // якщо вилізли — обрізаємо до меж
+        //    var clamped = ClampToBounds(pos, _allowedArea);
+
+        //    _isAdjustingPosition = true;
+        //    try
+        //    {
+        //        gmap.Position = clamped;
+        //    }
+        //    finally
+        //    {
+        //        _isAdjustingPosition = false;
+        //    }
+        //}
+
+        private PointLatLng ClampToBounds(PointLatLng p, RectLatLng bounds)
+        {
+            double lat = p.Lat;
+            double lng = p.Lng;
+
+            if (lat > bounds.Top) lat = bounds.Top;
+            if (lat < bounds.Bottom) lat = bounds.Bottom;
+
+            if (lng < bounds.Left) lng = bounds.Left;
+            if (lng > bounds.Right) lng = bounds.Right;
+
+            return new PointLatLng(lat, lng);
+        }
+
         private void SafeInvalidate(RectangleF bounds)
         {
             // Швидка перевірка без блокування
@@ -312,7 +514,8 @@ namespace Maps
             {
                 using (var gmapForm = new SimpleGMapForm())
                 {
-                    gmapForm.ShowDialog(this);
+                    //gmapForm.ShowDialog(this);
+                    InitGMap();
                 }
             }
             catch (Exception ex)
