@@ -15,6 +15,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Data - Копировать\**" />
+    <EmbeddedResource Remove="Data - Копировать\**" />
+    <None Remove="Data - Копировать\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Data\calibration.json" />
+    <None Remove="Maps\MapTest.svg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Data\calibration.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Maps\MapTest.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Accord.Math" Version="3.8.0" />
     <PackageReference Include="CoordinateSharp" Version="3.1.1.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -32,15 +52,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Data\calibration.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Maps\1MapTest.svg">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Maps\MapTest.svg">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Update="settings\scale.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

@@ -43,6 +43,9 @@
             btnResetTemplate = new Button();
             txtCustomUnit = new TextBox();
             btnSaveUnit = new Button();
+            label1 = new Label();
+            txtLaunchArea = new TextBox();
+            btnSaveLaunchArea = new Button();
             SuspendLayout();
             // 
             // txtNewPosition
@@ -121,7 +124,7 @@
             // 
             // btnBack
             // 
-            btnBack.Location = new Point(193, 935);
+            btnBack.Location = new Point(206, 1091);
             btnBack.Name = "btnBack";
             btnBack.Size = new Size(179, 59);
             btnBack.TabIndex = 8;
@@ -141,7 +144,7 @@
             // 
             // txtTemplateEditor
             // 
-            txtTemplateEditor.Location = new Point(0, 583);
+            txtTemplateEditor.Location = new Point(16, 778);
             txtTemplateEditor.Multiline = true;
             txtTemplateEditor.Name = "txtTemplateEditor";
             txtTemplateEditor.Size = new Size(545, 230);
@@ -149,7 +152,7 @@
             // 
             // btnSaveTemplate
             // 
-            btnSaveTemplate.Location = new Point(169, 819);
+            btnSaveTemplate.Location = new Point(185, 1014);
             btnSaveTemplate.Name = "btnSaveTemplate";
             btnSaveTemplate.Size = new Size(203, 31);
             btnSaveTemplate.TabIndex = 11;
@@ -159,7 +162,7 @@
             // 
             // btnResetTemplate
             // 
-            btnResetTemplate.Location = new Point(169, 856);
+            btnResetTemplate.Location = new Point(185, 1051);
             btnResetTemplate.Name = "btnResetTemplate";
             btnResetTemplate.Size = new Size(203, 31);
             btnResetTemplate.TabIndex = 12;
@@ -184,10 +187,39 @@
             btnSaveUnit.UseVisualStyleBackColor = true;
             btnSaveUnit.Click += BtnSaveUnit_Click;
             // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(212, 552);
+            label1.Name = "label1";
+            label1.Size = new Size(122, 20);
+            label1.TabIndex = 17;
+            label1.Text = "Район зльоту";
+            // 
+            // txtLaunchArea
+            // 
+            txtLaunchArea.Location = new Point(193, 586);
+            txtLaunchArea.Name = "txtLaunchArea";
+            txtLaunchArea.Size = new Size(150, 26);
+            txtLaunchArea.TabIndex = 18;
+            // 
+            // btnSaveLaunchArea
+            // 
+            btnSaveLaunchArea.Location = new Point(185, 628);
+            btnSaveLaunchArea.Name = "btnSaveLaunchArea";
+            btnSaveLaunchArea.Size = new Size(161, 53);
+            btnSaveLaunchArea.TabIndex = 19;
+            btnSaveLaunchArea.Text = "Зберегти район зльоту";
+            btnSaveLaunchArea.UseVisualStyleBackColor = true;
+            btnSaveLaunchArea.Click += btnSaveLaunchArea_Click;
+            // 
             // NameEditorControl
             // 
             AutoScaleDimensions = new SizeF(10F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
+            Controls.Add(btnSaveLaunchArea);
+            Controls.Add(txtLaunchArea);
+            Controls.Add(label1);
             Controls.Add(btnSaveUnit);
             Controls.Add(txtCustomUnit);
             Controls.Add(btnResetTemplate);
@@ -204,7 +236,7 @@
             Controls.Add(btnAddPosition);
             Controls.Add(txtNewPosition);
             Name = "NameEditorControl";
-            Size = new Size(563, 1011);
+            Size = new Size(599, 1183);
             ResumeLayout(false);
             PerformLayout();
         }
@@ -226,5 +258,8 @@
         private Button btnResetTemplate;
         private TextBox txtCustomUnit;
         private Button btnSaveUnit;
+        private Label label1;
+        private TextBox txtLaunchArea;
+        private Button btnSaveLaunchArea;
     }
 }

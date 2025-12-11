@@ -1,21 +1,28 @@
 ﻿using Accord.Math;
 using CoordinateSharp;
+using GMap.NET;
+using GMap.NET.MapProviders;
+using GMap.NET.WindowsForms;
 using Maps.Models;
 using Maps.Services;
 using Maps.Views;
+using Microsoft.VisualBasic.Logging;
 using Newtonsoft.Json;
+using ProjNet.CoordinateSystems;
 using Svg;
 using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Windows.Forms;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-using GMap.NET;
-using GMap.NET.MapProviders;
-using GMap.NET.WindowsForms;
+
+using ProjNet.CoordinateSystems;
+using ProjNet.CoordinateSystems.Transformations;
+
 
 namespace Maps
 {
@@ -28,6 +35,10 @@ namespace Maps
         private PointLatLng _lastValidPosition;
         private Point _lastMouse;
         private bool _isDragging = false;
+
+        private GMap.NET.WindowsForms.GMapControl? mapControl;
+
+        private Point _lastMousePos;
 
         private static readonly Random random = new Random();
         private List<ReferencePoint> referencePoints = new(); // Список точок для зберігання координат
@@ -52,7 +63,9 @@ namespace Maps
 
         private float _scale = 1.0f;                        //основний масштаб карти
         private Size _originalImageSize;                    //Оригінальний розмір мапи
-        private Bitmap? cachedBitmap;                       //Закешоване зображення використовується для малювання на PictureBox
+        private Bitmap? cachedBitmap = new Bitmap(1000,1000);                      //Закешоване зображення використовується для малювання на PictureBox
+
+
         private PointF _imageOffset = new PointF(0, 0);     //зміщення зображення відносно PictureBox
         private Point _panStart;                            //точка, з якої почалося переміщення
         private PointF? clickedPointMarker = null;          // Точка, в якій було натиснуто мишкою для вимірювання відстані
@@ -63,11 +76,6 @@ namespace Maps
         private int currentCornerIndex = 0; // Стан: яка точка зараз вводиться (4)
         private bool isCollectingCorners = false; // Прапорець, чи активний режим збору
         private PointF[] calibrationMarkers = new PointF[4];
-
-        //    Лівий верх 37U CR 90582 17528     UTM 37N 390581,5517528
-        //    Правий верх 37U DR 11917 17241    UTM 37N 411916,5517241
-        //    Лівий низ 37U CQ 90304 98899      UTM 37N 390303,5498899
-        //    Правий низ 37U DQ 11700 98406     UTM 37N 411700,5498406
 
         private PointF? _courseStartPoint = null;    // коли добавив ці 2 строчки і їх потім використовував, то перестала запускатися програма 
         private PointF? _courseEndPoint = null;      //
@@ -84,7 +92,7 @@ namespace Maps
         private bool _isReportTemplate = false;              //Перевіряє чи натиснуто бойова робота
         private bool IsMainTabActive => panelMainView?.Visible == true;   // Повертає true, коли показана панель з головним екраном (panelMainView.Visible == true).
 
-
+        private float _mapMinUtmX, _mapMaxUtmX, _mapMinUtmY, _mapMaxUtmY;    //поля для зберігання меж карти
 
         private bool _isInteracting = false;     // Прапорець "йде взаємодія" (пан/зум/drag), щоб в Paint знижувати якість для швидкості
 
@@ -221,7 +229,7 @@ namespace Maps
 
             // Подвійна буферизація, щоб не миготіло і не фрізило
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-            this.UpdateStyles();
+            this.UpdateStyles();  
 
             // Увімкнути DoubleBuffered для pictureBox1 через рефлексію
             typeof(Control).GetProperty("DoubleBuffered",
@@ -245,7 +253,6 @@ namespace Maps
 
             timer.Enabled = false;
 
-
             // стартовий фокус на карті
             //this.Shown += (_, __) => { pictureBox1.Select(); pictureBox1.Focus(); shown = true; };
             this.Shown += (_, __) =>
@@ -264,150 +271,234 @@ namespace Maps
             if (gmapInitialized)
                 return;
 
-            gmap = new GMapControl();
+            if (panelMap == null)
+            {
+                MessageBox.Show("panelMap не знайдена!", "Помилка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
-            // базові налаштування карти
+            gmap = new GMapControl
+            {
+                Name = "gmapControl",
+                Dock = DockStyle.Fill,
+
+                CanDragMap = true,
+                DragButton = MouseButtons.Left,
+                MarkersEnabled = true,
+                PolygonsEnabled = true,
+                RoutesEnabled = true,
+                ShowCenter = false
+            };
+
+            // Режим доступу
             GMaps.Instance.Mode = AccessMode.ServerAndCache;
-            gmap.MapProvider = GMapProviders.OpenStreetMap;
 
-            // розміщуємо всередині panelMap
-            gmap.Name = "gmapControl";
-            gmap.Dock = DockStyle.Fill;   // заповнює всю панель
+            // Провайдер (Google Map або той, що тобі потрібен)
+            gmap.MapProvider = GMapProviders.GoogleMap;
 
-            gmap.CanDragMap = true;                 // дозволити drag
-            gmap.DragButton = MouseButtons.Left;    // тягнемо ЛІВОЮ кнопкою
-
-            gmap.Bearing = 0;
-            gmap.CanDragMap = false;
-            gmap.MarkersEnabled = true;
-            gmap.PolygonsEnabled = true;
-            gmap.RoutesEnabled = true;
-            gmap.ShowCenter = false;      // не малювати хрестик по центру
-
-            // додаємо на панель
-            // важливо: додаємо ПЕРШИМ, щоб поверх нього лишились твої label-и (кут, серва)
-            panelMap.Controls.Add(gmap);
-            panelMap.Controls.SetChildIndex(gmap, 0);
-
-            // якщо хочеш – сховаємо pictureBox1, щоб не заважав
-            pictureBox1.Visible = false;
-
-            // налаштування карти
-            GMaps.Instance.Mode = AccessMode.ServerAndCache;   // сервер + кеш
-            gmap.MapProvider = GMapProviders.OpenStreetMap;    // відкриті карти (без ключа)
-
-            // стартова позиція – став будь-які координати
-            // приклад: Київ
-            gmap.Position = new PointLatLng(50.4501, 30.5234);
-
-            gmap.MinZoom = 3;
-            gmap.MaxZoom = 20;
-            gmap.Zoom = 10;
-
-            // УВАГА: RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat)
-            // top = більша широта (північ), bottom = менша (південь)
-            // left = менша довгота (захід), right = більша (схід)
-            // --- ТВОЯ ОБЛАСТЬ, В ЯКІЙ МОЖНА ПЕРЕТЯГУВАТИ КАРТУ ---
-            double topLat = 49.814536;  // північ (верх)
+            // Стартова позиція – центр твоєї області
+            double topLat = 49.814536;   // північ (верх)
             double leftLng = 37.33012;   // захід (ліво)
-            double bottomLat = 49.55683;   // південь (низ)
-            double rightLng = 37.843171;  // схід (право)
+            double bottomLat = 49.55683; // південь (низ)
+            double rightLng = 37.843171; // схід (право)
 
             _allowedArea = RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
 
-            // 3) Зумимо так, щоб вся область влізла у вікно
-            // Центр дозволеної області
             double centerLat = (topLat + bottomLat) / 2.0;
             double centerLng = (leftLng + rightLng) / 2.0;
 
-            // Виставляємо позицію карти в центр рамки
             gmap.Position = new PointLatLng(centerLat, centerLng);
+
+            gmap.MinZoom = 3;
+            gmap.MaxZoom = 20;
+            gmap.Zoom = 11; // або те, що тобі зручно
+
+            // Оверлей, якщо потрібні маркери/полігони
+            var overlay = new GMapOverlay("markers");
+            gmap.Overlays.Add(overlay);
+
+            // Події
+            gmap.Paint += Gmap_Paint;
+            //gmap.OnMapDrag += Gmap_OnMapDrag;
+            //gmap.MouseDown += Gmap_MouseDown;
+            //gmap.MouseMove += Gmap_MouseMove;
+            //gmap.MouseUp += Gmap_MouseUp;
+            gmap.OnPositionChanged += Gmap_OnPositionChanged;
 
             _lastValidPosition = gmap.Position;
 
-            // Зум можеш підібрати під себе:
-            gmap.Zoom = 11;   // або інше значення, яке тобі зручно
+            // Додаємо на панель (ВАЖЛИВО – один раз)
+            panelMap.Controls.Add(gmap);
+            panelMap.Controls.SetChildIndex(gmap, 0);
 
-            // 4) Підписуємось на зміну позиції – будемо "затискати" центр у межах рамки
-            //gmap.OnPositionChanged += Gmap_OnPositionChanged;
-            gmap.OnMapDrag += Gmap_OnMapDrag;
-            gmap.MouseDown += Gmap_MouseDown;
-            gmap.MouseMove += Gmap_MouseMove;
-            gmap.MouseUp += Gmap_MouseUp;
+            // Можеш спочатку сховати, а потім показувати по кнопці
+            gmap.Visible = false;
 
             gmapInitialized = true;
         }
 
-        private void Gmap_MouseDown(object sender, MouseEventArgs e)
+
+        //private void Gmap_OnPositionChanged(PointLatLng point)
+        //{
+        //    Console.WriteLine("Position changed: GEO: " + point);
+        //    Console.WriteLine("Postion changed: FromLatLngToLocal: " + gmap.FromLatLngToLocal(point));
+        //    Console.WriteLine("Position changed: PIXEL: " + gmap.PositionPixel);
+
+
+        //}
+
+      
+        private void Gmap_Paint(object? sender, PaintEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
+
+            Graphics g = e.Graphics;
+            PrepareGraphics(g);
+            DrawBaseMap(g);
+
+            if (attackPoint != PointF.Empty)
             {
-                _isDragging = true;
-                _lastMouse = e.Location;
+                DrawAttackZone(g);
+                DrawClickedPoint(g);
+                DrawCourseLine(g);
             }
+
+            DrawCalibrationMarkers(g);
+            DrawCornerHints(g);
+            DrawScaleMeasurementMarkers(g);
+            DrawHighlightedLocalities(g);
+            DrawLocalityLabels(g);
         }
 
-        private void Gmap_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (!_isDragging)
-                return;
 
-            // якщо ще нема ViewArea або allowedArea – нічого не робимо
-            if (gmap.ViewArea.IsEmpty || _allowedArea.IsEmpty)
-                return;
+        // Обробка Кліка Мишки
+        //private void Gmap_MouseDown(object sender, MouseEventArgs e)
+        //{
+        //    if (e.Button == MouseButtons.Left)
+        //    {
+        //        _isDragging = true;
+        //        _lastMouse = e.Location;
+        //    }
+        //}
 
-            // Поточний центр
-            PointLatLng current = gmap.Position;
+        //private void Gmap_MouseMove(object sender, MouseEventArgs e)
+        //{
+        //    //// курсор до координат карти
+        //    //// e.X, e.Y — координати курсора відносно gMapControl1
+        //    //PointLatLng p = gmap.FromLocalToLatLng(e.X, e.Y);
+        //    ////Console.WriteLine("Cursor to Map: " + p);
 
-            // Розрахунок зміщення миші
-            int dx = e.X - _lastMouse.X;
-            int dy = e.Y - _lastMouse.Y;
+        //    //// Створюємо координатну систему WGS84
+        //    //var cs = GeographicCoordinateSystem.WGS84;
 
-            // Переводимо пікселі в градуси
-            var view = gmap.ViewArea;
-            double latPerPixel = view.HeightLat / gmap.Height; // НЕ Height
-            double lngPerPixel = view.WidthLng / gmap.Width;  // НЕ Width
+        //    //label1.Invoke(() =>
+        //    //{
+        //    //    label1.Text = $"Координати: Lat: {p.Lat:F6}, Lng: {p.Lng:F6}";
+        //    //});
 
-            double newLat = current.Lat - dy * latPerPixel; // Lat, НЕ lat
-            double newLng = current.Lng - dx * lngPerPixel; // Lng, НЕ lng
+        //    //if (!_isDragging)
+        //    //    return;
 
-            // Перевіряємо межі
-            if (newLat > _allowedArea.Top) newLat = _allowedArea.Top;
-            if (newLat < _allowedArea.Bottom) newLat = _allowedArea.Bottom;
+        //    //// якщо ще нема ViewArea або allowedArea – нічого не робимо
+        //    //if (gmap.ViewArea.IsEmpty || _allowedArea.IsEmpty)
+        //    //    return;
 
-            if (newLng < _allowedArea.Left) newLng = _allowedArea.Left;
-            if (newLng > _allowedArea.Right) newLng = _allowedArea.Right;
+        //    //// Поточний центр
+        //    //PointLatLng current = gmap.Position;
 
-            // Ставимо нову позицію
-            gmap.Position = new PointLatLng(newLat, newLng);
+        //    //// Розрахунок зміщення миші
+        //    //int dx = e.X - _lastMouse.X;
+        //    //int dy = e.Y - _lastMouse.Y;
 
-            // Оновлюємо останню позицію миші
-            _lastMouse = e.Location;
-        }
+        //    //// Переводимо пікселі в градуси
+        //    //var view = gmap.ViewArea;
+        //    //double latPerPixel = view.HeightLat / gmap.Height; // НЕ Height
+        //    //double lngPerPixel = view.WidthLng / gmap.Width;  // НЕ Width
 
-        private void Gmap_MouseUp(object sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                _isDragging = false;
-            }
-        }
+        //    //double newLat = current.Lat - dy * latPerPixel; // Lat, НЕ lat
+        //    //double newLng = current.Lng - dx * lngPerPixel; // Lng, НЕ lng
 
-        private void Gmap_OnMapDrag()
-        {
-            var pos = gmap.Position;
+        //    //// Перевіряємо межі
+        //    //if (newLat > _allowedArea.Top) newLat = _allowedArea.Top;
+        //    //if (newLat < _allowedArea.Bottom) newLat = _allowedArea.Bottom;
 
-            // Якщо всередині дозволеної області — оновлюємо lastValid
-            if (_allowedArea.Contains(pos))
-            {
-                _lastValidPosition = pos;
-            }
-            else
-            {
-                // Якщо поза межею — негайно повертаємо на останню дозволену
-                gmap.Position = _lastValidPosition;
-            }
-        }
+        //    //if (newLng < _allowedArea.Left) newLng = _allowedArea.Left;
+        //    //if (newLng > _allowedArea.Right) newLng = _allowedArea.Right;
+
+        //    //// Ставимо нову позицію
+        //    //gmap.Position = new PointLatLng(newLat, newLng);
+
+        //    //// Оновлюємо останню позицію миші
+        //    //_lastMouse = e.Location;
+
+        //    if (!_isDragging || mapControl == null || _allowedArea.IsEmpty)
+        //        return;
+
+        //    // Обчислюємо зсув
+        //    int deltaX = e.X - _lastMousePos.X;
+        //    int deltaY = e.Y - _lastMousePos.Y;
+
+        //    if (deltaX == 0 && deltaY == 0)
+        //        return;
+
+        //    // Отримуємо поточну позицію
+        //    PointLatLng currentPos = mapControl.Position;
+
+        //    // Перетворюємо пікселі в градуси
+        //    var viewArea = mapControl.ViewArea;
+        //    double latPerPixel = viewArea.HeightLat / mapControl.Height;
+        //    double lngPerPixel = viewArea.WidthLng / mapControl.Width;
+
+        //    // Обчислюємо нову позицію
+        //    double newLat = currentPos.Lat - deltaY * latPerPixel;
+        //    double newLng = currentPos.Lng - deltaX * lngPerPixel;
+
+        //    // Обмежуємо межами
+        //    newLat = Math.Max(_allowedArea.Bottom, Math.Min(_allowedArea.Top, newLat));
+        //    newLng = Math.Max(_allowedArea.Left, Math.Min(_allowedArea.Right, newLng));
+
+        //    // Встановлюємо нову позицію
+        //    mapControl.Position = new PointLatLng(newLat, newLng);
+
+        //    // Оновлюємо позицію миші
+        //    _lastMousePos = e.Location;
+        //}
+
+        //private void Gmap_MouseUp(object sender, MouseEventArgs e)
+        //{
+        //    if (e.Button == MouseButtons.Left)
+        //    {
+        //        _isDragging = false;
+        //    }
+
+        //    // ТЕСТОВО ВИКЛИКАЄМО ПРЯМО СТАРИЙ ОБРОБНИК З ПЕРЕДАЧЕЮ АРГУМЕНТІВ
+        //    pictureBox1_MouseUp(sender, e);
+
+        //}
+
+        //private void Gmap_OnMapDrag()
+        //{
+        //    if (mapControl == null || gmap == null || _allowedArea == null || _allowedArea.IsEmpty)
+        //        return;
+
+        //    var currentPosition = gmap.Position;
+        //    if (currentPosition == null)
+        //        return;
+
+        //    // Якщо _lastValidPosition ще не задано — ініціалізуємо його
+        //    if (_lastValidPosition == null)
+        //        _lastValidPosition = currentPosition;
+
+        //    if (_allowedArea.Contains(currentPosition))
+        //    {
+        //        _lastValidPosition = currentPosition; // Оновлюємо дозволену позицію
+        //    }
+        //    else
+        //    {
+        //        // Повертаємо на останню дозволену позицію
+        //        gmap.Position = _lastValidPosition;
+        //    }
+        //}
 
         //private void Gmap_OnPositionChanged(PointLatLng pos)
         //{
@@ -508,21 +599,170 @@ namespace Maps
             if (timer.Enabled) timer.Stop(); // при виході з головної — стоп
         }
 
+        private void Gmap_OnPositionChanged(PointLatLng point)
+        {
+            if (_isAdjustingPosition || mapControl == null || _allowedArea.IsEmpty)
+                return;
+
+            double lat = point.Lat;
+            double lng = point.Lng;
+            bool changed = false;
+
+            // Широта: Top - північ (більше), Bottom - південь (менше)
+            if (lat > _allowedArea.Top)
+            {
+                lat = _allowedArea.Top;
+                changed = true;
+            }
+            else if (lat < _allowedArea.Bottom)
+            {
+                lat = _allowedArea.Bottom;
+                changed = true;
+            }
+
+            // Довгота: Left - захід (менше), Right - схід (більше)
+            if (lng < _allowedArea.Left)
+            {
+                lng = _allowedArea.Left;
+                changed = true;
+            }
+            else if (lng > _allowedArea.Right)
+            {
+                lng = _allowedArea.Right;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                _isAdjustingPosition = true;
+                try
+                {
+                    mapControl.Position = new PointLatLng(lat, lng);
+                }
+                finally
+                {
+                    _isAdjustingPosition = false;
+                }
+            }
+
+            _lastValidPosition = new PointLatLng(lat, lng);
+        }
+
+
         private void BtnShowGMap_Click(object sender, EventArgs e)
         {
+            //    try
+            //    {
+            //        using (var gmapForm = new SimpleGMapForm())
+            //        {
+            //            //gmapForm.ShowDialog(this);
+            //            InitGMap();
+            //        }
+            //    }
+            //    catch (Exception ex)
+            //    {
+            //        MessageBox.Show($"Помилка відкриття GMap: {ex.Message}", "Помилка", 
+            //            MessageBoxButtons.OK, MessageBoxIcon.Error);
+            //    }
+            // якщо хочеш замінити відображення SVG на GMap
+
             try
             {
-                using (var gmapForm = new SimpleGMapForm())
+                if (panelMap == null)
                 {
-                    //gmapForm.ShowDialog(this);
-                    InitGMap();
+                    MessageBox.Show("panelMap не знайдена!", "Помилка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
+
+                if (mapControl == null)
+                {
+                    mapControl = new GMap.NET.WindowsForms.GMapControl
+                    {
+                        Dock = DockStyle.Fill,
+                        MinZoom = 2,
+                        MaxZoom = 20,
+                        Zoom = 10,
+                        CanDragMap = true,
+                        DragButton = MouseButtons.Left,
+                        IgnoreMarkerOnMouseWheel = true,
+                        Visible = false,
+                        MarkersEnabled = true,    
+                        PolygonsEnabled = true,  
+                        RoutesEnabled = true,     
+                        ShowCenter = false        
+                    };
+
+                    panelMap.Controls.Add(mapControl);
+                    panelMap.Controls.SetChildIndex(mapControl, 0);
+                }
+
+                if (pictureBox1 != null)
+                {
+                    pictureBox1.Visible = false;
+                    pictureBox1.SendToBack();
+                }
+
+                // Визначаємо область
+                double topLat = 49.814536;    // Північ (верх)
+                double leftLng = 37.33012;    // Захід (ліво)
+                double bottomLat = 49.55683;  // Південь (низ)
+                double rightLng = 37.843171;  // Схід (право)
+
+                _allowedArea = GMap.NET.RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
+
+                // Центр області
+                double centerLat = (topLat + bottomLat) / 2.0;
+                double centerLng = (leftLng + rightLng) / 2.0;
+
+                // Налаштування карти
+                mapControl.MapProvider = GMap.NET.MapProviders.GMapProviders.GoogleMap;
+                GMaps.Instance.Mode = AccessMode.ServerAndCache;
+
+                // ВАЖЛИВО: НЕ використовуємо BoundsOfMap - він конфліктує з нашим обробником
+                // mapControl.BoundsOfMap = _allowedArea; // ← ЗАКОМЕНТУЙТЕ ЦЕ
+
+                // Початкова позиція
+                mapControl.Position = new GMap.NET.PointLatLng(centerLat, centerLng);
+                //mapControl.MinZoom = 3;
+                //mapControl.MaxZoom = 20;
+                mapControl.Zoom = 11;
+
+                _lastValidPosition = mapControl.Position;
+
+                // Підписуємось на події
+                mapControl.OnPositionChanged -= Gmap_OnPositionChanged;
+                mapControl.OnPositionChanged += Gmap_OnPositionChanged;
+
+                //mapControl.OnMapDrag -= Gmap_OnMapDrag;           
+                //mapControl.OnMapDrag += Gmap_OnMapDrag;
+
+                //// Додаємо обробку drag
+                //mapControl.MouseDown -= Gmap_MouseDown;
+                //mapControl.MouseMove -= Gmap_MouseMove;
+                //mapControl.MouseUp -= Gmap_MouseUp;
+
+                //mapControl.MouseDown += Gmap_MouseDown;
+                //mapControl.MouseMove += Gmap_MouseMove;
+                //mapControl.MouseUp += Gmap_MouseUp;
+
+                // 7. Додамо оверлей для маркерів (опційно)
+                if (mapControl.Overlays.Count == 0)
+                {
+                    var overlay = new GMap.NET.WindowsForms.GMapOverlay("markers");
+                    mapControl.Overlays.Add(overlay);
+                }
+
+                mapControl.Visible = true;
+                mapControl.BringToFront();
+                mapControl.Refresh();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Помилка відкриття GMap: {ex.Message}", "Помилка", 
+                MessageBox.Show($"Помилка відкриття GMap: {ex.Message}", "Помилка",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+
         }
 
         private void Timer_Tick(object sender, EventArgs e)
@@ -606,40 +846,7 @@ namespace Maps
         }
 
         private void LoadSvg()
-        {
-            //try
-            //{
-            //    SvgDocument svgDocument = SvgDocument.Open(filePath);
-
-            //    // Очистка попереднього кешу, якщо він є
-            //    if (cachedBitmap != null)
-            //    {
-            //        cachedBitmap.Dispose();
-            //        cachedBitmap = null;
-            //    }
-
-            //    cachedBitmap = svgDocument.Draw();
-
-            //    if (cachedBitmap != null)
-            //    {
-            //        _originalImageSize = cachedBitmap.Size;
-            //        FitMapToScreen();
-            //        CenterImage();
-            //        pictureBox1.Invalidate();
-            //    }
-            //}
-            //catch (Exception ex)
-            //{
-            //    MessageBox.Show($"Помилка при завантаженні карти: {ex.Message}", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            //}
-
-            //if (!File.Exists(filePath))
-            //{
-            //    MessageBox.Show($"Файл не знайдено: {filePath}", "Помилка",
-            //                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            //    return;
-            //}
-
+        {            
             // 1) Відкриваємо SVG
             Svg.SvgDocument doc;
             try
@@ -763,6 +970,10 @@ namespace Maps
             {
                 newBmp?.Dispose();
             }
+            Console.WriteLine($"SVG розміри: {doc.Width.Value} {doc.Width.Type} x {doc.Height.Value} {doc.Height.Type}");
+            Console.WriteLine($"ViewBox: {doc.ViewBox.Width} x {doc.ViewBox.Height}");
+            Console.WriteLine($"Розраховані розміри: {natW} x {natH}");
+            Console.WriteLine($"Розмір панелі: {panelMap.ClientSize.Width} x {panelMap.ClientSize.Height}");
         }
 
         private void SaveCalibrationData()
@@ -1700,6 +1911,8 @@ namespace Maps
                 ["{nearestLocality}"] = nearestLocality,
                 ["{TargetType}"] = selectedTarget,
                 ["{UnitName}"] = Shablon.CustomUnit,
+                ["{LaunchArea}"] = Shablon.LaunchArea ?? ""
+
             };
 
             // ОКРЕМА обробка для закінчення роботи
@@ -2143,6 +2356,9 @@ namespace Maps
                 eastingCoeffs = SolveAffineTransform(pixels, eastings);
                 northingCoeffs = SolveAffineTransform(pixels, northings);
 
+                // +++ ДОДАЄМО ВИЗНАЧЕННЯ МЕЖ +++
+                CalculateMapBoundsFromCalibration();
+
                 Array.Clear(calibrationMarkers, 0, referencePoints.Count);
 
                 pictureBox1.Invalidate();
@@ -2251,6 +2467,7 @@ namespace Maps
                 ScrollBars = ScrollBars.Vertical
             };
 
+
             System.Windows.Forms.Button okButton = new System.Windows.Forms.Button
             {
                 Text = "OK",
@@ -2262,6 +2479,30 @@ namespace Maps
             form.Controls.Add(okButton);
             form.StartPosition = FormStartPosition.CenterParent;
             form.ShowDialog();
+        }
+
+        private void CalculateMapBoundsFromCalibration()
+        {
+            if (referencePoints == null || referencePoints.Count < 4) return;
+
+            // Знаходимо мінімальні/максимальні UTM координати з каліброваних точок
+            _mapMinUtmX = (float)referencePoints.Min(p => p.Easting);
+            _mapMaxUtmX = (float)referencePoints.Max(p => p.Easting);
+            _mapMinUtmY = (float)referencePoints.Min(p => p.Northing);
+            _mapMaxUtmY = (float)referencePoints.Max(p => p.Northing);
+
+            // Додаємо невеликий запас (1%) для безпеки
+            float paddingX = (_mapMaxUtmX - _mapMinUtmX) * 0.01f;
+            float paddingY = (_mapMaxUtmY - _mapMinUtmY) * 0.01f;
+
+            _mapMinUtmX -= paddingX;
+            _mapMaxUtmX += paddingX;
+            _mapMinUtmY -= paddingY;
+            _mapMaxUtmY += paddingY;
+
+            Console.WriteLine($"Межі карти з калібрування:");
+            Console.WriteLine($"Easting: {_mapMinUtmX:F1} - {_mapMaxUtmX:F1}");
+            Console.WriteLine($"Northing: {_mapMinUtmY:F1} - {_mapMaxUtmY:F1}");
         }
 
         private RectangleF GetMapCornerRectangle(int index)
@@ -2870,24 +3111,50 @@ namespace Maps
 
         public Dictionary<string, List<PointF>> LocalityCoordinates = new()
         {
-            ["Купянськ"] = new List<PointF> { new(399828, 5509959), new(397834, 5508936), new(398158, 5504462), new(401232, 5505218), new(402560, 5506400), new(403058, 5507946) },
-            ["Подоли"] = new List<PointF> { new(403680, 5507103), new(403055, 5506313), new(403175, 5504790), new(404814, 5503260), new(406468, 5503118), new(406876, 5504704), new(406029, 5506798) },
-            ["Кучерівка"] = new List<PointF> { new(403539, 5507473), new(403988, 5508043), new(404793, 5507673), new(404957, 5509199) },
-            ["Купянськ-Вузловий"] = new List<PointF> { new(401632, 5505873), new(402527, 5504322), new(401702, 5503091), new(402434, 5500052), new(404628, 5500096), new(403839, 5501610) },
-            ["Петропавлівка"] = new List<PointF> { new(404919, 5511019), new(405534, 5508505), new(406306, 5507656), new(408067, 5505488), new(411336, 5505693), new(408499, 5510095) },
+            ["Благодатівка"] = new List<PointF> { new(395055, 5504876), new(394349, 5504314), new(394329, 5503587), new(394739, 5503199), new(395451, 5504610) },
+            ["Болдирівка"] = new List<PointF> { new(398031, 5499715), new(397714, 5499861), new(396922, 5499848), new(396232, 5497696), new(398106, 5498130), new(398260, 5498527) },
+
+            ["Глушківка"] = new List<PointF> { new(406477, 5495455), new(405051, 5495385), new(404214, 5492469), new(405141, 5491263), new(406549, 5491734), new(407635, 5492643) },
             ["Голубівка"] = new List<PointF> { new(401166, 5511148), new(401965, 5511740), new(401111, 5512300) },
-            ["Синьківка"] = new List<PointF> { new(406597, 5514215), new(405052, 5512519), new(405662, 5511985), new(407519, 5512901) },
-            ["Лиман 1"] = new List<PointF> { new(405960, 5515616), new(407383, 5515567), new(406593, 5516880) },
-            ["Курилівка"] = new List<PointF> { new(404986, 5502793), new(403885, 5501776), new(405713, 5500829), new(409315, 5501442) },
-            ["Ківшарівка"] = new List<PointF> { new(403130, 5498817), new(405752, 5497629), new(405323, 5498941) },
+            ["Грушівка"] = new List<PointF> { new(388303, 5504831), new(387960, 5503604), new(389489, 5502923), new(391607, 5502881), new(389958, 5504595) },
+
             ["Западне"] = new List<PointF> { new(400060, 5520233), new(399304, 5519425), new(400955, 5519041), new(401468, 5519946) },
-            ["Масютівка"] = new List<PointF> { new(406323, 5519400), new(404961, 5518755), new(405960, 5518759) },
-            ["Московка"] = new List<PointF> { new(395576, 5510410), new(396153, 5508413), new(397240, 5509053), new(398053, 5509276), new(398470, 5509669), new(398147, 5510495) },
-            ["Радьківка"] = new List<PointF> { new(398429, 5512123), new(397957, 5511736), new(398299, 5511373), new(398752, 5511784) },
-            ["Кіндрашівка"] = new List<PointF> { new(397889, 5514822), new(397051, 5514300), new(397030, 5513372), new(398002, 5512452), new(398648, 5513725) },
-            ["Мала Шапківка"] = new List<PointF> { new(395634, 5516278), new(395494, 5515874), new(395942, 5515318), new(397367, 5515332), new(397288, 5515964) },
+
             ["Калинове"] = new List<PointF> { new(401619, 5516250), new(400883, 5514676), new(401661, 5514246) },
+            ["Ківшарівка"] = new List<PointF> { new(403130, 5498817), new(405752, 5497629), new(405323, 5498941) },
+            ["Кіндрашівка"] = new List<PointF> { new(397889, 5514822), new(397051, 5514300), new(397030, 5513372), new(398002, 5512452), new(398648, 5513725) },
+            ["Ковалівка"] = new List<PointF> { new(391241, 5511256), new(390939, 5510091), new(392115, 5509472), new(392552, 5510295) },
+            ["Купянськ"] = new List<PointF> { new(399627, 5510807), new(398868, 5510245), new(397675, 5509486), new(397123, 5508977), new(397776, 5508103), new(398006, 5506792), new(397989, 5505655), new(398197, 5503991), new(398796, 5503508), new(400550, 5503822), new(400400, 5504946), new(400986, 5505766), new(401102, 5505970), new(401840, 5506124), new(401961, 5506110), new(402718, 5506390), new(402909, 5506925), new(402941, 5507505), new(402994, 5507896), new(402587, 5508802), new(401468, 5509567), new(400543, 5510515) },
+            ["Купянськ-Вузловий"] = new List<PointF> { new(401855, 5506039), new(401142, 5505817), new(401228, 5504250), new(401607, 5502908), new(401580, 5501028), new(402221, 5499875), new(402783, 5499853), new(403847, 5499684), new(404417, 5499686), new(405393, 5499835), new(405560, 5500357), new(404781, 5500811), new(404031, 5501691), new(403560, 5502024), new(402503, 5504069) },
+            ["Курилівка"] = new List<PointF> { new(404986, 5502793), new(403885, 5501776), new(405713, 5500829), new(409315, 5501442) },
+            ["Кучерівка"] = new List<PointF> { new(403539, 5507473), new(403988, 5508043), new(404793, 5507673), new(404957, 5509199) },
+
+            ["Лиман 1"] = new List<PointF> { new(405960, 5515616), new(407383, 5515567), new(406593, 5516880) },
+
+            ["Мала Шапківка"] = new List<PointF> { new(395634, 5516278), new(395494, 5515874), new(395942, 5515318), new(397367, 5515332), new(397288, 5515964) },
+            ["Масютівка"] = new List<PointF> { new(406323, 5519400), new(404961, 5518755), new(405960, 5518759) },
             ["Моначинівка"] = new List<PointF> { new(393807, 5520920), new(392863, 5520566), new(393220, 5519086), new(394070, 5518181), new(394869, 5518919), new(394784, 5520377) },
+            ["Московка"] = new List<PointF> { new(395576, 5510410), new(396153, 5508413), new(397240, 5509053), new(398053, 5509276), new(398470, 5509669), new(398147, 5510495) },
+
+            ["Нечволодівка"] = new List<PointF> { new(392744, 5508125), new(392067, 5507864), new(390224, 5506075), new(390638, 5505569), new(392769, 5506518), new(393632, 5507658) },
+            ["Новоосинове"] = new List<PointF> { new(407196, 5498081), new(406574, 5497803), new(405850, 5497497), new(405486, 5497080), new(405845, 5496144), new(407220, 5496540), new(408184, 5497893) },
+
+            ["Осадьківка"] = new List<PointF> { new(393638, 5502294), new(393513, 5501949), new(394506, 5501629), new(394643, 5501998), new(394107, 5502171) },
+            ["Осиново"] = new List<PointF> { new(397733, 5501124), new(397464, 550583), new(397939, 5500290), new(398371, 5499557), new(398258, 5499278), new(398721, 5499134), new(399839, 5498457), new(401115, 5498241), new(401157, 5499711), new(399357, 5500526), new(398462, 5500872) },
+
+            ["Петропавлівка"] = new List<PointF> { new(404919, 5511019), new(405534, 5508505), new(406306, 5507656), new(408067, 5505488), new(411336, 5505693), new(408499, 5510095) },
+            ["Подоли"] = new List<PointF> { new(403680, 5507103), new(403055, 5506313), new(403175, 5504790), new(404814, 5503260), new(406468, 5503118), new(406876, 5504704), new(406029, 5506798) },
+            ["Пристін"] = new List<PointF> { new(402151, 5495322), new(400679, 5495473), new(399781, 5494923), new(401456, 5492690), new(402060, 5493118) },
+            ["Прокопівка"] = new List<PointF> { new(396833, 5500435), new(396337, 5500555), new(395845, 5500673), new(395660, 5500260), new(396966, 5499859), new(397552, 5499694), new(397724, 5499881), new(397391, 5500099) },
+
+            ["Радьківка"] = new List<PointF> { new(398429, 5512123), new(397957, 5511736), new(398299, 5511373), new(398752, 5511784) },
+
+            ["Садове"] = new List<PointF> { new(398849, 5503110), new(398399, 5503311), new(398278, 5502442), new(398797, 5502377) },
+            ["Синьківка"] = new List<PointF> { new(406597, 5514215), new(405052, 5512519), new(405662, 5511985), new(407519, 5512901) },
+            ["Соболівка"] = new List<PointF> { new(396517, 5507569), new(395456, 5506771), new(395829, 5506373), new(397071, 5506999) },
+            ["Стінка"] = new List<PointF> { new(396068, 5501913), new(395995, 5501274), new(396410, 5501126), new(396770, 5501137), new(396901, 5501920) },
+
+            ["Тамарганівка"] = new List<PointF> { new(395301, 5501598), new(395089, 5501485), new(394990, 5501073), new(395487, 5500808), new(395719, 5500971), new(395961, 5501155), new(395702, 5501418) },
             ["Тищенківка"] = new List<PointF> { new(395313, 5514373), new(395094, 5513944), new(395526, 5513278), new(396650, 5513833), new(396210, 5514310) },
 
         };

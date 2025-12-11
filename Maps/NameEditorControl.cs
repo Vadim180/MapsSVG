@@ -28,6 +28,7 @@ namespace Maps
         public void SetShablonManager(ShablonManager shablonManager)
         {
             _shablonManager = shablonManager;
+            txtLaunchArea.Text = _shablonManager?.LaunchArea ?? ""; 
             LoadCurrentTemplate();
         }
 
@@ -192,6 +193,21 @@ namespace Maps
             };
 
             txtTemplateEditor.Text = string.Join(Environment.NewLine, defaultTemplate);
+        }
+
+        private void btnSaveLaunchArea_Click(object sender, EventArgs e)
+        {
+            var area = (txtLaunchArea.Text ?? "").Trim();
+            if (string.IsNullOrEmpty(area))
+            {
+                MessageBox.Show("Будь ласка, введіть район зльоту", "Попередження");
+                return;
+            }
+            if (_shablonManager != null)
+            {
+                _shablonManager.SaveLaunchArea(area);
+                MessageBox.Show("Район зльоту збережено!", "Успіх");
+            }
         }
     }
 }

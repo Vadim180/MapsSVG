@@ -13,6 +13,7 @@ namespace Maps
         public Dictionary<string, List<string>>? DroneByPosition { get; set; }
         public string? CustomUnit { get; set; }
         public List<string> CustomReportWorkShablon { get; set; }
+        public string LaunchArea { get; set; }
     }
 
 }

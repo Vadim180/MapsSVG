@@ -74,11 +74,13 @@ namespace Maps
             Position = new ComboBox();
             panelSettingsView = new Panel();
             panelSettings = new Panel();
+            label1 = new Label();
+            button1 = new Button();
             btnHome = new Button();
             btnSettingsScreen = new Button();
             timer = new System.Windows.Forms.Timer(components);
             toolTip1 = new ToolTip(components);
-            button1 = new Button();
+            label2 = new Label();
             panelMap.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             panelRight.SuspendLayout();
@@ -110,7 +112,7 @@ namespace Maps
             labelScale_serva.Location = new Point(1201, 100);
             labelScale_serva.Margin = new Padding(0);
             labelScale_serva.Name = "labelScale_serva";
-            labelScale_serva.Size = new Size(125, 26);
+            labelScale_serva.Size = new Size(179, 37);
             labelScale_serva.TabIndex = 3;
             labelScale_serva.Text = "СЕРВА: 40";
             labelScale_serva.TextAlign = ContentAlignment.MiddleRight;
@@ -125,7 +127,7 @@ namespace Maps
             labelCoordinates.ForeColor = Color.White;
             labelCoordinates.Location = new Point(1201, 58);
             labelCoordinates.Name = "labelCoordinates";
-            labelCoordinates.Size = new Size(2, 19);
+            labelCoordinates.Size = new Size(2, 25);
             labelCoordinates.TabIndex = 0;
             // 
             // labelScale
@@ -137,7 +139,7 @@ namespace Maps
             labelScale.ForeColor = Color.White;
             labelScale.Location = new Point(1201, 9);
             labelScale.Name = "labelScale";
-            labelScale.Size = new Size(81, 26);
+            labelScale.Size = new Size(118, 37);
             labelScale.TabIndex = 2;
             labelScale.Text = "Кут: 0°";
             labelScale.TextAlign = ContentAlignment.MiddleRight;
@@ -182,6 +184,7 @@ namespace Maps
             // 
             panelMainView.AutoScroll = true;
             panelMainView.BackColor = Color.Gray;
+            panelMainView.Controls.Add(label2);
             panelMainView.Controls.Add(targetBoardCheckBox);
             panelMainView.Controls.Add(targetDestroyedCheckBox);
             panelMainView.Controls.Add(Target_Type);
@@ -216,7 +219,7 @@ namespace Maps
             targetBoardCheckBox.CheckAlign = ContentAlignment.MiddleRight;
             targetBoardCheckBox.Location = new Point(337, 590);
             targetBoardCheckBox.Name = "targetBoardCheckBox";
-            targetBoardCheckBox.Size = new Size(99, 17);
+            targetBoardCheckBox.Size = new Size(162, 24);
             targetBoardCheckBox.TabIndex = 27;
             targetBoardCheckBox.Text = "Борт втрачено";
             targetBoardCheckBox.UseVisualStyleBackColor = true;
@@ -229,7 +232,7 @@ namespace Maps
             targetDestroyedCheckBox.ForeColor = SystemColors.ControlText;
             targetDestroyedCheckBox.Location = new Point(182, 587);
             targetDestroyedCheckBox.Name = "targetDestroyedCheckBox";
-            targetDestroyedCheckBox.Size = new Size(104, 19);
+            targetDestroyedCheckBox.Size = new Size(151, 29);
             targetDestroyedCheckBox.TabIndex = 26;
             targetDestroyedCheckBox.Text = "Ціль знищено";
             targetDestroyedCheckBox.UseVisualStyleBackColor = true;
@@ -239,7 +242,7 @@ namespace Maps
             Target_Type.FormattingEnabled = true;
             Target_Type.Location = new Point(10, 588);
             Target_Type.Name = "Target_Type";
-            Target_Type.Size = new Size(169, 21);
+            Target_Type.Size = new Size(169, 28);
             Target_Type.TabIndex = 25;
             Target_Type.TabStop = false;
             // 
@@ -248,7 +251,7 @@ namespace Maps
             label_course_Value.AutoSize = true;
             label_course_Value.Location = new Point(392, 477);
             label_course_Value.Name = "label_course_Value";
-            label_course_Value.Size = new Size(10, 13);
+            label_course_Value.Size = new Size(15, 20);
             label_course_Value.TabIndex = 24;
             label_course_Value.Text = "-";
             // 
@@ -257,7 +260,7 @@ namespace Maps
             label_Course.AutoSize = true;
             label_Course.Location = new Point(374, 443);
             label_Course.Name = "label_Course";
-            label_Course.Size = new Size(31, 13);
+            label_Course.Size = new Size(47, 20);
             label_Course.TabIndex = 23;
             label_Course.Text = "Курс";
             // 
@@ -266,7 +269,7 @@ namespace Maps
             label_range_Value.AutoSize = true;
             label_range_Value.Location = new Point(69, 477);
             label_range_Value.Name = "label_range_Value";
-            label_range_Value.Size = new Size(13, 13);
+            label_range_Value.Size = new Size(18, 20);
             label_range_Value.TabIndex = 22;
             label_range_Value.Text = "0";
             // 
@@ -276,7 +279,7 @@ namespace Maps
             range2.Location = new Point(35, 443);
             range2.Margin = new Padding(0);
             range2.Name = "range2";
-            range2.Size = new Size(65, 13);
+            range2.Size = new Size(105, 20);
             range2.TabIndex = 21;
             range2.Text = "Дистанція: ";
             // 
@@ -286,7 +289,7 @@ namespace Maps
             label_height.Location = new Point(214, 443);
             label_height.Margin = new Padding(0);
             label_height.Name = "label_height";
-            label_height.Size = new Size(43, 13);
+            label_height.Size = new Size(70, 20);
             label_height.TabIndex = 20;
             label_height.Text = "Висота";
             // 
@@ -297,7 +300,7 @@ namespace Maps
             label_shootingTarget.Location = new Point(109, 148);
             label_shootingTarget.Margin = new Padding(0);
             label_shootingTarget.Name = "label_shootingTarget";
-            label_shootingTarget.Size = new Size(64, 21);
+            label_shootingTarget.Size = new Size(97, 32);
             label_shootingTarget.TabIndex = 18;
             label_shootingTarget.Text = "Ціль №";
             // 
@@ -308,7 +311,7 @@ namespace Maps
             label_DroneBy.Location = new Point(123, 97);
             label_DroneBy.Margin = new Padding(0);
             label_DroneBy.Name = "label_DroneBy";
-            label_DroneBy.Size = new Size(59, 25);
+            label_DroneBy.Size = new Size(83, 36);
             label_DroneBy.TabIndex = 17;
             label_DroneBy.Text = "Дрон";
             // 
@@ -319,7 +322,7 @@ namespace Maps
             label_Pilot.Location = new Point(123, 52);
             label_Pilot.Margin = new Padding(0);
             label_Pilot.Name = "label_Pilot";
-            label_Pilot.Size = new Size(61, 25);
+            label_Pilot.Size = new Size(86, 36);
             label_Pilot.TabIndex = 16;
             label_Pilot.Text = "Пілот";
             // 
@@ -330,7 +333,7 @@ namespace Maps
             label_Position.Location = new Point(90, 8);
             label_Position.Margin = new Padding(0);
             label_Position.Name = "label_Position";
-            label_Position.Size = new Size(84, 25);
+            label_Position.Size = new Size(119, 36);
             label_Position.TabIndex = 15;
             label_Position.Text = "Позиція";
             // 
@@ -413,7 +416,7 @@ namespace Maps
             DroneBy.Location = new Point(227, 100);
             DroneBy.Margin = new Padding(0, 6, 0, 6);
             DroneBy.Name = "DroneBy";
-            DroneBy.Size = new Size(177, 21);
+            DroneBy.Size = new Size(177, 28);
             DroneBy.TabIndex = 5;
             DroneBy.TabStop = false;
             // 
@@ -424,7 +427,7 @@ namespace Maps
             Pilot.Location = new Point(227, 55);
             Pilot.Margin = new Padding(0, 6, 0, 6);
             Pilot.Name = "Pilot";
-            Pilot.Size = new Size(177, 21);
+            Pilot.Size = new Size(177, 28);
             Pilot.TabIndex = 4;
             Pilot.TabStop = false;
             // 
@@ -435,7 +438,7 @@ namespace Maps
             Position.Location = new Point(227, 14);
             Position.Margin = new Padding(0, 6, 0, 6);
             Position.Name = "Position";
-            Position.Size = new Size(177, 21);
+            Position.Size = new Size(177, 28);
             Position.TabIndex = 3;
             Position.TabStop = false;
             Position.SelectedIndexChanged += ComboBoxPilot_SelectedIndexChanged;
@@ -453,6 +456,7 @@ namespace Maps
             // panelSettings
             // 
             panelSettings.BackColor = Color.Gray;
+            panelSettings.Controls.Add(label1);
             panelSettings.Controls.Add(button1);
             panelSettings.Controls.Add(btnHome);
             panelSettings.Controls.Add(btnSettingsScreen);
@@ -461,6 +465,25 @@ namespace Maps
             panelSettings.Name = "panelSettings";
             panelSettings.Size = new Size(512, 100);
             panelSettings.TabIndex = 1;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(255, 74);
+            label1.Name = "label1";
+            label1.Size = new Size(53, 20);
+            label1.TabIndex = 3;
+            label1.Text = "label1";
+            // 
+            // button1
+            // 
+            button1.Location = new Point(153, 71);
+            button1.Name = "button1";
+            button1.Size = new Size(75, 23);
+            button1.TabIndex = 2;
+            button1.Text = "Test";
+            button1.UseVisualStyleBackColor = true;
+            button1.Click += BtnShowGMap_Click;
             // 
             // btnHome
             // 
@@ -491,15 +514,14 @@ namespace Maps
             timer.Interval = 10;
             timer.Tick += Timer_Tick;
             // 
-            // button1
+            // label2
             // 
-            button1.Location = new Point(153, 71);
-            button1.Name = "button1";
-            button1.Size = new Size(75, 23);
-            button1.TabIndex = 2;
-            button1.Text = "Test";
-            button1.UseVisualStyleBackColor = true;
-            button1.Click += BtnShowGMap_Click;
+            label2.AutoSize = true;
+            label2.Location = new Point(73, 540);
+            label2.Name = "label2";
+            label2.Size = new Size(53, 20);
+            label2.TabIndex = 28;
+            label2.Text = "label2";
             // 
             // Maps
             // 
@@ -527,6 +549,7 @@ namespace Maps
             panelMainView.ResumeLayout(false);
             panelMainView.PerformLayout();
             panelSettings.ResumeLayout(false);
+            panelSettings.PerformLayout();
             ResumeLayout(false);
         }
 
@@ -563,5 +586,7 @@ namespace Maps
         private PictureBox pictureBox1;
         private ToolTip toolTip1;
         private Button button1;
+        private Label label1;
+        private Label label2;
     }
 }

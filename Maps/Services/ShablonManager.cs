@@ -17,7 +17,9 @@ namespace Maps.Services
         public List<string> EndWorkShablon { get; set; } = new List<string>();
         public List<string> ReportWorkShablon { get; set; } = new List<string>();
         public List<string> TargetTypeShablon { get; set; } = new List<string>();
-        public string CustomUnit { get; set; } = "зрадн";
+        public string CustomUnit { get; set; } = "зрдн";
+        public string LaunchArea { get; set; } = "Купянськ";
+
 
         // Кастомний шаблон для бойової доповіді
         public List<string> CustomReportWorkShablon { get; set; }
@@ -48,7 +50,7 @@ namespace Maps.Services
                         "Екіпаж: “{Position}”",
                         "Пілот: “{Pilot}”",
                         "Тип засобу: FPV “{DroneBy}”",
-                        "Район зльоту: Осиново",
+                        "Район зльоту: {LaunchArea}",
                         "Частоти: керування 2,6 відео 5900",
                         "Висота: 900 - 2500",
                         "Час роботи: “{Time}”",
@@ -71,7 +73,7 @@ namespace Maps.Services
                         "виявлено БпЛА “{TargetType}” (А - {azimyth}, Д - {range}, В - {height}).",
                         "Застосовано FPV дрон-перехоплювач мультироторного типу “{DroneBy}”, денний.",
                         "Ціль {TargetStatus}.",
-                        "{Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрадн."
+                        "{Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрдн."
                     };
 
             TargetTypeShablon = new List<string>
@@ -161,6 +163,11 @@ namespace Maps.Services
                     }
                 }
 
+                if (!string.IsNullOrEmpty(ovr.LaunchArea))
+                {
+                    LaunchArea = ovr.LaunchArea;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -177,7 +184,9 @@ namespace Maps.Services
                 Position_Point = Position_Point,
                 DroneByPosition = DroneByPosition,
                 CustomUnit = CustomUnit,
-                CustomReportWorkShablon = CustomReportWorkShablon // Зберігаємо кастомний шаблон
+                CustomReportWorkShablon = CustomReportWorkShablon, // Зберігаємо кастомний шаблон
+                LaunchArea = LaunchArea // <-- нове поле
+
             };
 
             var dir = Path.GetDirectoryName(path);
@@ -194,6 +203,15 @@ namespace Maps.Services
                 CustomUnit = unitName.Trim();
                 SaveShablon(); // Зберігаємо одразу
             }
+        }
+
+        public void SaveLaunchArea(string launchArea)
+        {
+            if (string.IsNullOrWhiteSpace(launchArea)) return;
+
+            LaunchArea = launchArea.Trim();
+
+            SaveShablon();
         }
 
         // Метод для збереження кастомного шаблону
@@ -251,7 +269,7 @@ namespace Maps.Services
         //        EndWorkShablon,
         //        ReportWorkShablon
         //    };
-            //File.WriteAllText(filePath, JsonConvert.SerializeObject(shablonData, Formatting.Indented));
+        //File.WriteAllText(filePath, JsonConvert.SerializeObject(shablonData, Formatting.Indented));
 
 
         //}

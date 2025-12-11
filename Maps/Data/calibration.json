@@ -3,40 +3,40 @@
     {
       "Pixel": {
         "IsEmpty": false,
-        "X": 128.36798,
-        "Y": 115.20693
+        "X": 18.0,
+        "Y": 11.990972
       },
-      "Easting": 391262.0,
-      "Northing": 5517085.0
+      "Easting": 385250.0,
+      "Northing": 5517775.0
     },
     {
       "Pixel": {
         "IsEmpty": false,
-        "X": 2465.094,
-        "Y": 93.12277
+        "X": 1103.9365,
+        "Y": 15.720214
       },
-      "Easting": 411851.0,
-      "Northing": 5516912.0
+      "Easting": 416707.0,
+      "Northing": 5517109.0
     },
     {
       "Pixel": {
         "IsEmpty": false,
-        "X": 149.35942,
-        "Y": 2152.5784
+        "X": 21.247393,
+        "Y": 787.5166
       },
-      "Easting": 391112.0,
-      "Northing": 5499149.0
+      "Easting": 384861.0,
+      "Northing": 5495349.0
     },
     {
       "Pixel": {
         "IsEmpty": false,
-        "X": 2405.7275,
-        "Y": 2093.2048
+        "X": 1099.5558,
+        "Y": 791.0701
       },
-      "Easting": 411009.0,
-      "Northing": 5499306.0
+      "Easting": 416212.0,
+      "Northing": 5494682.0
     }
   ],
-  "MapWidth": 2528,
-  "MapHeight": 2296
+  "MapWidth": 1122,
+  "MapHeight": 794
 }
