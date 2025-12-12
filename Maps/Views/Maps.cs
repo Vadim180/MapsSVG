@@ -29,6 +29,7 @@ namespace Maps
     public partial class Maps : Form
     {
         private GMapControl gmap;      // наша картова контрола
+
         private bool gmapInitialized;  // щоб ініціалізувати тільки один раз
         private RectLatLng _allowedArea;   // область, в межах якої живе карта
         private bool _isAdjustingPosition;   // <-- додай це
@@ -39,6 +40,10 @@ namespace Maps
         private GMap.NET.WindowsForms.GMapControl? mapControl;
 
         private Point _lastMousePos;
+
+        private bool _dragging;
+        private double _minZoomForAllowed = 0;
+        private bool _isAdjustingZoom = false;
 
         private static readonly Random random = new Random();
         private List<ReferencePoint> referencePoints = new(); // Список точок для зберігання координат
@@ -344,8 +349,6 @@ namespace Maps
         //    Console.WriteLine("Position changed: GEO: " + point);
         //    Console.WriteLine("Postion changed: FromLatLngToLocal: " + gmap.FromLatLngToLocal(point));
         //    Console.WriteLine("Position changed: PIXEL: " + gmap.PositionPixel);
-
-
         //}
 
       
@@ -372,133 +375,150 @@ namespace Maps
 
 
         // Обробка Кліка Мишки
-        //private void Gmap_MouseDown(object sender, MouseEventArgs e)
-        //{
-        //    if (e.Button == MouseButtons.Left)
-        //    {
-        //        _isDragging = true;
-        //        _lastMouse = e.Location;
-        //    }
-        //}
+        private void Gmap_MouseDown(object sender, MouseEventArgs e)
+        {
+            //if (e.Button == MouseButtons.Left)
+            //{
+            //    _isDragging = true;
+            //    _lastMouse = e.Location;
+            //}
 
-        //private void Gmap_MouseMove(object sender, MouseEventArgs e)
-        //{
-        //    //// курсор до координат карти
-        //    //// e.X, e.Y — координати курсора відносно gMapControl1
-        //    //PointLatLng p = gmap.FromLocalToLatLng(e.X, e.Y);
-        //    ////Console.WriteLine("Cursor to Map: " + p);
+            if (e.Button != MouseButtons.Left || mapControl == null) return;
+            _dragging = true;
+            _lastMouse = e.Location;
+        }
 
-        //    //// Створюємо координатну систему WGS84
-        //    //var cs = GeographicCoordinateSystem.WGS84;
+        private void Gmap_MouseMove(object sender, MouseEventArgs e)
+        {
+            //// курсор до координат карти
+            //// e.X, e.Y — координати курсора відносно gMapControl1
+            //PointLatLng p = gmap.FromLocalToLatLng(e.X, e.Y);
+            ////Console.WriteLine("Cursor to Map: " + p);
 
-        //    //label1.Invoke(() =>
-        //    //{
-        //    //    label1.Text = $"Координати: Lat: {p.Lat:F6}, Lng: {p.Lng:F6}";
-        //    //});
+            //// Створюємо координатну систему WGS84
+            //var cs = GeographicCoordinateSystem.WGS84;
 
-        //    //if (!_isDragging)
-        //    //    return;
+            //label1.Invoke(() =>
+            //{
+            //    label1.Text = $"Координати: Lat: {p.Lat:F6}, Lng: {p.Lng:F6}";
+            //});
 
-        //    //// якщо ще нема ViewArea або allowedArea – нічого не робимо
-        //    //if (gmap.ViewArea.IsEmpty || _allowedArea.IsEmpty)
-        //    //    return;
+            //if (!_isDragging)
+            //    return;
 
-        //    //// Поточний центр
-        //    //PointLatLng current = gmap.Position;
+            //// якщо ще нема ViewArea або allowedArea – нічого не робимо
+            //if (gmap.ViewArea.IsEmpty || _allowedArea.IsEmpty)
+            //    return;
 
-        //    //// Розрахунок зміщення миші
-        //    //int dx = e.X - _lastMouse.X;
-        //    //int dy = e.Y - _lastMouse.Y;
+            //// Поточний центр
+            //PointLatLng current = gmap.Position;
 
-        //    //// Переводимо пікселі в градуси
-        //    //var view = gmap.ViewArea;
-        //    //double latPerPixel = view.HeightLat / gmap.Height; // НЕ Height
-        //    //double lngPerPixel = view.WidthLng / gmap.Width;  // НЕ Width
+            //// Розрахунок зміщення миші
+            //int dx = e.X - _lastMouse.X;
+            //int dy = e.Y - _lastMouse.Y;
 
-        //    //double newLat = current.Lat - dy * latPerPixel; // Lat, НЕ lat
-        //    //double newLng = current.Lng - dx * lngPerPixel; // Lng, НЕ lng
+            //// Переводимо пікселі в градуси
+            //var view = gmap.ViewArea;
+            //double latPerPixel = view.HeightLat / gmap.Height; // НЕ Height
+            //double lngPerPixel = view.WidthLng / gmap.Width;  // НЕ Width
 
-        //    //// Перевіряємо межі
-        //    //if (newLat > _allowedArea.Top) newLat = _allowedArea.Top;
-        //    //if (newLat < _allowedArea.Bottom) newLat = _allowedArea.Bottom;
+            //double newLat = current.Lat - dy * latPerPixel; // Lat, НЕ lat
+            //double newLng = current.Lng - dx * lngPerPixel; // Lng, НЕ lng
 
-        //    //if (newLng < _allowedArea.Left) newLng = _allowedArea.Left;
-        //    //if (newLng > _allowedArea.Right) newLng = _allowedArea.Right;
+            //// Перевіряємо межі
+            //if (newLat > _allowedArea.Top) newLat = _allowedArea.Top;
+            //if (newLat < _allowedArea.Bottom) newLat = _allowedArea.Bottom;
 
-        //    //// Ставимо нову позицію
-        //    //gmap.Position = new PointLatLng(newLat, newLng);
+            //if (newLng < _allowedArea.Left) newLng = _allowedArea.Left;
+            //if (newLng > _allowedArea.Right) newLng = _allowedArea.Right;
 
-        //    //// Оновлюємо останню позицію миші
-        //    //_lastMouse = e.Location;
+            //// Ставимо нову позицію
+            //gmap.Position = new PointLatLng(newLat, newLng);
 
-        //    if (!_isDragging || mapControl == null || _allowedArea.IsEmpty)
-        //        return;
+            //// Оновлюємо останню позицію миші
+            //_lastMouse = e.Location;
 
-        //    // Обчислюємо зсув
-        //    int deltaX = e.X - _lastMousePos.X;
-        //    int deltaY = e.Y - _lastMousePos.Y;
+            if (!_dragging || mapControl == null || _allowedArea.IsEmpty)
+                return;
 
-        //    if (deltaX == 0 && deltaY == 0)
-        //        return;
+            int dx = e.X - _lastMouse.X;
+            int dy = e.Y - _lastMouse.Y;
+            if (dx == 0 && dy == 0)
+                return;
 
-        //    // Отримуємо поточну позицію
-        //    PointLatLng currentPos = mapControl.Position;
+            var view = mapControl.ViewArea;
+            if (view.IsEmpty || mapControl.Width <= 0 || mapControl.Height <= 0)
+                return;
 
-        //    // Перетворюємо пікселі в градуси
-        //    var viewArea = mapControl.ViewArea;
-        //    double latPerPixel = viewArea.HeightLat / mapControl.Height;
-        //    double lngPerPixel = viewArea.WidthLng / mapControl.Width;
+            // градуси на 1 піксель у поточному зумі
+            double latPerPixel = view.HeightLat / mapControl.Height;
+            double lngPerPixel = view.WidthLng / mapControl.Width;
 
-        //    // Обчислюємо нову позицію
-        //    double newLat = currentPos.Lat - deltaY * latPerPixel;
-        //    double newLng = currentPos.Lng - deltaX * lngPerPixel;
+            // Рахуємо новий центр від руху миші
+            // (ці знаки зазвичай “правильні” для відчуття як у Google Maps)
+            double targetLat = mapControl.Position.Lat + dy * latPerPixel;
+            double targetLng = mapControl.Position.Lng - dx * lngPerPixel;
 
-        //    // Обмежуємо межами
-        //    newLat = Math.Max(_allowedArea.Bottom, Math.Min(_allowedArea.Top, newLat));
-        //    newLng = Math.Max(_allowedArea.Left, Math.Min(_allowedArea.Right, newLng));
+            // Тепер найважливіше:
+            // тримаємо ВИДИМУ ОБЛАСТЬ (view) всередині allowed
+            // Для цього обмежуємо центр так, щоб краї view не вилізали.
 
-        //    // Встановлюємо нову позицію
-        //    mapControl.Position = new PointLatLng(newLat, newLng);
+            double halfLat = view.HeightLat / 2.0;
+            double halfLng = view.WidthLng / 2.0;
 
-        //    // Оновлюємо позицію миші
-        //    _lastMousePos = e.Location;
-        //}
+            double minCenterLat = _allowedArea.Bottom + halfLat;
+            double maxCenterLat = _allowedArea.Top - halfLat;
 
-        //private void Gmap_MouseUp(object sender, MouseEventArgs e)
-        //{
-        //    if (e.Button == MouseButtons.Left)
-        //    {
-        //        _isDragging = false;
-        //    }
+            double minCenterLng = _allowedArea.Left + halfLng;
+            double maxCenterLng = _allowedArea.Right - halfLng;
 
-        //    // ТЕСТОВО ВИКЛИКАЄМО ПРЯМО СТАРИЙ ОБРОБНИК З ПЕРЕДАЧЕЮ АРГУМЕНТІВ
-        //    pictureBox1_MouseUp(sender, e);
+            // Якщо view більший за allowed — "влізти" неможливо.
+            // Тоді просто не даємо перетягувати (карта стоїть).
+            if (minCenterLat > maxCenterLat || minCenterLng > maxCenterLng)
+                return;
 
-        //}
+            // Clamp центру
+            double clampedLat = Math.Max(minCenterLat, Math.Min(maxCenterLat, targetLat));
+            double clampedLng = Math.Max(minCenterLng, Math.Min(maxCenterLng, targetLng));
 
-        //private void Gmap_OnMapDrag()
-        //{
-        //    if (mapControl == null || gmap == null || _allowedArea == null || _allowedArea.IsEmpty)
-        //        return;
+            // Якщо вперлись — clamped == поточній позиції → карта не рухається далі
+            if (clampedLat != mapControl.Position.Lat || clampedLng != mapControl.Position.Lng)
+            {
+                mapControl.Position = new PointLatLng(clampedLat, clampedLng);
+            }
 
-        //    var currentPosition = gmap.Position;
-        //    if (currentPosition == null)
-        //        return;
+            _lastMouse = e.Location;
+        }
 
-        //    // Якщо _lastValidPosition ще не задано — ініціалізуємо його
-        //    if (_lastValidPosition == null)
-        //        _lastValidPosition = currentPosition;
+        private void Gmap_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+                _dragging = false;
+        }
 
-        //    if (_allowedArea.Contains(currentPosition))
-        //    {
-        //        _lastValidPosition = currentPosition; // Оновлюємо дозволену позицію
-        //    }
-        //    else
-        //    {
-        //        // Повертаємо на останню дозволену позицію
-        //        gmap.Position = _lastValidPosition;
-        //    }
-        //}
+        private void Gmap_OnMapDrag()
+        {
+            if (mapControl == null || gmap == null || _allowedArea == null || _allowedArea.IsEmpty)
+                return;
+
+            var currentPosition = gmap.Position;
+            if (currentPosition == null)
+                return;
+
+            // Якщо _lastValidPosition ще не задано — ініціалізуємо його
+            if (_lastValidPosition == null)
+                _lastValidPosition = currentPosition;
+
+            if (_allowedArea.Contains(currentPosition))
+            {
+                _lastValidPosition = currentPosition; // Оновлюємо дозволену позицію
+            }
+            else
+            {
+                // Повертаємо на останню дозволену позицію
+                gmap.Position = _lastValidPosition;
+            }
+        }
 
         //private void Gmap_OnPositionChanged(PointLatLng pos)
         //{
@@ -599,55 +619,66 @@ namespace Maps
             if (timer.Enabled) timer.Stop(); // при виході з головної — стоп
         }
 
-        private void Gmap_OnPositionChanged(PointLatLng point)
+        private void EnsureViewAreaInsideAllowed()
         {
-            if (_isAdjustingPosition || mapControl == null || _allowedArea.IsEmpty)
+            if (mapControl == null || _allowedArea.IsEmpty)
                 return;
 
-            double lat = point.Lat;
-            double lng = point.Lng;
-            bool changed = false;
+            var view = mapControl.ViewArea;
+            if (view.IsEmpty || mapControl.Width <= 0 || mapControl.Height <= 0)
+                return;
 
-            // Широта: Top - північ (більше), Bottom - південь (менше)
-            if (lat > _allowedArea.Top)
+            // Піврозміри видимої області
+            double halfLat = view.HeightLat / 2.0;
+            double halfLng = view.WidthLng / 2.0;
+
+            // Який центр дозволений, щоб view повністю вліз у allowed
+            double minCenterLat = _allowedArea.Bottom + halfLat;
+            double maxCenterLat = _allowedArea.Top - halfLat;
+
+            double minCenterLng = _allowedArea.Left + halfLng;
+            double maxCenterLng = _allowedArea.Right - halfLng;
+
+            // Якщо view більший за allowed (наприклад, занадто маленький zoom) —
+            // тоді “влізти” неможливо. У такому випадку просто центруємо.
+            if (minCenterLat > maxCenterLat || minCenterLng > maxCenterLng)
             {
-                lat = _allowedArea.Top;
-                changed = true;
-            }
-            else if (lat < _allowedArea.Bottom)
-            {
-                lat = _allowedArea.Bottom;
-                changed = true;
+                double centerLat = (_allowedArea.Top + _allowedArea.Bottom) / 2.0;
+                double centerLng = (_allowedArea.Left + _allowedArea.Right) / 2.0;
+
+                if (mapControl.Position.Lat != centerLat || mapControl.Position.Lng != centerLng)
+                {
+                    _isAdjustingPosition = true;
+                    try { mapControl.Position = new PointLatLng(centerLat, centerLng); }
+                    finally { _isAdjustingPosition = false; }
+                }
+                return;
             }
 
-            // Довгота: Left - захід (менше), Right - схід (більше)
-            if (lng < _allowedArea.Left)
-            {
-                lng = _allowedArea.Left;
-                changed = true;
-            }
-            else if (lng > _allowedArea.Right)
-            {
-                lng = _allowedArea.Right;
-                changed = true;
-            }
+            // Clamp центру
+            double clampedLat = Math.Max(minCenterLat, Math.Min(maxCenterLat, mapControl.Position.Lat));
+            double clampedLng = Math.Max(minCenterLng, Math.Min(maxCenterLng, mapControl.Position.Lng));
 
-            if (changed)
+            if (clampedLat != mapControl.Position.Lat || clampedLng != mapControl.Position.Lng)
             {
                 _isAdjustingPosition = true;
-                try
-                {
-                    mapControl.Position = new PointLatLng(lat, lng);
-                }
-                finally
-                {
-                    _isAdjustingPosition = false;
-                }
+                try { mapControl.Position = new PointLatLng(clampedLat, clampedLng); }
+                finally { _isAdjustingPosition = false; }
             }
-
-            _lastValidPosition = new PointLatLng(lat, lng);
         }
 
+        //пригодиться пізніше для пошуку по координатах на карті
+        private void Gmap_OnPositionChanged(PointLatLng point)
+        {
+            if (_isAdjustingPosition) return;
+            EnsureViewAreaInsideAllowed();
+        }
+
+        private void Gmap_OnMapZoomChanged()
+        {
+            if (_isAdjustingPosition) return;
+            EnsureViewAreaInsideAllowed();
+        }
 
         private void BtnShowGMap_Click(object sender, EventArgs e)
         {
@@ -683,14 +714,16 @@ namespace Maps
                         MinZoom = 2,
                         MaxZoom = 20,
                         Zoom = 10,
-                        CanDragMap = true,
+                        CanDragMap = false,
                         DragButton = MouseButtons.Left,
                         IgnoreMarkerOnMouseWheel = true,
                         Visible = false,
                         MarkersEnabled = true,    
                         PolygonsEnabled = true,  
                         RoutesEnabled = true,     
-                        ShowCenter = false        
+                        ShowCenter = false,
+                        MouseWheelZoomEnabled = true,
+                        MouseWheelZoomType = GMap.NET.MouseWheelZoomType.MousePositionAndCenter,
                     };
 
                     panelMap.Controls.Add(mapControl);
@@ -734,17 +767,31 @@ namespace Maps
                 mapControl.OnPositionChanged -= Gmap_OnPositionChanged;
                 mapControl.OnPositionChanged += Gmap_OnPositionChanged;
 
-                //mapControl.OnMapDrag -= Gmap_OnMapDrag;           
+                mapControl.OnMapZoomChanged -= Gmap_OnMapZoomChanged;
+                mapControl.OnMapZoomChanged += Gmap_OnMapZoomChanged;
+
+                //mapControl.OnMapDrag -= Gmap_OnMapDrag;
                 //mapControl.OnMapDrag += Gmap_OnMapDrag;
 
-                //// Додаємо обробку drag
-                //mapControl.MouseDown -= Gmap_MouseDown;
-                //mapControl.MouseMove -= Gmap_MouseMove;
-                //mapControl.MouseUp -= Gmap_MouseUp;
+                // Додаємо обробку drag
+                mapControl.MouseDown -= Gmap_MouseDown;
+                mapControl.MouseMove -= Gmap_MouseMove;
+                mapControl.MouseUp -= Gmap_MouseUp;
 
-                //mapControl.MouseDown += Gmap_MouseDown;
-                //mapControl.MouseMove += Gmap_MouseMove;
-                //mapControl.MouseUp += Gmap_MouseUp;
+                mapControl.MouseDown += Gmap_MouseDown;
+                mapControl.MouseMove += Gmap_MouseMove;
+                mapControl.MouseUp += Gmap_MouseUp;
+
+                mapControl.OnMapZoomChanged -= Map_OnMapZoomChanged;
+                mapControl.OnMapZoomChanged += Map_OnMapZoomChanged;
+
+                // ВАЖЛИВО: перерахувати min zoom треба коли контрол уже має розмір.
+                // Найпростіше — через BeginInvoke:
+                mapControl.BeginInvoke(new Action(() =>
+                {
+                    RecalculateMinZoomForAllowed();
+                    EnsureViewAreaInsideAllowed();
+                }));
 
                 // 7. Додамо оверлей для маркерів (опційно)
                 if (mapControl.Overlays.Count == 0)
@@ -764,6 +811,110 @@ namespace Maps
             }
 
         }
+
+        private void RecalculateMinZoomForAllowed()
+        {
+            //if (mapControl == null || _allowedArea.IsEmpty) return;
+            //if (mapControl.Width <= 0 || mapControl.Height <= 0) return;
+
+            //double originalZoom = mapControl.Zoom;
+            //double best = originalZoom;
+
+            //// пробуємо віддаляти (zoom менший) покроково
+            //const double step = 0.2;
+
+            //_isAdjustingZoom = true;
+            //try
+            //{
+            //    for (int i = 0; i < 250; i++)
+            //    {
+            //        double test = best - step;
+            //        if (test < mapControl.MinZoom) break; // нижче системного мінімуму не йдемо
+
+            //        mapControl.Zoom = test;
+
+            //        // якщо після зума view ще влазить — запам’ятали як новий best
+            //        if (ViewFitsAllowed())
+            //        {
+            //            best = test;
+            //            continue;
+            //        }
+
+            //        // вилізло — вертаємось на best і стоп
+            //        mapControl.Zoom = best;
+            //        break;
+            //    }
+
+            //    _minZoomForAllowed = best;
+            //    mapControl.MinZoom = (int)_minZoomForAllowed; // ✅ забороняємо віддаляти нижче
+            //}
+            //finally
+            //{
+            //    _isAdjustingZoom = false;
+            //}
+
+            //// Повертаємося на originalZoom не треба — ми вже стоїмо на best/поточному.
+            
+            if (mapControl == null || _allowedArea.IsEmpty) return;
+            if (mapControl.Width <= 0 || mapControl.Height <= 0) return;
+
+            // Почнемо з поточного зуму і, якщо треба, будемо "наближати", доки ViewArea не влізе
+            double z = mapControl.Zoom;
+
+            // Захист від нескінченних циклів
+            for (int i = 0; i < 200; i++)
+            {
+                var view = mapControl.ViewArea;
+                if (!view.IsEmpty &&
+                    view.WidthLng <= _allowedArea.WidthLng &&
+                    view.HeightLat <= _allowedArea.HeightLat)
+                {
+                    _minZoomForAllowed = z;
+                    mapControl.MinZoom = (int)_minZoomForAllowed;   // ✅ забороняємо віддаляти далі
+                    return;
+                }
+
+                // Якщо ViewArea ще занадто велика — збільшуємо zoom (наближаємо)
+                z += 0.2;
+                mapControl.Zoom = z;
+            }
+
+            // fallback: якщо щось пішло не так — просто не обмежуємо
+        }
+
+        private void Map_OnMapZoomChanged()
+        {
+            if (mapControl == null || _allowedArea.IsEmpty) return;
+            if (_isAdjustingZoom) return;
+
+            // 1) Не даємо зум-аутись нижче мінімального
+            if (_minZoomForAllowed > 0 && mapControl.Zoom < _minZoomForAllowed)
+            {
+                _isAdjustingZoom = true;
+                try { mapControl.Zoom = _minZoomForAllowed; }
+                finally { _isAdjustingZoom = false; }
+            }
+
+            // 2) І на всяк випадок підтискаємо позицію, щоб ViewArea була всередині allowed
+            EnsureViewAreaInsideAllowed();
+        }
+
+        private bool ViewFitsAllowed()
+        {
+            if (mapControl == null) return false;
+            var view = mapControl.ViewArea;
+            if (view.IsEmpty) return false;
+
+            // view всередині allowed
+            return view.Left >= _allowedArea.Left
+                && view.Right <= _allowedArea.Right
+                && view.Top <= _allowedArea.Top
+                && view.Bottom >= _allowedArea.Bottom;
+        }
+
+
+
+
 
         private void Timer_Tick(object sender, EventArgs e)
         {
