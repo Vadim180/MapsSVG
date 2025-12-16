@@ -40,15 +40,14 @@ namespace Maps
 
         private static readonly Random random = new Random();
         private List<ReferencePoint> referencePoints = new(); // Список точок для зберігання координат
-        private double[] eastingCoeffs;  // для X
-        private double[] northingCoeffs; // для Y
+        // Афінні коефіцієнти тепер керуються через CoordinateConverter
         private Control[] previousControls; // Зберігає елементи з panelOptions перед "Налаштуванням"
 
         private Stack<Control> panelHistory = new Stack<Control>();
         private Control previousControl = null;
 
-        private double[,] _inv = null;
-        private double _e0, _n0;
+        // Перехідна залежність: CoordinateConverter обробляє всі перетворення
+        private Services.Map.CoordinateConverter? coordinateConverter = null;
 
         private Dictionary<string, List<PointF>> _scaledPointsCache = new();  //для кешування назв населених пунктів
 
@@ -983,8 +982,11 @@ namespace Maps
                 var eastings = referencePoints.Select(p => new PointF((float)p.Easting, 0)).ToList();
                 var northings = referencePoints.Select(p => new PointF((float)p.Northing, 0)).ToList();
 
-                eastingCoeffs = SolveAffineTransform(pixels, eastings);
-                northingCoeffs = SolveAffineTransform(pixels, northings);
+                var eastingCoeffsLocal = (coordinateConverter ??= new Services.Map.CoordinateConverter()).SolveAffineTransform(pixels, eastings);
+                var northingCoeffsLocal = coordinateConverter.SolveAffineTransform(pixels, northings);
+
+                // Встановлюємо їх у сервіс CoordinateConverter
+                coordinateConverter.SetCoefficients(eastingCoeffsLocal, northingCoeffsLocal);
             }
             catch (Exception ex)
             {
@@ -992,33 +994,20 @@ namespace Maps
                                 "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
-            RebuildInverse(); // ← Оновлюємо обернену матрицю
+            // Синхронізуємо стан конвертера (якщо він існує)
+            coordinateConverter?.RebuildInverse(); // оновлюємо внутрішній інверсний стан
         }
 
         private void RebuildInverse()
         {
-            if (eastingCoeffs == null || northingCoeffs == null ||
-                eastingCoeffs.Length < 3 || northingCoeffs.Length < 3)
+            // Делегуємо в CoordinateConverter якщо він існує
+            if (coordinateConverter != null)
             {
-                _inv = null;
+                coordinateConverter.RebuildInverse();
                 return;
             }
 
-            try
-            {
-                var m = new double[,] {
-                  { eastingCoeffs[0], eastingCoeffs[1] },
-                  { northingCoeffs[0], northingCoeffs[1] }
-                };
-
-                _inv = Accord.Math.Matrix.Inverse(m);
-                _e0 = eastingCoeffs[2];
-                _n0 = northingCoeffs[2];
-            }
-            catch
-            {
-                _inv = null; // Якщо матриця не обертається
-            }
+            // Для зворотної сумісності залишаємо пусту реалізацію
         }
 
         private void LoadAttackPoint()
@@ -1202,14 +1191,14 @@ namespace Maps
             // Якщо ще не відкалібровано — показати повідомлення
             if (labelCoordinates != null)
             {
-                if (eastingCoeffs == null || northingCoeffs == null || referencePoints.Count < 4)
+                if (coordinateConverter == null || referencePoints.Count < 4)
                 {
                     labelCoordinates.Text = "Відкалібруйте карту";
                 }
                 else
                 {
                     PointF mapPoint = ScreenToMapCoordinates(e.Location);
-                    PointF utm = PixelToUTM(mapPoint);
+                    PointF utm = coordinateConverter.PixelToUTM(mapPoint);
 
                     if (utm == PointF.Empty)
                     {
@@ -1217,7 +1206,7 @@ namespace Maps
                     }
                     else
                     {
-                        string mgrs = FormatShortMGRSFromUTM(utm);
+                        string mgrs = coordinateConverter.FormatShortMGRSFromUTM(utm);
                         labelCoordinates.Text = $"MGRS: {mgrs}";
                     }
                 }
@@ -1614,15 +1603,8 @@ namespace Maps
 
         private PointF UTMToPixel(PointF utm)
         {
-            if (_inv == null) return PointF.Empty;
-
-            double e = utm.X - _e0;
-            double n = utm.Y - _n0;
-
-            double x = _inv[0, 0] * e + _inv[0, 1] * n;
-            double y = _inv[1, 0] * e + _inv[1, 1] * n;
-
-            return new PointF((float)x, (float)y);
+            if (coordinateConverter == null) return PointF.Empty;
+            return coordinateConverter.UTMToPixel(utm);
         }
 
         public void UpdateAttackParameters(float newSectorRadius, float newRayLength, float newAngle)//данні для оновлення параметрів
@@ -1775,7 +1757,7 @@ namespace Maps
             string selectedheight = height.Text.Trim();
             string selectedrange2 = selectedrange_tmp.ToString();
             PointF utm = GetUTM(clickedPointMarker);
-            string mgrsShort = FormatShortMGRSFromUTM(utm);
+            string mgrsShort = coordinateConverter != null ? coordinateConverter.FormatShortMGRSFromUTM(utm) : FormatShortMGRSFromUTM(utm);
             string nearestLocality = FindClosestLocality(utm).ToUpper(new CultureInfo("uk-UA"));
             string courseStr = GetCourseValue().ToString();
             string selectedTarget = Target_Type.Text;
@@ -2243,8 +2225,11 @@ namespace Maps
                 var eastings = referencePoints.Select(p => new PointF((float)p.Easting, 0)).ToList();
                 var northings = referencePoints.Select(p => new PointF((float)p.Northing, 0)).ToList();
 
-                eastingCoeffs = SolveAffineTransform(pixels, eastings);
-                northingCoeffs = SolveAffineTransform(pixels, northings);
+                var eastingCoeffsLocal = (coordinateConverter ??= new Services.Map.CoordinateConverter()).SolveAffineTransform(pixels, eastings);
+                var northingCoeffsLocal = coordinateConverter.SolveAffineTransform(pixels, northings);
+
+                // Встановлюємо в CoordinateConverter
+                coordinateConverter.SetCoefficients(eastingCoeffsLocal, northingCoeffsLocal);
 
                 // +++ ДОДАЄМО ВИЗНАЧЕННЯ МЕЖ +++
                 CalculateMapBoundsFromCalibration();
@@ -2309,6 +2294,11 @@ namespace Maps
 
         private double[] SolveAffineTransform(List<PointF> pixels, List<PointF> coords)
         {
+            if (coordinateConverter != null)
+            {
+                return coordinateConverter.SolveAffineTransform(pixels, coords);
+            }
+
             if (pixels.Count < 4 || coords.Count < 4)
                 return new double[3]; // або кидай виключення з повідомленням
 
@@ -2329,17 +2319,8 @@ namespace Maps
 
         private PointF PixelToUTM(PointF pixel)
         {
-            if (eastingCoeffs == null || northingCoeffs == null || referencePoints.Count < 4)
-                return PointF.Empty;
-
-            double x = pixel.X;
-            double y = pixel.Y;
-
-            double easting = eastingCoeffs[0] * x + eastingCoeffs[1] * y + eastingCoeffs[2];
-            double northing = northingCoeffs[0] * x + northingCoeffs[1] * y + northingCoeffs[2];
-
-            return new PointF((float)easting, (float)northing);
-
+            if (coordinateConverter == null) return PointF.Empty;
+            return coordinateConverter.PixelToUTM(pixel);
         }
 
         private void ShowCopyableMessage(string text)
@@ -2414,28 +2395,22 @@ namespace Maps
 
         private string FormatShortMGRSFromUTM(PointF utm)
         {
+            if (coordinateConverter != null)
+                return coordinateConverter.FormatShortMGRSFromUTM(utm);
+
+            // Фолбек
             try
             {
                 string hemisphere = utm.Y > 0 ? "N" : "S";
-
-                // Тимчасовий об'єкт щоб отримати довготу/широту
                 var tempUtm = new UniversalTransverseMercator(hemisphere, 37, utm.X, utm.Y);
                 var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
-
                 double latitude = coord.Latitude.DecimalDegree;
                 double longitude = coord.Longitude.DecimalDegree;
-
-                // Визначення UTM-зони за довготою
                 int utmZone = (int)Math.Floor((longitude + 180) / 6) + 1;
-
-                // Визначення літери широтного поясу
                 char bandLetter = GetUTMBandLetter(latitude);
-
-                // Повторна побудова UTM з правильною зоною
                 var utmWithCorrectZone = new UniversalTransverseMercator(hemisphere, utmZone, utm.X, utm.Y);
                 var correctedCoord = UniversalTransverseMercator.ConvertUTMtoLatLong(utmWithCorrectZone);
                 string fullMgrsString = correctedCoord.MGRS.ToString();
-
                 var parts = fullMgrsString.Split(' ');
                 if (parts.Length >= 4 && parts[2].Length >= 2 && parts[3].Length >= 2)
                 {
@@ -2444,12 +2419,10 @@ namespace Maps
                     string shortNorth = parts[3].Substring(0, 2);
                     return $"{utmZone}{bandLetter} {square} {shortEast} {shortNorth}";
                 }
-
                 return fullMgrsString;
             }
-            catch (Exception ex)
+            catch
             {
-                MessageBox.Show($"Помилка: {ex.Message}", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return "Невірні координати";
             }
         }

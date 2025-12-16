@@ -10,7 +10,7 @@
 //        {
 //            // To customize application configuration such as set high DPI settings or default font,
 //            // see https://aka.ms/applicationconfiguration.
-//            Application.SetHighDpiMode(HighDpiMode.SystemAware); // Додаємо підтримку правильного масштабування DPI
+//            Application.SetHighDpiMode(HighDpiMode.SystemAware); // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ DPI
 //            Application.EnableVisualStyles();
 //            Application.SetCompatibleTextRenderingDefault(false);
 //            ApplicationConfiguration.Initialize();
@@ -26,10 +26,10 @@ namespace Maps
         [STAThread]
         static void Main()
         {
-            // Сучасний підхід для .NET 6+ - автоматично застосовує налаштування з .csproj
+            // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ .NET 6+ - пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ .csproj
             ApplicationConfiguration.Initialize();
 
-            // Запуск головної форми
+            // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ
             Application.Run(new Maps());
         }
     }
