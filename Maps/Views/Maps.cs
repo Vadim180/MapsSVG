@@ -71,7 +71,7 @@ namespace Maps
         private PointF? clickedPointMarker = null;          // Точка, в якій було натиснуто мишкою для вимірювання відстані
         private bool _isPanning = false;                    //чи виконується зараз переміщення
 
-        private PointF attackPoint = PointF.Empty;          // Позиція точки атаки 
+
 
         private int currentCornerIndex = 0; // Стан: яка точка зараз вводиться (4)
         private bool isCollectingCorners = false; // Прапорець, чи активний режим збору
@@ -103,12 +103,17 @@ namespace Maps
 
         private System.Windows.Forms.Timer? timer;
 
-        private float attackAngle = 0f;    //поворот луча
-        float labelScale_serva_attak = 10f; // кут для сервоприводу
+        // Модель зони атаки
+        private Models.AttackZone attackZone = new Models.AttackZone
+        {
+            AttackPoint = PointF.Empty,
+            Angle = 0f,
+            RayLength = 2500f,
+            SectorRadius = 2500f,
+            SectorWidth = 30f
+        };
 
-        private float attackRayLength = 2500f;  //дліна луча
-        private float attackSectorRadius = 2500f;     // дліна красної зони
-        private float attackWidth = 30f; //ширіна красної зони
+        float labelScale_serva_attak = 10f; // кут для сервоприводу
         private int selectedrange_tmp = 0;
         private int? attackCourse = null; // null означає, що курс не встановлено
         private float? pixelsToMeters = null; //null означає, що калібрування відстані не встановлено
@@ -146,7 +151,16 @@ namespace Maps
         private bool shown = false;
         private void Maps_KeyDown(object sender, KeyEventArgs e)// стрілки в вкл состояніі
         {
-            if (attackPoint == PointF.Empty) return;
+            // Debug shortcut: Ctrl+Shift+S -> set a sample attack point at map center
+            if (e.Control && e.Shift && e.KeyCode == Keys.S)
+            {
+                SetSampleAttackPoint();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+
+            if (attackZone.AttackPoint == PointF.Empty) return;
             if (!IsMainTabActive) return;
 
             if (e.KeyCode == Keys.A || e.KeyCode == Keys.D || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
@@ -277,7 +291,7 @@ namespace Maps
             PrepareGraphics(g);
             DrawBaseMap(g);
 
-            if (attackPoint != PointF.Empty)
+            if (attackZone.AttackPoint != PointF.Empty)
             {
                 DrawAttackZone(g);
                 DrawClickedPoint(g);
@@ -295,7 +309,37 @@ namespace Maps
         // Обробка Кліка Мишки
         private void Gmap_MouseDown(object sender, MouseEventArgs e)
         {
-           
+            Console.WriteLine($"Gmap_MouseDown Button={e.Button} Modifiers={Control.ModifierKeys} isAttakPointSet={isAttakPointSet} Location={e.Location}");
+
+            // If we are awaiting attack point and user clicks CTRL+Right — set the attack point on GMap
+            if (e.Button == MouseButtons.Right && Control.ModifierKeys.HasFlag(Keys.Control) && isAttakPointSet)
+            {
+                if (mapControl == null) return;
+
+                // Coordinates are in client pixels of the map control
+                var newAttackPoint = new PointF(e.X, e.Y);
+                attackZone.AttackPoint = newAttackPoint;
+
+                var data = new AttackPointData
+                {
+                    X = newAttackPoint.X,
+                    Y = newAttackPoint.Y,
+                    MapWidth = mapControl.Width,
+                    MapHeight = mapControl.Height
+                };
+
+                var dir = Path.GetDirectoryName(attackPointPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(attackPointPath, JsonConvert.SerializeObject(data, Formatting.Indented));
+
+                isAttakPointSet = false;
+                Console.WriteLine($"GMap: saved attack point at {newAttackPoint} (isAttakPointSet={isAttakPointSet})");
+                if (label2 != null) label2.Text = $"GMap: attack point set {newAttackPoint}";
+                mapControl.Invalidate();
+                MessageBox.Show("Точку атаки збережено на GMap.", "Інформація");
+                return;
+            }
+
             if (e.Button != MouseButtons.Left || mapControl == null) return;
             _dragging = true;
             _lastMouse = e.Location;
@@ -669,18 +713,18 @@ namespace Maps
             }
             if (isRotateLeftPressed)
             {
-                attackAngle -= 1f;
+                attackZone.Angle -= 1f;
                 labelScale_serva_attak -= 1f;
             }
             else if (isRotateRightPressed)
             {
-                attackAngle += 1f;
+                attackZone.Angle += 1f;
                 labelScale_serva_attak += 1f;
             }
 
-            attackAngle = (attackAngle % 360 + 360) % 360;
+            attackZone.Angle = (attackZone.Angle % 360 + 360) % 360;
 
-            labelScale.Text = $"Кут: {attackAngle}°";
+            labelScale.Text = $"Кут: {attackZone.Angle}°";
             labelScale_serva.Text = $"СЕРВА: {labelScale_serva_attak}";
             SafeInvalidate(GetAttackZoneBounds()); // Обмежена перемальовка
                                                    // pictureBox1.Invalidate();
@@ -1027,7 +1071,8 @@ namespace Maps
                 var data = JsonConvert.DeserializeObject<AttackPointData>(json);
                 if (data == null) return;
 
-                attackPoint = new PointF(data.X, data.Y);
+                var loadedPoint = new PointF(data.X, data.Y);
+                attackZone.AttackPoint = loadedPoint;
 
                 int srcW = data.MapWidth;
                 int srcH = data.MapHeight;
@@ -1057,8 +1102,11 @@ namespace Maps
                 {
                     float sx = cachedBitmap.Width / (float)srcW;
                     float sy = cachedBitmap.Height / (float)srcH;
-                    attackPoint = new PointF(attackPoint.X * sx, attackPoint.Y * sy);
+                    loadedPoint = new PointF(loadedPoint.X * sx, loadedPoint.Y * sy);
                 }
+
+                // Синхронізуємо модель атаки
+                attackZone.AttackPoint = loadedPoint;
 
                 isAttakPointSet = false;
                 pictureBox1.Invalidate();
@@ -1265,8 +1313,8 @@ namespace Maps
             }
 
             // Обчислюємо відстань між точкою кліку та точкою атаки в пікселях
-            float dx = clickedPointMarker.Value.X - attackPoint.X;
-            float dy = clickedPointMarker.Value.Y - attackPoint.Y;
+            float dx = clickedPointMarker.Value.X - attackZone.AttackPoint.X;
+            float dy = clickedPointMarker.Value.Y - attackZone.AttackPoint.Y;
             float distanceToAttack = MathF.Sqrt(dx * dx + dy * dy);
 
             // Конвертуємо пікселі в метри
@@ -1351,7 +1399,7 @@ namespace Maps
             PrepareGraphics(g);
             DrawBaseMap(g);
 
-            if (attackPoint != PointF.Empty)
+            if (attackZone.AttackPoint != PointF.Empty)
             {
                 DrawAttackZone(g);
                 DrawClickedPoint(g);
@@ -1367,13 +1415,13 @@ namespace Maps
 
         private RectangleF GetAttackZoneBounds()
         {
-            if (attackPoint == PointF.Empty) return RectangleF.Empty;
+            if (attackZone.AttackPoint == PointF.Empty) return RectangleF.Empty;
 
-            float radius = Math.Max(attackRayLength, attackSectorRadius);
+            float radius = Math.Max(attackZone.RayLength, attackZone.SectorRadius);
             float scaledRadius = radius * _scale;
             return new RectangleF(
-                (attackPoint.X * _scale + _imageOffset.X) - scaledRadius,
-                (attackPoint.Y * _scale + _imageOffset.Y) - scaledRadius,
+                (attackZone.AttackPoint.X * _scale + _imageOffset.X) - scaledRadius,
+                (attackZone.AttackPoint.Y * _scale + _imageOffset.Y) - scaledRadius,
                 scaledRadius * 2,
                 scaledRadius * 2);
         }
@@ -1405,22 +1453,48 @@ namespace Maps
             using Pen attackPen = new Pen(Color.Red, 1);
             using Brush attackBrush = new SolidBrush(Color.FromArgb(70, Color.Red));
 
-            g.FillPie(attackBrush, attackPoint.X - attackSectorRadius, attackPoint.Y - attackSectorRadius,
-                      attackSectorRadius * 2, attackSectorRadius * 2, drawAngle - (attackWidth / 2), attackWidth);
+            g.FillPie(attackBrush, attackZone.AttackPoint.X - attackZone.SectorRadius, attackZone.AttackPoint.Y - attackZone.SectorRadius,
+                      attackZone.SectorRadius * 2, attackZone.SectorRadius * 2, drawAngle - (attackZone.SectorWidth / 2), attackZone.SectorWidth);
 
-            g.DrawLine(attackPen, attackPoint.X, attackPoint.Y, endX, endY);
+            g.DrawLine(attackPen, attackZone.AttackPoint.X, attackZone.AttackPoint.Y, endX, endY);
         }
 
         private (float endX, float endY, float drawAngle) CalculateAttackLine()
         {
-            if (attackRayLength <= 0) return (attackPoint.X, attackPoint.Y, attackAngle); // Запобігання некоректним значенням
-            float drawAngle = attackAngle - 90;
-            //float endX = attackPoint.X + (float)(Math.Cos(drawAngle * Math.PI / 180) * attackRayLength);      //винесено в глобальну змінну
-            //float endY = attackPoint.Y + (float)(Math.Sin(drawAngle * Math.PI / 180) * attackRayLength);      //винесено в глобальну змінну
-            float drawAngleRad = MathF.PI * (attackAngle - 90) / 180;
-            float endX = attackPoint.X + MathF.Cos(drawAngleRad) * attackRayLength;
-            float endY = attackPoint.Y + MathF.Sin(drawAngleRad) * attackRayLength;
+            if (attackZone.RayLength <= 0) return (attackZone.AttackPoint.X, attackZone.AttackPoint.Y, attackZone.Angle); // Запобігання некоректним значенням
+            float drawAngle = attackZone.Angle - 90;
+            float drawAngleRad = MathF.PI * (attackZone.Angle - 90) / 180;
+            float endX = attackZone.AttackPoint.X + MathF.Cos(drawAngleRad) * attackZone.RayLength;
+            float endY = attackZone.AttackPoint.Y + MathF.Sin(drawAngleRad) * attackZone.RayLength;
             return (endX, endY, drawAngle);
+        }
+
+        // Paint handler for GMap: draw overlays (attack zone) onto the control
+        private void MapControl_Paint(object? sender, PaintEventArgs e)
+        {
+            try
+            {
+                if (attackZone.AttackPoint != PointF.Empty)
+                {
+                    DrawAttackZoneOnGMap(e.Graphics);
+                }
+            }
+            catch { }
+        }
+
+        // Draw attack zone using GMap client coordinates (no image transforms)
+        private void DrawAttackZoneOnGMap(Graphics g)
+        {
+            var (endX, endY, drawAngle) = CalculateAttackLine();
+
+            using Pen attackPen = new Pen(Color.Red, 2);
+            using Brush attackBrush = new SolidBrush(Color.FromArgb(70, Color.Red));
+
+            float radius = attackZone.SectorRadius;
+            g.FillPie(attackBrush, attackZone.AttackPoint.X - radius, attackZone.AttackPoint.Y - radius,
+                      radius * 2, radius * 2, drawAngle - (attackZone.SectorWidth / 2), attackZone.SectorWidth);
+
+            g.DrawLine(attackPen, attackZone.AttackPoint.X, attackZone.AttackPoint.Y, endX, endY);
         }
 
         private void DrawClickedPoint(Graphics g) //Точка кліку користувача
@@ -1430,6 +1504,15 @@ namespace Maps
             PointF point = clickedPointMarker.Value;
             float radius = 18f;
             DrawEllipse(g, Brushes.Red, clickedPointMarker.Value, radius);
+        }
+
+        private void UpdateDebugLabel()
+        {
+            try
+            {
+                label2.Text = $"Attack: {(attackZone.AttackPoint.IsEmpty ? "none" : attackZone.AttackPoint.ToString())} | Angle: {attackZone.Angle:F0} | AwaitingSet: {isAttakPointSet} | Localities: {localityService?.Localities?.Count ?? 0}";
+            }
+            catch { }
         }
 
         private void DrawEllipse(Graphics g, Brush brush, PointF point, float radius)// Загальний метод для малювання еліпсів
@@ -1615,9 +1698,9 @@ namespace Maps
 
         public void UpdateAttackParameters(float newSectorRadius, float newRayLength, float newAngle)//данні для оновлення параметрів
         {
-            attackSectorRadius = newSectorRadius;
-            attackRayLength = newRayLength;
-            attackAngle = newAngle;
+            attackZone.SectorRadius = newSectorRadius;
+            attackZone.RayLength = newRayLength;
+            attackZone.Angle = newAngle;
             pictureBox1.Invalidate();
         }
 
@@ -1940,9 +2023,9 @@ namespace Maps
             LogFlightIfValid();
 
             // Отримуємо азимут від точки атаки до точки кліку
-            if (clickedPointMarker.HasValue && attackPoint != PointF.Empty)
+            if (clickedPointMarker.HasValue && attackZone.AttackPoint != PointF.Empty)
             {
-                float azimuth = CalculateAzimuth(attackPoint, clickedPointMarker.Value);
+                float azimuth = CalculateAzimuth(attackZone.AttackPoint, clickedPointMarker.Value);
                 azimyth_Combat = azimuth.ToString("F0");
             }
             else
@@ -1995,7 +2078,7 @@ namespace Maps
 
         private void LogFlightIfValid()
         {
-            if (!attackPoint.IsEmpty && time_Start != default)
+            if (!attackZone.AttackPoint.IsEmpty && time_Start != default)
             {
                 if (isStart_and_Work)
                 {
@@ -2082,6 +2165,8 @@ namespace Maps
 
         private void pictureBox1_MouseDown(object sender, MouseEventArgs e)
         {
+            Console.WriteLine($"pictureBox1_MouseDown Button={e.Button} Modifiers={Control.ModifierKeys} isAttakPointSet={isAttakPointSet} Location={e.Location}");
+            if (label2 != null) label2.Text = $"MouseDown: {e.Button} Mod={Control.ModifierKeys} AwaitingSet={isAttakPointSet}";
             _isInteracting = true;
 
             if (e.Button == MouseButtons.Right)
@@ -2151,12 +2236,15 @@ namespace Maps
             //}
             if (e.Button == MouseButtons.Right && Control.ModifierKeys.HasFlag(Keys.Control) && isAttakPointSet)
             {
-                attackPoint = ScreenToMapCoordinates(e.Location);
+                var newAttackPoint = ScreenToMapCoordinates(e.Location);
+                Console.WriteLine($"Saving new attack point at pixel {newAttackPoint} (isAttakPointSet={isAttakPointSet})");
+                if (label2 != null) label2.Text = $"Saved: {newAttackPoint}";
+                attackZone.AttackPoint = newAttackPoint;
 
                 var data = new AttackPointData
                 {
-                    X = attackPoint.X,
-                    Y = attackPoint.Y,
+                    X = newAttackPoint.X,
+                    Y = newAttackPoint.Y,
                     MapWidth = cachedBitmap?.Width ?? 0,
                     MapHeight = cachedBitmap?.Height ?? 0
                 };
@@ -2178,7 +2266,45 @@ namespace Maps
         private void PrepareAttackPoint()
         {
             isAttakPointSet = true;
+            Console.WriteLine("PrepareAttackPoint: isAttakPointSet = true");
+            if (label2 != null) label2.Text = "Очікування: CTRL + ПКМ по карті для встановлення точки атаки";
+            // If GMap is visible, move focus so it receives the next click reliably
+            try { if (mapControl != null && mapControl.Visible) mapControl.Focus(); } catch { }
             MessageBox.Show("CTRL + ПКМ по карті, щоб виставити точку атаки.", "Інструкція");
+        }
+
+        // Debug helper: set a sample attack point (center of current map)
+        private void SetSampleAttackPoint()
+        {
+            PointF center = PointF.Empty;
+            if (cachedBitmap != null)
+            {
+                center = new PointF((cachedBitmap.Width) / 2f, (cachedBitmap.Height) / 2f);
+            }
+            else if (mapControl != null)
+            {
+                center = new PointF(mapControl.Width / 2f, mapControl.Height / 2f);
+            }
+
+            attackZone.AttackPoint = center;
+            var data = new AttackPointData
+            {
+                X = center.X,
+                Y = center.Y,
+                MapWidth = cachedBitmap?.Width ?? 0,
+                MapHeight = cachedBitmap?.Height ?? 0
+            };
+
+            var dir = Path.GetDirectoryName(attackPointPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(attackPointPath, JsonConvert.SerializeObject(data, Formatting.Indented));
+
+            isAttakPointSet = false;
+            Console.WriteLine($"SetSampleAttackPoint: {center}");
+            if (label2 != null) label2.Text = $"Sample attack point set: {center}";
+            pictureBox1.Invalidate();
+            SafeInvalidate(GetAttackZoneBounds());
+            MessageBox.Show("Прикладна точка атаки встановлена.", "Debug");
         }
 
         private void HandleCornerClick(PointF pixel)
