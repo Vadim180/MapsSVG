@@ -55,6 +55,7 @@
     <None Update="settings\scale.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-  </ItemGroup>
-
+    <Content Include="Data\localities.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>  </ItemGroup>
 </Project>
