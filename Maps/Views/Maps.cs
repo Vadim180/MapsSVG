@@ -6,6 +6,7 @@ using GMap.NET.WindowsForms;
 using Maps.Models;
 using Maps.Services;
 using Maps.Views;
+using Maps.Controllers;
 using Microsoft.VisualBasic.Logging;
 using Newtonsoft.Json;
 using ProjNet.CoordinateSystems;
@@ -37,6 +38,7 @@ namespace Maps
         // Абстракція провайдера карти (поступова міграція на IMapProvider)
         private Services.Map.GMapProvider? _gmapProvider;
         private Services.Map.SvgMapProvider? _svgProvider;
+        private Controllers.MapController? _mapController;
 
         private bool _dragging;
         private double _minZoomForAllowed = 0;
@@ -140,6 +142,10 @@ namespace Maps
         private string azimyth_Combat = "0";
 
         private readonly string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Maps", "MapTest.svg"); //шлях до мапи
+
+        // Startup fallback lat/lon (user-specified)
+        private readonly GMap.NET.PointLatLng StartupLatLng = new GMap.NET.PointLatLng(49.707398, 37.570155); // requested startup center
+
         private readonly string filePath_shablon = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shablon.json");
         private readonly string calibrationFolderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data");
         private readonly string calibrationFilePath;
@@ -497,13 +503,105 @@ namespace Maps
                     // Ініціалізуємо наш провайдер, він сам створить внутрішній GMapControl та додасть його в panelMap
                     _gmapProvider = new Services.Map.GMapProvider();
                     _gmapProvider.Initialize(panelMap);
+                    // Apply requested zoom limits and initial position
+                    try {
+                        _gmapProvider.SetMinZoom(10);
+                        _gmapProvider.SetMaxZoom(25);
+                        _gmapProvider.SetZoomLimitEnabled(true);
+                        _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                    } catch { }
                     mapControl = _gmapProvider.Control; // зворотна сумісність з існуючим кодом
 
                     // Ensure any legacy overlay click marker is cleared when switching to GMap
                     clickedPointMarker = null;
 
+                    // Attempt to set initial map center from calibration / SVG map center to avoid open-ocean start
+                    bool positionedFromCalibration = false;
+                    try
+                    {
+                        // Only use calibration if converter is present and marked calibrated and we have 4 reference points
+                        if (coordinateConverter != null && coordinateConverter.IsCalibrated && referencePoints.Count >= 4 && _originalImageSize != Size.Empty)
+                        {
+                            // Prefer attack point if set, otherwise use image center
+                            PointF pixelCenter = attackZone.AttackPoint != PointF.Empty ? attackZone.AttackPoint : new PointF(_originalImageSize.Width / 2f, _originalImageSize.Height / 2f);
+                            var utmCenter = coordinateConverter.PixelToUTM(pixelCenter);
+                            if (utmCenter != PointF.Empty)
+                            {
+                                if (coordinateConverter.TryUTMToLatLng(utmCenter, out double lat, out double lon))
+                                {
+                                    // sanity check latitude/longitude ranges
+                                    if (!double.IsNaN(lat) && !double.IsNaN(lon) && Math.Abs(lat) <= 90 && Math.Abs(lon) <= 180)
+                                    {
+                                                        Console.WriteLine($"Maps: centering map from calibration to {lat},{lon}");
+                                        _gmapProvider.SetPosition(lat, lon);
+                                        positionedFromCalibration = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+
+                    // Additional safety: schedule a short one-shot timer to re-apply startup center
+                    // This handles initialization races where the control may change center after our initial SetPosition
+                    try
+                    {
+                        var startupReapplyTimer = new System.Windows.Forms.Timer();
+                        startupReapplyTimer.Interval = 500; // ms
+                        startupReapplyTimer.Tick += (s, ev) =>
+                        {
+                            try
+                            {
+                                Console.WriteLine("Maps: startup timer tick — re-applying startup position");
+                                _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                            }
+                            catch { }
+                            finally
+                            {
+                                try { startupReapplyTimer.Stop(); startupReapplyTimer.Dispose(); } catch { }
+                            }
+                        };
+                        startupReapplyTimer.Start();
+                    }
+                    catch { }
+
+                    // If we couldn't determine a sensible center from calibration, use configured startup fallback
+                    if (!positionedFromCalibration)
+                    {
+                        try
+                        {
+                            Console.WriteLine($"Maps: centering map at startup fallback {StartupLatLng.Lat},{StartupLatLng.Lng}");
+                            _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                        }
+                        catch (Exception ex) { Console.WriteLine("Maps: failed to set startup position: " + ex.Message); }
+                    }
+
                     // Підключаємо події провайдера до існуючих обробників (малі адаптації)
                     _gmapProvider.OnPositionChanged += p => Gmap_OnPositionChanged(new PointLatLng(p.X, p.Y));
+
+                    // One-shot: re-apply startup position on first zoom-change (handles cases where control overrides position on init)
+                    try
+                    {
+                        if (_gmapProvider.Control != null)
+                        {
+                            void Handler()
+                            {
+                                try
+                                {
+                                    Console.WriteLine("Maps: OnMapZoomChanged fired — re-applying startup position");
+                                    _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                                }
+                                catch { }
+                                finally
+                                {
+                                    try { _gmapProvider.Control.OnMapZoomChanged -= Handler; } catch { }
+                                }
+                            }
+
+                            _gmapProvider.Control.OnMapZoomChanged += Handler;
+                        }
+                    }
+                    catch { }
                     // Клік на GMap (Lat/Lng) -> перетворимо в пікселі контролу та викликаємо старий HandleClickAction
                     _gmapProvider.OnClick += latlng =>
                     {
@@ -994,8 +1092,11 @@ namespace Maps
                 {
                     _svgProvider = new Services.Map.SvgMapProvider();
                     _svgProvider.CoordinateConverter = coordinateConverter;
-                    _svgProvider.Initialize(panelMap);
                     _svgProvider.SetBitmap(cachedBitmap);
+
+                    // Ініціалізуємо MapController (керуватиме провайдером)
+                    _mapController = new Controllers.MapController(coordinateConverter);
+                    _mapController.SetProvider(_svgProvider, panelMap);
 
                     // Ховаємо оригінальний pictureBox (поступова міграція)
                     if (pictureBox1 != null)
@@ -1003,8 +1104,8 @@ namespace Maps
                         pictureBox1.Visible = false;
                     }
 
-                    // Підписуємо обробники провайдера: позиція -> оновлюємо labelCoordinates
-                    _svgProvider.OnPositionChanged += utm =>
+                    // Підписуємо обробники позиції/кліку через контролер
+                    _mapController.OnPositionChanged += utm =>
                     {
                         if (labelCoordinates == null) return;
                         if (coordinateConverter == null || referencePoints.Count < 4)
@@ -1018,8 +1119,7 @@ namespace Maps
                         }
                     };
 
-                    // Клік на SVG (UTM) -> конвертуємо в пікселі і викликаємо HandleClickAction у старому форматі
-                    _svgProvider.OnClick += utm =>
+                    _mapController.OnClick += utm =>
                     {
                         if (coordinateConverter == null) return;
                         var pixel = coordinateConverter.UTMToPixel(utm);
@@ -1028,7 +1128,7 @@ namespace Maps
                         HandleClickAction(screen);
 
                         // Оновлюємо провайдер (щоб маркер/зони перемалювалися)
-                        try { _svgProvider?.Refresh(); } catch { }
+                        try { _mapController?.Refresh(); } catch { }
                     };
 
                     // Прив'язуємо внутрішні події pictureBox до існуючих обробників карти у Maps
@@ -1040,9 +1140,9 @@ namespace Maps
                     }
 
                     // Додаємо SVG-оверлеї: зона атаки, маркер кліка, та підписи населених пунктів
-                    _svgProvider.AddOverlay(new Services.Map.SvgAttackZoneOverlay(() => attackZone));
-                    _svgProvider.AddOverlay(new Services.Map.SvgClickMarkerOverlay(() => clickedPointMarker));
-                    _svgProvider.AddOverlay(new Services.Map.SvgLocalitiesOverlay(() => LocalityCoordinates, coordinateConverter, () => _originalImageSize, () => cachedBitmap?.Size ?? Size.Empty, () => _scale));
+                    _mapController.AddProviderOverlay(new Services.Map.SvgAttackZoneOverlay(() => attackZone));
+                    _mapController.AddProviderOverlay(new Services.Map.SvgClickMarkerOverlay(() => clickedPointMarker));
+                    _mapController.AddProviderOverlay(new Services.Map.SvgLocalitiesOverlay(() => LocalityCoordinates, coordinateConverter, () => _originalImageSize, () => cachedBitmap?.Size ?? Size.Empty, () => _scale));
                 }
                 catch (Exception ex)
                 {

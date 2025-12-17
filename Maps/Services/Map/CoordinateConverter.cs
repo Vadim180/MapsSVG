@@ -83,6 +83,11 @@ namespace Maps.Services.Map
             }
         }
 
+        /// <summary>
+        /// Повертає true, коли калібрування встановлено та інверсна матриця доступна.
+        /// </summary>
+        public bool IsCalibrated => _inv != null;
+
         public double[] SolveAffineTransform(List<PointF> pixels, List<PointF> coords)
         {
             if (pixels.Count < 4 || coords.Count < 4)
@@ -136,6 +141,41 @@ namespace Maps.Services.Map
             catch
             {
                 return "Невірні координати";
+            }
+        }
+
+        /// <summary>
+        /// Спроба перетворити UTM (Easting, Northing) в Lat/Lon (WGS84). Повертає true якщо вдалося.
+        /// Виконує двоетапну корекцію з визначенням зони за отриманою довготою.
+        /// </summary>
+        public bool TryUTMToLatLng(PointF utm, out double latitude, out double longitude)
+        {
+            latitude = double.NaN;
+            longitude = double.NaN;
+
+            try
+            {
+                string hemisphere = utm.Y > 0 ? "N" : "S";
+
+                // First-pass with a default zone (37) to get approximate longitude
+                var tempUtm = new UniversalTransverseMercator(hemisphere, 37, utm.X, utm.Y);
+                var approx = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+
+                double approxLon = approx.Longitude.DecimalDegree;
+
+                int utmZone = (int)Math.Floor((approxLon + 180) / 6) + 1;
+
+                // Recreate with correct zone
+                var correctedUtm = new UniversalTransverseMercator(hemisphere, utmZone, utm.X, utm.Y);
+                var corrected = UniversalTransverseMercator.ConvertUTMtoLatLong(correctedUtm);
+
+                latitude = corrected.Latitude.DecimalDegree;
+                longitude = corrected.Longitude.DecimalDegree;
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 

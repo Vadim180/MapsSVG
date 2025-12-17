@@ -59,8 +59,8 @@ namespace Maps.Services.Map
             _mapControl = new GMapControl
             {
                 Dock = DockStyle.Fill,
-                MinZoom = 0,
-                MaxZoom = 20,
+                MinZoom = 10,
+                MaxZoom = 25,
                 Zoom = 10,
                 CanDragMap = true,
                 DragButton = MouseButtons.Left,
@@ -160,6 +160,70 @@ namespace Maps.Services.Map
             // No-op for backward compatibility — bounding removed
         }
 
+        /// <summary>
+        /// Центрує карту на заданих координатах (WGS84 lat/lng).
+        /// </summary>
+        public void SetPosition(double latitude, double longitude)
+        {
+            if (_mapControl == null) return;
+            try
+            {
+                // Ensure we set position on UI thread
+                if (_mapControl.InvokeRequired)
+                {
+                    _mapControl.Invoke(new Action(() =>
+                    {
+                        Console.WriteLine($"GMapProvider: SetPosition -> {latitude:F6},{longitude:F6}");
+                        _mapControl.Position = new PointLatLng(latitude, longitude);
+                        try { _mapControl.ReloadMap(); } catch { }
+                        try { _mapControl.Invalidate(); } catch { }
+                    }));
+                }
+                else
+                {
+                    Console.WriteLine($"GMapProvider: SetPosition -> {latitude:F6},{longitude:F6}");
+                    _mapControl.Position = new PointLatLng(latitude, longitude);
+                    try { _mapControl.ReloadMap(); } catch { }
+                    try { _mapControl.Invalidate(); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Динамічно встановити максимальний рівень зуму (підтримується GMapControl).
+        /// </summary>
+        private const int MAX_SAFE_ZOOM = 25; // protect against unsupported zoom levels in tile providers
+
+        public void SetMaxZoom(double maxZoom)
+        {
+            if (_mapControl == null) return;
+            try
+            {
+                int z = (int)Math.Round(maxZoom);
+                if (z > MAX_SAFE_ZOOM)
+                {
+                    Console.WriteLine($"GMapProvider: requested MaxZoom {z} exceeds safe limit {MAX_SAFE_ZOOM}, capping.");
+                    z = MAX_SAFE_ZOOM;
+                }
+
+                _mapControl.MaxZoom = z;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("GMapProvider.SetMaxZoom failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Динамічно встановити мінімальний рівень зуму.
+        /// </summary>
+        public void SetMinZoom(double minZoom)
+        {
+            if (_mapControl == null) return;
+            try { _mapControl.MinZoom = (int)Math.Round(minZoom); } catch { }
+        }
+
         // --- Обробники подій ---
         private void MapControl_MouseClick(object? sender, MouseEventArgs e)
         {
@@ -184,9 +248,37 @@ namespace Maps.Services.Map
             OnPositionChanged?.Invoke(new PointF((float)point.Lat, (float)point.Lng));
         }
 
+        private bool _zoomLimitEnabled = true;
+
+        /// <summary>
+        /// Увімкнути/вимкнути застосування верхнього/нижнього ліміту зуму в OnMapZoomChanged.
+        /// </summary>
+        public void SetZoomLimitEnabled(bool enabled)
+        {
+            _zoomLimitEnabled = enabled;
+        }
+
         private void MapControl_OnMapZoomChanged()
         {
-            // No-op: bounding removed
+            if (!_zoomLimitEnabled || _mapControl == null) return;
+
+            try
+            {
+                // Clamp zoom to map control's MinZoom/MaxZoom
+                double current = _mapControl.Zoom;
+                double max = _mapControl.MaxZoom;
+                double min = _mapControl.MinZoom;
+
+                if (current > max)
+                {
+                    _mapControl.Zoom = max;
+                }
+                else if (current < min)
+                {
+                    _mapControl.Zoom = min;
+                }
+            }
+            catch { }
         }
 
         private void MapControl_Paint(object? sender, PaintEventArgs e)
