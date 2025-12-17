@@ -27,7 +27,7 @@ using ProjNet.CoordinateSystems.Transformations;
 
 namespace Maps
 {
-    public partial class Maps : Form
+    public partial class Maps : Form, Controllers.IReportContext
     {
         private RectLatLng _allowedArea;   // область, в межах якої живе карта
         private bool _isAdjustingPosition;   // <-- додай це
@@ -39,6 +39,9 @@ namespace Maps
         private Services.Map.GMapProvider? _gmapProvider;
         private Services.Map.SvgMapProvider? _svgProvider;
         private Controllers.MapController? _mapController;
+
+        // Report controller (handles report generation and button logic)
+        private Controllers.ReportController? _reportController;
 
         private bool _dragging;
         private double _minZoomForAllowed = 0;
@@ -1098,6 +1101,9 @@ namespace Maps
                     _mapController = new Controllers.MapController(coordinateConverter);
                     _mapController.SetProvider(_svgProvider, panelMap);
 
+                    // Report controller
+                    _reportController = new Controllers.ReportController(this);
+
                     // Ховаємо оригінальний pictureBox (поступова міграція)
                     if (pictureBox1 != null)
                     {
@@ -2049,126 +2055,11 @@ namespace Maps
             return $"{timePlus5:HH:mm} {timePlus45:HH:mm}";
         }
 
-        private string GenerateTextFromTemplate(List<string> template)
-        {
-            string selectedPosition = Position.SelectedItem?.ToString() ?? "";
-            string selectedPilot = Pilot.SelectedItem?.ToString() ?? "";
-            string selectedDrone = DroneBy.SelectedItem?.ToString() ?? "";
-            string selectedLocalCities = string.Join(", ", LocalCities);
-            string shootingTargets = string.IsNullOrWhiteSpace(shootingTarget.Text) || shootingTarget.Text == "Патрулювання"
-                                        ? "Патрулювання" : shootingTarget.Text.Trim();
-            string selectedheight = height.Text.Trim();
-            string selectedrange2 = selectedrange_tmp.ToString();
-            PointF utm = GetUTM(clickedPointMarker);
-            string mgrsShort = coordinateConverter != null ? coordinateConverter.FormatShortMGRSFromUTM(utm) : FormatShortMGRSFromUTM(utm);
-            string nearestLocality = FindClosestLocality(utm).ToUpper(new CultureInfo("uk-UA"));
-            string courseStr = GetCourseValue().ToString();
-            string selectedTarget = Target_Type.Text;
-            string timeString_ = string.IsNullOrEmpty(timeString) ? "" : timeString.Replace(':', '.');
+        // GenerateTextFromTemplate moved to Controllers.ReportController
 
-            string targetStatus = "";
-            string expenses = "";
-            string additionalInfo = "";
 
-            var replacements = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["{Position}"] = selectedPosition,
-                ["{Pilot}"] = selectedPilot,
-                ["{DroneBy}"] = selectedDrone,
-                ["{Time}"] = timeString_,
-                ["{LocalCiti}"] = selectedLocalCities,
-                ["{ShootingTarget}"] = shootingTargets,
-                ["{azimyth}"] = azimyth_Combat,
-                ["{range}"] = selectedrange2,
-                ["{height}"] = selectedheight,
-                ["{MGRS_Short}"] = mgrsShort,
-                ["{course}"] = courseStr,
-                ["{nearestLocality}"] = nearestLocality,
-                ["{TargetType}"] = selectedTarget,
-                ["{UnitName}"] = Shablon.CustomUnit,
-                ["{LaunchArea}"] = Shablon.LaunchArea ?? ""
+        // ApplyReplacements moved to Controllers.ReportController
 
-            };
-
-            // ОКРЕМА обробка для закінчення роботи
-            if (template == Shablon.EndWorkShablon)
-            {
-                string targetResult = targetDestroyedCheckBox.Checked
-                    ? $"Ціль знищено {selectedTarget}."
-                    : "Ціль не знищено.";
-
-                string boardResult = targetBoardCheckBox.Checked
-                    ? "Борт втрачено."
-                    : "Борт повернуто.";
-
-                replacements["{TargetStatus}"] = $"{targetResult} {boardResult}";
-
-                // Додаємо обробку для закінчення роботи
-                var finalLines = new List<string>(template.Count);
-                foreach (var raw in template)
-                {
-                    finalLines.Add(ApplyReplacements(raw, replacements));
-                }
-
-                return string.Join(Environment.NewLine, finalLines);
-            }
-            else
-            {
-                if (targetDestroyedCheckBox.Checked)
-                {
-                    targetStatus = "знищено";
-                    // Визначаємо стан борта навіть якщо ціль знищено
-                    if (targetBoardCheckBox.Checked)
-                    {
-                        expenses = "Втрати: 1 FPV.";
-                        additionalInfo = "Довідково: Підрив біля цілі, ";
-                    }
-                    else
-                    {
-                        expenses = "Втрати: Дрон повернуто.";
-                        additionalInfo = "Довідково: ціль не виявлено, ";
-                    }
-                }
-                else
-                {
-                    targetStatus = "не знищено";
-                    if (targetBoardCheckBox.Checked)
-                    {
-                        expenses = "Втрати: 1 FPV.";
-                        additionalInfo = "Довідково: Технічні несправності, ";
-                    }
-                    else
-                    {
-                        expenses = "Втрати: Дрон повернуто.";
-                        additionalInfo = "Довідково: ціль не виявлено, ";
-                    }
-                }
-
-                replacements["{TargetStatus}"] = targetStatus;
-                replacements["{Expenses}"] = expenses;
-                replacements["{AdditionalInfo}"] = additionalInfo;
-
-                var finalLines = new List<string>(template.Count);
-                foreach (var raw in template)
-                {
-                    finalLines.Add(ApplyReplacements(raw, replacements));
-                }
-
-                return _isSingleLineFormat
-                    ? string.Join(" ", finalLines)
-                    : string.Join(Environment.NewLine, finalLines);
-            }
-        }
-
-        private string ApplyReplacements(string input, Dictionary<string, string> replacements)
-        {
-            if (string.IsNullOrEmpty(input) || replacements == null)
-                return input;
-
-            foreach (var kv in replacements)
-                input = input.Replace(kv.Key, kv.Value);
-            return input;
-        }
 
         private PointF GetUTM(PointF? clickedPointMarker)
         {
@@ -2188,91 +2079,18 @@ namespace Maps
 
         private void Start_of_Work_Click(object sender, EventArgs e)
         {
-            if (ClickedPointMarker())
-            {
-                _isSingleLineFormat = false;
-                timeString = GetTime();
-                string generatedText = GenerateTextFromTemplate(Shablon.StartWorkShablon);
-                textBox1.Text = generatedText;
-
-                Clipboard.SetText(generatedText);
-                CopyToClipboardWithNotification(generatedText);
-            }
+            // Delegate to ReportController
+            try { _reportController?.Start_of_Work_Click(sender, e); } catch { }
         }
 
         private void End_of_Work_Click(object sender, EventArgs e)
         {
-            var minutes = (DateTime.Now - time_Start).TotalMinutes;      //Перевіряє скільки хвилин пройшло від початку до закінчення роботи
-            if (minutes >= (0))                                         //є GetTime() який міняє час на 5 хвилин
-                isStart_and_Work = true;
-
-            if (ClickedPointMarker())
-            {
-                timeString = DateTime.Now.ToString("HH:mm");
-                string generatedText = GenerateTextFromTemplate(Shablon.EndWorkShablon);
-                textBox1.Text = generatedText;
-
-                // Автоматичне копіювання
-                Clipboard.SetText(generatedText);
-                CopyToClipboardWithNotification(generatedText);
-            }
+            try { _reportController?.End_of_Work_Click(sender, e); } catch { }
         }
 
         private void Combat_Work_Click(object sender, EventArgs e)
         {
-            //LogFlightIfValid();
-
-            //string rawAzimuth = labelScale.Text.Replace("Кут: ", "").Replace("°", "").Trim();
-            //if (float.TryParse(rawAzimuth, out float azimuthValue)) azimyth_Combat = azimuthValue.ToString();
-            //else MessageBox.Show("Помилка: неможливо зчитати значення азимута!", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-            //if (ClickedPointMarker() && Shablon.ReportWorkShablon != null)
-            //{
-            //    _isReportTemplate = true;
-            //    _isSingleLineFormat = true; // Встановлюємо режим одного рядка
-            //    textBox1.Text = GenerateTextFromTemplate(Shablon.ReportWorkShablon);
-            //    _isReportTemplate = false;
-            //}
-
-            LogFlightIfValid();
-
-            // Отримуємо азимут від точки атаки до точки кліку
-            if (clickedPointMarker.HasValue && attackZone.AttackPoint != PointF.Empty)
-            {
-                float azimuth = CalculateAzimuth(attackZone.AttackPoint, clickedPointMarker.Value);
-                azimyth_Combat = azimuth.ToString("F0");
-            }
-            else
-            {
-                string rawAzimuth = labelScale.Text.Replace("Кут: ", "").Replace("°", "").Trim();
-                if (float.TryParse(rawAzimuth, out float azimuthValue))
-                    azimyth_Combat = azimuthValue.ToString("F0");
-                else
-                {
-                    MessageBox.Show("Помилка: неможливо зчитати значення азимута!", "Помилка",
-                                   MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-            }
-
-            // Генерація тексту за шаблоном
-            if (clickedPointMarker.HasValue && Shablon.ReportWorkShablonActual != null) // ← Використовуємо ту саму перевірку
-            {
-                _isReportTemplate = true;
-                _isSingleLineFormat = true;
-                string generatedText = GenerateTextFromTemplate(Shablon.ReportWorkShablonActual);
-                textBox1.Text = generatedText;
-                _isReportTemplate = false;
-
-                // Автоматичне копіювання
-                Clipboard.SetText(generatedText);
-                CopyToClipboardWithNotification(generatedText);
-            }
-            else
-            {
-                MessageBox.Show("Вкажіть точку польоту на карті!", "Увага",
-                               MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            try { _reportController?.Combat_Work_Click(sender, e); } catch { }
         }
 
         private float CalculateAzimuth(PointF fromPoint, PointF toPoint)
@@ -2332,6 +2150,42 @@ namespace Maps
             }
             return true;
         }
+
+        #region IReportContext implementation
+        string Controllers.IReportContext.GetSelectedPosition() => Position.SelectedItem?.ToString() ?? "";
+        string Controllers.IReportContext.GetSelectedPilot() => Pilot.SelectedItem?.ToString() ?? "";
+        string Controllers.IReportContext.GetSelectedDrone() => DroneBy.SelectedItem?.ToString() ?? "";
+        System.Collections.Generic.IEnumerable<string> Controllers.IReportContext.GetLocalCities() => LocalCities;
+        string Controllers.IReportContext.GetShootingTarget() => shootingTarget?.Text ?? "";
+        string Controllers.IReportContext.GetHeightText() => height?.Text ?? "";
+        int Controllers.IReportContext.GetSelectedRange() => selectedrange_tmp;
+        bool Controllers.IReportContext.TryGetUTM(out PointF utm)
+        {
+            if (clickedPointMarker == null)
+            {
+                MessageBox.Show("Спочатку оберіть точку на карті!", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                utm = PointF.Empty;
+                return false;
+            }
+            utm = PixelToUTM(clickedPointMarker.Value);
+            return true;
+        }
+        string Controllers.IReportContext.FormatShortMGRSFromUTM(PointF utm) => coordinateConverter != null ? coordinateConverter.FormatShortMGRSFromUTM(utm) : FormatShortMGRSFromUTM(utm);
+        string Controllers.IReportContext.FindClosestLocality(PointF utm) => FindClosestLocality(utm);
+        int Controllers.IReportContext.GetCourseValue() => GetCourseValue();
+        string Controllers.IReportContext.GetTargetType() => Target_Type?.Text ?? "";
+        string Controllers.IReportContext.GetAndSetTime() => GetTime();
+        string Controllers.IReportContext.GetCurrentTimeString() => timeString ?? "";
+        ShablonManager Controllers.IReportContext.GetShablon() => Shablon;
+        bool Controllers.IReportContext.IsTargetDestroyed() => targetDestroyedCheckBox.Checked;
+        bool Controllers.IReportContext.IsTargetBoardLost() => targetBoardCheckBox.Checked;
+        void Controllers.IReportContext.SetReportText(string text) { textBox1.Text = text; }
+        void Controllers.IReportContext.CopyToClipboardWithNotification(string text) => CopyToClipboardWithNotification(text);
+        void Controllers.IReportContext.LogFlightIfValid() => LogFlightIfValid();
+        PointF? Controllers.IReportContext.GetClickedPoint() => clickedPointMarker;
+        PointF Controllers.IReportContext.GetAttackPoint() => attackZone.AttackPoint;
+        string Controllers.IReportContext.GetLabelScaleText() => labelScale?.Text ?? "";
+        #endregion
 
         private void GenerateButtons(List<string> elements)
         {
