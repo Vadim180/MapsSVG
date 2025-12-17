@@ -18,6 +18,9 @@
     <Compile Remove="Data - Копировать\**" />
     <EmbeddedResource Remove="Data - Копировать\**" />
     <None Remove="Data - Копировать\**" />
+    <!-- Exclude tests folder from main project compilation to avoid accidental inclusion of test files -->
+    <Compile Remove="Tests\**\*.cs" />
+    <None Remove="Tests\**" />
   </ItemGroup>
 
   <ItemGroup>

@@ -27,7 +27,7 @@ using ProjNet.CoordinateSystems.Transformations;
 
 namespace Maps
 {
-    public partial class Maps : Form, Controllers.IReportContext
+    public partial class Maps : Form, Controllers.IReportContext, Controllers.IInputContext
     {
         private RectLatLng _allowedArea;   // область, в межах якої живе карта
         private bool _isAdjustingPosition;   // <-- додай це
@@ -39,6 +39,7 @@ namespace Maps
         private Services.Map.GMapProvider? _gmapProvider;
         private Services.Map.SvgMapProvider? _svgProvider;
         private Controllers.MapController? _mapController;
+        private Controllers.InputController? _inputController;
 
         // Report controller (handles report generation and button logic)
         private Controllers.ReportController? _reportController;
@@ -173,40 +174,20 @@ namespace Maps
                 return;
             }
 
-            if (attackZone.AttackPoint == PointF.Empty) return;
-            if (!IsMainTabActive) return;
-
-            if (e.KeyCode == Keys.A || e.KeyCode == Keys.D || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+            try
             {
-                _isInteracting = true;
-
-                if (e.KeyCode == Keys.A || e.KeyCode == Keys.Left) isRotateLeftPressed = true;
-                if (e.KeyCode == Keys.D || e.KeyCode == Keys.Right) isRotateRightPressed = true;
-
-                if (!timer.Enabled) timer.Start();
-                //SafeInvalidate();
-
-                e.Handled = true;
-                e.SuppressKeyPress = true; // Запобігає стандартній поведінці клавіш
+                _inputController?.OnKeyDown(sender, e);
             }
+            catch { }
         }
 
         private void Maps_KeyUp(object sender, KeyEventArgs e)// стрілки в викл состояніі
         {
-            if (!IsMainTabActive) return;
-
-            if (e.KeyCode == Keys.A || e.KeyCode == Keys.Left) isRotateLeftPressed = false;
-            if (e.KeyCode == Keys.D || e.KeyCode == Keys.Right) isRotateRightPressed = false;
-
-            if (!isRotateLeftPressed && !isRotateRightPressed)
+            try
             {
-                if (timer.Enabled) timer.Stop();
-                _isInteracting = false;
-                //pictureBox1.Invalidate();
+                _inputController?.OnKeyUp(sender, e);
             }
-
-            e.Handled = true;
-            e.SuppressKeyPress = true;
+            catch { }
         }
 
         // === ХЕЛПЕРИ ДЛЯ СТРІЛОК ===
@@ -809,32 +790,11 @@ namespace Maps
 
         private void Timer_Tick(object sender, EventArgs e)
         {
-            if (!isRotateLeftPressed && !isRotateRightPressed || !IsMainTabActive)
+            try
             {
-                timer.Stop();
-                return;
+                _inputController?.Timer_Tick(sender, e);
             }
-            if (isRotateLeftPressed)
-            {
-                attackZone.Angle -= 1f;
-                labelScale_serva_attak -= 1f;
-            }
-            else if (isRotateRightPressed)
-            {
-                attackZone.Angle += 1f;
-                labelScale_serva_attak += 1f;
-            }
-
-            attackZone.Angle = (attackZone.Angle % 360 + 360) % 360;
-
-            labelScale.Text = $"Кут: {attackZone.Angle}°";
-            labelScale_serva.Text = $"СЕРВА: {labelScale_serva_attak}";
-
-            // Логувати зміну кута для діагностики та примусово оновити провайдера
-            System.Diagnostics.Debug.WriteLine($"Timer_Tick: Attack angle = {attackZone.Angle}");
-            SafeInvalidate(GetAttackZoneBounds()); // Обмежена перемальовка
-            InvalidateMap(); // Гарантовано оновити активний провайдер (SVG або PictureBox)
-                                                   // pictureBox1.Invalidate();
+            catch { }
         }
 
 
@@ -1090,16 +1050,22 @@ namespace Maps
 
                 LoadAttackPoint();
 
-                // Ініціалізуємо тимчасовий SVG-провайдер (адаптер)
-                try
-                {
-                    _svgProvider = new Services.Map.SvgMapProvider();
+                        // Ініціалізуємо тимчасовий SVG-провайдер (адаптер)
+                    try
+                    {
+                        _svgProvider = new Services.Map.SvgMapProvider();
                     _svgProvider.CoordinateConverter = coordinateConverter;
                     _svgProvider.SetBitmap(cachedBitmap);
 
                     // Ініціалізуємо MapController (керуватиме провайдером)
                     _mapController = new Controllers.MapController(coordinateConverter);
                     _mapController.SetProvider(_svgProvider, panelMap);
+
+                    // Input controller (keyboard & rotation handling)
+                    _inputController = new Controllers.InputController(this);
+                    // Set rotation speed and timer interval for smooth updates
+                    try { _inputController.SetRotationSpeedDegPerSec(90.0); } catch { }
+                    try { if (timer != null) timer.Interval = 16; } catch { }
 
                     // Report controller
                     _reportController = new Controllers.ReportController(this);
@@ -1148,7 +1114,15 @@ namespace Maps
                     // Додаємо SVG-оверлеї: зона атаки, маркер кліка, та підписи населених пунктів
                     _mapController.AddProviderOverlay(new Services.Map.SvgAttackZoneOverlay(() => attackZone));
                     _mapController.AddProviderOverlay(new Services.Map.SvgClickMarkerOverlay(() => clickedPointMarker));
-                    _mapController.AddProviderOverlay(new Services.Map.SvgLocalitiesOverlay(() => LocalityCoordinates, coordinateConverter, () => _originalImageSize, () => cachedBitmap?.Size ?? Size.Empty, () => _scale));
+                    _mapController.AddProviderOverlay(
+                        new Services.Map.SvgLocalitiesOverlay(
+                            () => LocalityCoordinates,
+                            coordinateConverter,
+                            () => _originalImageSize,
+                            () => Size.Empty,
+                            () => _scale
+                        )
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -1959,15 +1933,33 @@ namespace Maps
 
         private void InvalidateMap()
         {
-            // Якщо SVG-провайдер активний — оновлюємо його, інакше інвалідовуємо старий pictureBox
+            // If a GMap provider is active — refresh it.
+            if (_gmapProvider != null)
+            {
+                try
+                {
+                    // Prefer invalidating the control to avoid reloading tiles
+                    if (_gmapProvider.Control != null)
+                    {
+                        _gmapProvider.Control.Invalidate();
+                    }
+                    else
+                    {
+                        _gmapProvider.Refresh();
+                    }
+                    return;
+                }
+                catch { }
+            }
+
+            // Якщо SVG-провайдер активний — оновлюємо його
             if (_svgProvider != null)
             {
-                try { _svgProvider.Refresh(); } catch { }
+                try { _svgProvider.Refresh(); return; } catch { }
             }
-            else
-            {
-                if (pictureBox1 != null) pictureBox1.Invalidate();
-            }
+
+            // Fallback: invalidate pictureBox
+            try { if (pictureBox1 != null) pictureBox1.Invalidate(); } catch { }
         }
 
         public void CreateEmptyJsonFile()
@@ -2185,6 +2177,56 @@ namespace Maps
         PointF? Controllers.IReportContext.GetClickedPoint() => clickedPointMarker;
         PointF Controllers.IReportContext.GetAttackPoint() => attackZone.AttackPoint;
         string Controllers.IReportContext.GetLabelScaleText() => labelScale?.Text ?? "";
+        #endregion
+
+        #region IInputContext implementation
+        bool Controllers.IInputContext.IsMainTabActive => IsMainTabActive;
+        bool Controllers.IInputContext.HasAttackPoint() => attackZone.AttackPoint != PointF.Empty;
+        void Controllers.IInputContext.SetInteracting(bool value) => _isInteracting = value;
+        void Controllers.IInputContext.StartTimer() { try { timer?.Start(); } catch { } }
+        void Controllers.IInputContext.StopTimer() { try { timer?.Stop(); } catch { } }
+        void Controllers.IInputContext.AdjustAttackAngle(float delta) { attackZone.Angle += delta; attackZone.Angle = (attackZone.Angle % 360 + 360) % 360; }
+        void Controllers.IInputContext.AdjustServoAngle(float delta) { labelScale_serva_attak += delta; }
+        void Controllers.IInputContext.AdjustSectorWidth(float delta)
+        {
+            attackZone.SectorWidth += delta;
+            // Clamp sector width to reasonable range (min 5°, max 180°)
+            if (attackZone.SectorWidth < 5f) attackZone.SectorWidth = 5f;
+            if (attackZone.SectorWidth > 180f) attackZone.SectorWidth = 180f;
+        }
+        float Controllers.IInputContext.GetAttackAngle() => attackZone.Angle;
+        float Controllers.IInputContext.GetSectorWidth() => attackZone.SectorWidth;
+        RectangleF Controllers.IInputContext.GetAttackZoneBounds() => GetAttackZoneBounds();
+        void Controllers.IInputContext.UpdateAngleDisplays(float angle, float servo) { if (labelScale != null) labelScale.Text = $"Кут: {angle:F1}°"; if (labelScale_serva != null) labelScale_serva.Text = $"СЕРВА: {labelScale_serva_attak:F1}"; }
+        void Controllers.IInputContext.SafeInvalidate(RectangleF bounds) => SafeInvalidate(bounds);
+        void Controllers.IInputContext.InvalidateMap() => InvalidateMap();
+        void Controllers.IInputContext.InvalidateMapImmediate()
+        {
+            // Force an immediate refresh to minimize perceived lag (used for instant feedback on keypress)
+            if (_gmapProvider != null)
+            {
+                try
+                {
+                    if (_gmapProvider.Control != null)
+                    {
+                        _gmapProvider.Control.Refresh();
+                    }
+                    else
+                    {
+                        _gmapProvider.Refresh();
+                    }
+                    return;
+                }
+                catch { }
+            }
+
+            if (_svgProvider != null)
+            {
+                try { _svgProvider.Refresh(); return; } catch { }
+            }
+
+            try { if (pictureBox1 != null) pictureBox1.Refresh(); } catch { }
+        }
         #endregion
 
         private void GenerateButtons(List<string> elements)
