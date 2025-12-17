@@ -550,6 +550,9 @@ namespace Maps
                         var posOv = new Services.Map.PositionOverlay(_gmapProvider.Control);
                         _gmapProvider.AddOverlay(posOv);
 
+                        // Overlay for attack zone on GMap
+                        _gmapProvider.AddOverlay(new Services.Map.GMapAttackZoneOverlay(() => attackZone));
+
                         // Додатково лог для перевірки подій позиції
                         _gmapProvider.OnPositionChanged += p => System.Diagnostics.Debug.WriteLine($"Provider.OnPositionChanged: {p.X:F6},{p.Y:F6}");
                     }
@@ -1559,19 +1562,43 @@ namespace Maps
             catch { }
         }
 
-        // Draw attack zone using GMap client coordinates (no image transforms)
+        // Draw attack zone using GMap client coordinates (pixel-based, similar to SVG)
         private void DrawAttackZoneOnGMap(Graphics g)
         {
-            var (endX, endY, drawAngle) = CalculateAttackLine();
+            if (mapControl == null) return;
+            if (attackZone.AttackPoint == PointF.Empty) return;
 
-            using Pen attackPen = new Pen(Color.Red, 2);
-            using Brush attackBrush = new SolidBrush(Color.FromArgb(70, Color.Red));
+            var center = attackZone.AttackPoint;
 
-            float radius = attackZone.SectorRadius;
-            g.FillPie(attackBrush, attackZone.AttackPoint.X - radius, attackZone.AttackPoint.Y - radius,
-                      radius * 2, radius * 2, drawAngle - (attackZone.SectorWidth / 2), attackZone.SectorWidth);
+            float drawAngle = attackZone.Angle - 90f;
+            float drawAngleRad = MathF.PI * (attackZone.Angle - 90) / 180f;
 
-            g.DrawLine(attackPen, attackZone.AttackPoint.X, attackZone.AttackPoint.Y, endX, endY);
+            // Draw filled sector (using SectorRadius as pixels, like SVG)
+            using (var attackBrush = new SolidBrush(Color.FromArgb(70, Color.Red)))
+            using (var attackPen = new Pen(Color.Red, 2))
+            {
+                float radius = attackZone.SectorRadius;
+
+                try
+                {
+                    g.FillPie(attackBrush, center.X - radius, center.Y - radius, radius * 2, radius * 2,
+                        drawAngle - (attackZone.SectorWidth / 2), attackZone.SectorWidth);
+                }
+                catch { }
+
+                // Draw ray (RayLength interpreted as pixels)
+                float endX = center.X + MathF.Cos(drawAngleRad) * attackZone.RayLength;
+                float endY = center.Y + MathF.Sin(drawAngleRad) * attackZone.RayLength;
+
+                g.DrawLine(attackPen, center.X, center.Y, endX, endY);
+
+                // Small center marker for visibility
+                using (var centerBrush = new SolidBrush(Color.Red))
+                {
+                    float r = 6f;
+                    g.FillEllipse(centerBrush, center.X - r / 2, center.Y - r / 2, r, r);
+                }
+            }
         }
 
         private void DrawClickedPoint(Graphics g) //Точка кліку користувача
