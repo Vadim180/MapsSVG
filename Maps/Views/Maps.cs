@@ -34,6 +34,9 @@ namespace Maps
 
         private GMap.NET.WindowsForms.GMapControl? mapControl;
 
+        // Абстракція провайдера карти (поступова міграція на IMapProvider)
+        private Services.Map.GMapProvider? _gmapProvider;
+
         private bool _dragging;
         private double _minZoomForAllowed = 0;
         private bool _isAdjustingZoom = false;
@@ -523,28 +526,27 @@ namespace Maps
                     return;
                 }
 
-                if (mapControl == null)
+                if (_gmapProvider == null)
                 {
-                    mapControl = new GMap.NET.WindowsForms.GMapControl
-                    {
-                        Dock = DockStyle.Fill,
-                        MinZoom = 2,
-                        MaxZoom = 20,
-                        Zoom = 10,
-                        CanDragMap = false,
-                        DragButton = MouseButtons.Left,
-                        IgnoreMarkerOnMouseWheel = true,
-                        Visible = false,
-                        MarkersEnabled = true,    
-                        PolygonsEnabled = true,  
-                        RoutesEnabled = true,     
-                        ShowCenter = false,
-                        MouseWheelZoomEnabled = true,
-                        MouseWheelZoomType = GMap.NET.MouseWheelZoomType.MousePositionAndCenter,
-                    };
+                    // Ініціалізуємо наш провайдер, він сам створить внутрішній GMapControl та додасть його в panelMap
+                    _gmapProvider = new Services.Map.GMapProvider();
+                    _gmapProvider.Initialize(panelMap);
+                    mapControl = _gmapProvider.Control; // зворотна сумісність з існуючим кодом
 
-                    panelMap.Controls.Add(mapControl);
-                    panelMap.Controls.SetChildIndex(mapControl, 0);
+                    // Підключаємо події провайдера до існуючих обробників (малі адаптації)
+                    _gmapProvider.OnPositionChanged += p => Gmap_OnPositionChanged(new PointLatLng(p.X, p.Y));
+
+                    // Test overlays: додамо дебажні оверлеї (тестовий маркер та дублювання позиції на поверхню карти)
+                    if (_gmapProvider.Control != null)
+                    {
+                        var testOv = new Services.Map.TestOverlay(_gmapProvider.Control);
+                        var posOv = new Services.Map.PositionOverlay(_gmapProvider.Control);
+                        _gmapProvider.AddOverlay(testOv);
+                        _gmapProvider.AddOverlay(posOv);
+
+                        // Додатково лог для перевірки подій позиції
+                        _gmapProvider.OnPositionChanged += p => System.Diagnostics.Debug.WriteLine($"Provider.OnPositionChanged: {p.X:F6},{p.Y:F6}");
+                    }
                 }
 
                 if (pictureBox1 != null)
@@ -560,6 +562,9 @@ namespace Maps
                 double rightLng = 37.843171;  // Схід (право)
 
                 _allowedArea = GMap.NET.RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
+
+                // Синхронізуємо провайдер (за потреби)
+                _gmapProvider?.SetBounds(topLat, bottomLat, rightLng, leftLng);
 
                 // Центр області
                 double centerLat = (topLat + bottomLat) / 2.0;
