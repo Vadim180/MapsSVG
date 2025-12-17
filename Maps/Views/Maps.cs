@@ -36,6 +36,7 @@ namespace Maps
 
         // Абстракція провайдера карти (поступова міграція на IMapProvider)
         private Services.Map.GMapProvider? _gmapProvider;
+        private Services.Map.SvgMapProvider? _svgProvider;
 
         private bool _dragging;
         private double _minZoomForAllowed = 0;
@@ -428,7 +429,14 @@ namespace Maps
                         if (pictureBox1 != null && !pictureBox1.IsDisposed)
                         {
                             frameCount++; // Збільшуємо лічильник кадрів
+                            if (_svgProvider != null)
+                        {
+                            _svgProvider.Refresh();
+                        }
+                        else
+                        {
                             pictureBox1.Invalidate(Rectangle.Round(bounds));
+                        }
                         }
                     }
                     finally
@@ -539,9 +547,7 @@ namespace Maps
                     // Test overlays: додамо дебажні оверлеї (тестовий маркер та дублювання позиції на поверхню карти)
                     if (_gmapProvider.Control != null)
                     {
-                        var testOv = new Services.Map.TestOverlay(_gmapProvider.Control);
                         var posOv = new Services.Map.PositionOverlay(_gmapProvider.Control);
-                        _gmapProvider.AddOverlay(testOv);
                         _gmapProvider.AddOverlay(posOv);
 
                         // Додатково лог для перевірки подій позиції
@@ -565,6 +571,8 @@ namespace Maps
 
                 // Синхронізуємо провайдер (за потреби)
                 _gmapProvider?.SetBounds(topLat, bottomLat, rightLng, leftLng);
+                // Заблокувати прокрутку карти в межах заданої області
+                _gmapProvider?.SetLockToAllowedArea(true);
 
                 // Центр області
                 double centerLat = (topLat + bottomLat) / 2.0;
@@ -731,7 +739,11 @@ namespace Maps
 
             labelScale.Text = $"Кут: {attackZone.Angle}°";
             labelScale_serva.Text = $"СЕРВА: {labelScale_serva_attak}";
+
+            // Логувати зміну кута для діагностики та примусово оновити провайдера
+            System.Diagnostics.Debug.WriteLine($"Timer_Tick: Attack angle = {attackZone.Angle}");
             SafeInvalidate(GetAttackZoneBounds()); // Обмежена перемальовка
+            InvalidateMap(); // Гарантовано оновити активний провайдер (SVG або PictureBox)
                                                    // pictureBox1.Invalidate();
         }
 
@@ -984,9 +996,69 @@ namespace Maps
                 flightLogger.Initialize();
 
                 CenterImage();
-                pictureBox1.Invalidate();
+                InvalidateMap();
 
                 LoadAttackPoint();
+
+                // Ініціалізуємо тимчасовий SVG-провайдер (адаптер)
+                try
+                {
+                    _svgProvider = new Services.Map.SvgMapProvider();
+                    _svgProvider.CoordinateConverter = coordinateConverter;
+                    _svgProvider.Initialize(panelMap);
+                    _svgProvider.SetBitmap(cachedBitmap);
+
+                    // Ховаємо оригінальний pictureBox (поступова міграція)
+                    if (pictureBox1 != null)
+                    {
+                        pictureBox1.Visible = false;
+                    }
+
+                    // Підписуємо обробники провайдера: позиція -> оновлюємо labelCoordinates
+                    _svgProvider.OnPositionChanged += utm =>
+                    {
+                        if (labelCoordinates == null) return;
+                        if (coordinateConverter == null || referencePoints.Count < 4)
+                        {
+                            labelCoordinates.Text = "Відкалібруйте карту";
+                        }
+                        else
+                        {
+                            string mgrs = coordinateConverter.FormatShortMGRSFromUTM(utm);
+                            labelCoordinates.Text = $"MGRS: {mgrs}";
+                        }
+                    };
+
+                    // Клік на SVG (UTM) -> конвертуємо в пікселі і викликаємо HandleClickAction у старому форматі
+                    _svgProvider.OnClick += utm =>
+                    {
+                        if (coordinateConverter == null) return;
+                        var pixel = coordinateConverter.UTMToPixel(utm);
+                        // Еквівалент ScreenToMapCoordinates^-1 : pixel -> screen
+                        var screen = new Point((int)Math.Round(pixel.X * _scale + _imageOffset.X), (int)Math.Round(pixel.Y * _scale + _imageOffset.Y));
+                        HandleClickAction(screen);
+
+                        // Оновлюємо провайдер (щоб маркер/зони перемалювалися)
+                        try { _svgProvider?.Refresh(); } catch { }
+                    };
+
+                    // Прив'язуємо внутрішні події pictureBox до існуючих обробників карти у Maps
+                    if (_svgProvider.Control != null)
+                    {
+                        _svgProvider.Control.MouseDown += pictureBox1_MouseDown;
+                        _svgProvider.Control.MouseMove += pictureBox1_MouseMove;
+                        _svgProvider.Control.MouseUp += pictureBox1_MouseUp;
+                    }
+
+                    // Додаємо SVG-оверлеї: зона атаки, маркер кліка, та підписи населених пунктів
+                    _svgProvider.AddOverlay(new Services.Map.SvgAttackZoneOverlay(() => attackZone));
+                    _svgProvider.AddOverlay(new Services.Map.SvgClickMarkerOverlay(() => clickedPointMarker));
+                    _svgProvider.AddOverlay(new Services.Map.SvgLocalitiesOverlay(() => LocalityCoordinates, coordinateConverter, () => _originalImageSize, () => cachedBitmap?.Size ?? Size.Empty, () => _scale));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Помилка ініціалізації SvgMapProvider: {ex.Message}");
+                }
             }
 
             ConfigureSettingsEvents(settingsControl);
@@ -1241,7 +1313,7 @@ namespace Maps
             if (_courseStartPoint.HasValue && (Control.MouseButtons & MouseButtons.Right) != 0)   //<< != 0 >> можна замінити на == MouseButtons.Right
             {
                 _courseEndPoint = ScreenToMapCoordinates(e.Location); // Конвертуємо координати
-                pictureBox1.Invalidate(); // Оновлення графіки для малювання лінії
+                InvalidateMap(); // Оновлення графіки для малювання лінії
             }
 
             // Отримати координати в пікселях карти
@@ -1289,7 +1361,7 @@ namespace Maps
             else
                 HandleCourseMeasurement(_courseStartPoint.Value, _courseEndPoint.Value);
 
-            pictureBox1.Invalidate(); // Оновити карту
+            InvalidateMap(); // Оновити карту
         }
 
         private bool IsClickAction(PointF start, PointF end)
@@ -1755,6 +1827,19 @@ namespace Maps
             }
         }
 
+        private void InvalidateMap()
+        {
+            // Якщо SVG-провайдер активний — оновлюємо його, інакше інвалідовуємо старий pictureBox
+            if (_svgProvider != null)
+            {
+                try { _svgProvider.Refresh(); } catch { }
+            }
+            else
+            {
+                if (pictureBox1 != null) pictureBox1.Invalidate();
+            }
+        }
+
         public void CreateEmptyJsonFile()
         {
             //Shablon.CreateEmptyJsonFile(filePath_shablon);
@@ -2186,18 +2271,8 @@ namespace Maps
                 _panStart = e.Location;
             }
 
-            if (isMeasuringPixel)
-            {
-                PointF clickedPoint = ScreenToMapCoordinates(e.Location);
-                MessageBox.Show($"Піксель: X = {clickedPoint.X}, Y = {clickedPoint.Y}", "Координати");
-            }
-
-            if (isCollectingCorners && currentCornerIndex < 4)
-            {
-                var pixel = ScreenToMapCoordinates(e.Location);
-                HandleCornerClick(pixel);
-            }
-
+            // Якщо користуємося SVG-провайдером — не дозволяємо внутрішньому провайдеру окремо робити панінг.
+            // Ми перехоплюємо пани через існуючі обробники Maps (вище) і потім оновлюємо провайдер через InvalidateMap().
             //if (e.Button == MouseButtons.Right && Control.ModifierKeys.HasFlag(Keys.Control) && isAttakPointSet)
             //{
             //    attackPoint = ScreenToMapCoordinates(e.Location);

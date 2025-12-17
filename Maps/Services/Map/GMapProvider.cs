@@ -18,6 +18,11 @@ namespace Maps.Services.Map
         private GMapControl? _mapControl;
         private readonly List<IMapOverlay> _overlays = new List<IMapOverlay>();
 
+        // Маркер кліка у координатах Lat/Lng (підтримуємо для GMap)
+        private GMap.NET.PointLatLng? _clickedMarkerLatLng = null;
+
+        // (Bound restriction removed)
+
         public event Action<PointF>? OnClick;
         public event Action<PointF>? OnPositionChanged;
 
@@ -25,6 +30,15 @@ namespace Maps.Services.Map
         /// Доступ до внутрішнього GMapControl для зворотної сумісності з існуючим кодом.
         /// </summary>
         public GMapControl? Control => _mapControl;
+
+        /// <summary>
+        /// Збережено для сумісності, але більше не робить нічого (обмеження видалено).
+        /// </summary>
+        public bool LockToAllowedArea
+        {
+            get => false;
+            set { /* no-op: bounding removed */ }
+        }
 
         public void Initialize(Control container)
         {
@@ -35,6 +49,7 @@ namespace Maps.Services.Map
                 // Відпідписуємося від подій для безпечної ре-ініціалізації
                 _mapControl.MouseClick -= MapControl_MouseClick;
                 _mapControl.OnPositionChanged -= MapControl_OnPositionChanged;
+                _mapControl.OnMapZoomChanged -= MapControl_OnMapZoomChanged;
                 _mapControl.Paint -= MapControl_Paint;
                 container.Controls.Remove(_mapControl);
                 _mapControl.Dispose();
@@ -65,6 +80,7 @@ namespace Maps.Services.Map
             // Події
             _mapControl.MouseClick += MapControl_MouseClick;
             _mapControl.OnPositionChanged += MapControl_OnPositionChanged;
+            _mapControl.OnMapZoomChanged += MapControl_OnMapZoomChanged;
             _mapControl.Paint += MapControl_Paint;
 
             container.Controls.Add(_mapControl);
@@ -75,18 +91,15 @@ namespace Maps.Services.Map
         {
             if (_mapControl == null) return;
 
-            // FromLTRB(leftLng, topLat, rightLng, bottomLat)
-            _mapControl.BoundsOfMap = RectLatLng.FromLTRB(west, north, east, south);
-
-            // Центр області
+            // Просто виставляємо центр області та перемальовуємо — без збереження allowed area
             double centerLat = (north + south) / 2.0;
             double centerLng = (west + east) / 2.0;
 
             _mapControl.Position = new PointLatLng(centerLat, centerLng);
-
-            // Коли контрол має потрібний розмір, можна перерахувати zoom-обмеження зовні
             _mapControl.Invalidate();
         }
+
+        // EnsureViewAreaInsideAllowed removed — bounding behaviour was disabled per request.
 
         public PointF ScreenToGeo(Point screen)
         {
@@ -116,17 +129,52 @@ namespace Maps.Services.Map
             _mapControl?.Invalidate();
         }
 
+        // Position comparison helpers removed with bounding behavior
+
+        public void SetClickedMarker(PointLatLng latLng)
+        {
+            _clickedMarkerLatLng = latLng;
+            _mapControl?.Invalidate();
+        }
+
+        public void ClearClickedMarker()
+        {
+            _clickedMarkerLatLng = null;
+            _mapControl?.Invalidate();
+        }
+
+        public void SetLockToAllowedArea(bool enable)
+        {
+            // No-op for backward compatibility — bounding removed
+        }
+
         // --- Обробники подій ---
         private void MapControl_MouseClick(object? sender, MouseEventArgs e)
         {
             if (_mapControl == null) return;
-            var latLng = _mapControl.FromLocalToLatLng(e.X, e.Y);
-            OnClick?.Invoke(new PointF((float)latLng.Lat, (float)latLng.Lng));
+
+            // Відображаємо маркер лише на одиночний правий клік
+            if (e.Button == MouseButtons.Right)
+            {
+                var latLng = _mapControl.FromLocalToLatLng(e.X, e.Y);
+
+                // Зберігаємо маркер кліка у внутрішній змінній та перемальовуємо
+                _clickedMarkerLatLng = new PointLatLng(latLng.Lat, latLng.Lng);
+                try { _mapControl.Invalidate(); } catch { }
+
+                OnClick?.Invoke(new PointF((float)latLng.Lat, (float)latLng.Lng));
+            }
         }
 
         private void MapControl_OnPositionChanged(PointLatLng point)
         {
+            // Просто передаємо позицію далі — обмеження переміщення видалено
             OnPositionChanged?.Invoke(new PointF((float)point.Lat, (float)point.Lng));
+        }
+
+        private void MapControl_OnMapZoomChanged()
+        {
+            // No-op: bounding removed
         }
 
         private void MapControl_Paint(object? sender, PaintEventArgs e)
@@ -137,6 +185,19 @@ namespace Maps.Services.Map
                 foreach (var ov in _overlays)
                 {
                     ov.Draw(e.Graphics);
+                }
+
+                // Якщо є маркер кліка у LatLng — намалюємо його в локальних пікселях
+                if (_clickedMarkerLatLng.HasValue)
+                {
+                    var gpt = _mapControl.FromLatLngToLocal(_clickedMarkerLatLng.Value);
+                    using var b = new SolidBrush(Color.Red);
+                    using var p = new Pen(Color.Black, 1);
+                    float x = (float)gpt.X;
+                    float y = (float)gpt.Y;
+                    float r = 8f;
+                    e.Graphics.FillEllipse(b, x - r, y - r, r * 2, r * 2);
+                    e.Graphics.DrawEllipse(p, x - r, y - r, r * 2, r * 2);
                 }
             }
             catch
