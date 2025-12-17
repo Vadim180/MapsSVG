@@ -314,30 +314,8 @@ namespace Maps.Services.Map
 
         private void ConstrainImagePosition()
         {
-            if (_originalImageSize == Size.Empty || _pictureBox == null) return;
-
-            int newWidth = (int)(_originalImageSize.Width * _scale);
-            int newHeight = (int)(_originalImageSize.Height * _scale);
-
-            if (newWidth > _pictureBox.Width)
-            {
-                if (_imageOffset.X > 0) _imageOffset.X = 0;
-                if (_imageOffset.X + newWidth < _pictureBox.Width) _imageOffset.X = _pictureBox.Width - newWidth;
-            }
-            else
-            {
-                _imageOffset.X = (_pictureBox.Width - newWidth) / 2;
-            }
-
-            if (newHeight > _pictureBox.Height)
-            {
-                if (_imageOffset.Y > 0) _imageOffset.Y = 0;
-                if (_imageOffset.Y + newHeight < _pictureBox.Height) _imageOffset.Y = _pictureBox.Height - newHeight;
-            }
-            else
-            {
-                _imageOffset.Y = (_pictureBox.Height - newHeight) / 2;
-            }
+            // Movement constraints removed: allow free panning of the SVG image. No clamping performed.
+            return;
         }
 
         private float ConvertToPixels(SvgUnit unit)

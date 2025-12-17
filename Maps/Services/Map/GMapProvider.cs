@@ -59,7 +59,7 @@ namespace Maps.Services.Map
             _mapControl = new GMapControl
             {
                 Dock = DockStyle.Fill,
-                MinZoom = 2,
+                MinZoom = 0,
                 MaxZoom = 20,
                 Zoom = 10,
                 CanDragMap = true,
@@ -82,6 +82,13 @@ namespace Maps.Services.Map
             _mapControl.OnPositionChanged += MapControl_OnPositionChanged;
             _mapControl.OnMapZoomChanged += MapControl_OnMapZoomChanged;
             _mapControl.Paint += MapControl_Paint;
+
+            // Ensure there are no unexpected native overlays/markers (some environments/plugins may add debug overlays)
+            try
+            {
+                _mapControl.Overlays.Clear();
+            }
+            catch { }
 
             container.Controls.Add(_mapControl);
             container.Controls.SetChildIndex(_mapControl, 0);
@@ -137,6 +144,11 @@ namespace Maps.Services.Map
             _mapControl?.Invalidate();
         }
 
+        /// <summary>
+        /// Return currently set clicked marker (Lat/Lng) if any.
+        /// </summary>
+        public PointLatLng? GetClickedMarkerLatLng() => _clickedMarkerLatLng;
+
         public void ClearClickedMarker()
         {
             _clickedMarkerLatLng = null;
@@ -182,10 +194,16 @@ namespace Maps.Services.Map
             // Рендеримо наші IMapOverlay зверху карти
             try
             {
+                // Очистимо будь-які нативні оверлеї/маркери, які явно позначені як debug або мають
+                // тип/текст 'Cross' / 'debug' (різні збірки GMap можуть додавати такі артефакти).
+                try { CleanupNativeDebugOverlays(); } catch { }
+
                 foreach (var ov in _overlays)
                 {
                     ov.Draw(e.Graphics);
                 }
+
+                // (No center cover drawing here: we rely on explicit cleanup of native debug overlays/markers.)
 
                 // Якщо є маркер кліка у LatLng — намалюємо його в локальних пікселях
                 if (_clickedMarkerLatLng.HasValue)
@@ -204,6 +222,65 @@ namespace Maps.Services.Map
             {
                 // Безпечна заглушка — щоб помилка в оверлеї не ламала рендер карти
             }
+        }
+
+        private void CleanupNativeDebugOverlays()
+        {
+            if (_mapControl == null) return;
+
+            // Snapshot to avoid collection modifications while iterating
+            bool removed = false;
+            var overlays = new List<GMapOverlay>(_mapControl.Overlays);
+            foreach (var ov in overlays)
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(ov.Id)) continue;
+
+                    // If overlay id contains debug -> remove entire overlay
+                    if (ov.Id.IndexOf("debug", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        Console.WriteLine($"GMapProvider: removing debug overlay '{ov.Id}'");
+                        _mapControl.Overlays.Remove(ov);
+                        removed = true;
+                        continue;
+                    }
+
+                    // Remove markers that look like debug/cross markers
+                    var markers = new List<GMap.NET.WindowsForms.GMapMarker>(ov.Markers);
+                    foreach (var m in markers)
+                    {
+                        try
+                        {
+                            var tt = m.ToolTipText;
+                            if (!string.IsNullOrEmpty(tt) && tt.IndexOf("debug", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                Console.WriteLine($"GMapProvider: removing debug marker with tooltip '{tt}' in overlay '{ov.Id}'");
+                                ov.Markers.Remove(m);
+                                removed = true;
+                                continue;
+                            }
+
+                            var tname = m.GetType().Name;
+                            if (tname.IndexOf("Cross", StringComparison.OrdinalIgnoreCase) >= 0 || tname.IndexOf("Debug", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                ov.Markers.Remove(m);
+                                continue;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // If overlay ended up empty and it's not our 'markers' overlay, remove it
+                    if (ov.Markers.Count == 0 && ov.Routes.Count == 0 && ov.Polygons.Count == 0 && !string.Equals(ov.Id, "markers", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _mapControl.Overlays.Remove(ov);
+                    }
+                }
+                catch { }
+            }
+
+            if (removed) Console.WriteLine("GMapProvider: removed debug overlays/markers during paint");
         }
     }
 }

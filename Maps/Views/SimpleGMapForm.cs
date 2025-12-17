@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using GMap.NET;
 using GMap.NET.MapProviders;
 using GMap.NET.WindowsForms;
+using System.Reflection;
 
 namespace Maps.Views
 {
@@ -141,6 +142,8 @@ namespace Maps.Views
                 }
 
                 comboBoxMapType.SelectedIndex = 0;
+                // Ensure initial label shows position and zoom (zoom rounded to 2 decimals)
+                MapControl_OnMapZoomChanged();
             }
             catch (Exception ex)
             {
@@ -206,12 +209,111 @@ namespace Maps.Views
 
         private void MapControl_OnPositionChanged(PointLatLng point)
         {
-            lblPosition.Text = $"Позиція: {point.Lat:F4}, {point.Lng:F4}";
+            // Always include zoom as well, rounded to 2 decimal places for readability
+            lblPosition.Text = $"Позиція: {point.Lat:F4}, {point.Lng:F4} | Zoom: {mapControl.Zoom:F2}";
         }
 
         private void MapControl_OnMapZoomChanged()
         {
-            lblPosition.Text = $"Позиція: {mapControl.Position.Lat:F4}, {mapControl.Position.Lng:F4} | Zoom: {mapControl.Zoom}";
+            double lat = mapControl.Position.Lat;
+            double lng = mapControl.Position.Lng;
+
+            string dmsLat = ToDMS(lat, true);
+            string dmsLng = ToDMS(lng, false);
+
+            // UTM and MGRS
+            var (zone, hemisphere, easting, northing) = LatLonToUTM(lat, lng);
+            string utmText = $"Zone {zone}{hemisphere}  E: {easting:F1}  N: {northing:F1}";
+
+            string fullMgrs = "N/A";
+            try
+            {
+                var utmType = AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => { try { return a.GetTypes(); } catch { return new Type[0]; } })
+                    .FirstOrDefault(t => string.Equals(t.Name, "UniversalTransverseMercator", StringComparison.Ordinal));
+
+                if (utmType != null)
+                {
+                    // Create UTM instance (hemisphere as string, zone, easting, northing)
+                    var utmInstance = Activator.CreateInstance(utmType, hemisphere.ToString(), zone, easting, northing);
+                    var convertMethod = utmType.GetMethod("ConvertUTMtoLatLong", BindingFlags.Public | BindingFlags.Static);
+                    if (convertMethod != null && utmInstance != null)
+                    {
+                        var corrected = convertMethod.Invoke(null, new object[] { utmInstance });
+                        if (corrected != null)
+                        {
+                            var mgrsProp = corrected.GetType().GetProperty("MGRS");
+                            if (mgrsProp != null)
+                            {
+                                var mgrsVal = mgrsProp.GetValue(corrected);
+                                if (mgrsVal != null)
+                                    fullMgrs = mgrsVal.ToString() ?? "N/A";
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                fullMgrs = "N/A";
+            }
+
+            lblPosition.Text = $"Позиція: {lat:F4}, {lng:F4} | Zoom: {mapControl.Zoom:F2}" +
+                               $"\nDMS: {dmsLat}  {dmsLng}" +
+                               $"\nUTM: {utmText}" +
+                               $"\nMGRS: {fullMgrs}";
+        }
+
+        private static string ToDMS(double value, bool isLatitude)
+        {
+            double absVal = Math.Abs(value);
+            int deg = (int)Math.Floor(absVal);
+            double rem = (absVal - deg) * 60.0;
+            int min = (int)Math.Floor(rem);
+            double sec = (rem - min) * 60.0;
+            string dir;
+            if (isLatitude)
+                dir = value >= 0 ? "N" : "S";
+            else
+                dir = value >= 0 ? "E" : "W";
+            return $"{deg}°{min:00}'{sec:00.##}\"{dir}";
+        }
+
+        // Convert lat/lon to UTM (WGS84). Returns zone, hemisphere char ('N'/'S'), easting, northing
+        private static (int zone, char hemisphere, double easting, double northing) LatLonToUTM(double lat, double lon)
+        {
+            const double a = 6378137.0; // WGS84 major axis
+            const double f = 1.0 / 298.257223563; // WGS84 flattening
+            const double k0 = 0.9996;
+
+            double latRad = lat * Math.PI / 180.0;
+            double lonRad = lon * Math.PI / 180.0;
+
+            int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
+            double lonOrigin = (zone - 1) * 6 - 180 + 3; // +3 puts origin in middle of zone
+            double lonOriginRad = lonOrigin * Math.PI / 180.0;
+
+            double e2 = f * (2 - f);
+            double ePrime2 = e2 / (1 - e2);
+            double N = a / Math.Sqrt(1 - e2 * Math.Sin(latRad) * Math.Sin(latRad));
+            double T = Math.Tan(latRad) * Math.Tan(latRad);
+            double C = ePrime2 * Math.Cos(latRad) * Math.Cos(latRad);
+            double A = Math.Cos(latRad) * (lonRad - lonOriginRad);
+
+            double M = a * ((1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256) * latRad
+                            - (3 * e2 / 8 + 3 * e2 * e2 / 32 + 45 * e2 * e2 * e2 / 1024) * Math.Sin(2 * latRad)
+                            + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * Math.Sin(4 * latRad)
+                            - (35 * e2 * e2 * e2 / 3072) * Math.Sin(6 * latRad));
+
+            double easting = k0 * N * (A + (1 - T + C) * Math.Pow(A, 3) / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ePrime2) * Math.Pow(A, 5) / 120) + 500000.0;
+
+            double northing = k0 * (M + N * Math.Tan(latRad) * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * Math.Pow(A, 4) / 24
+                                + (61 - 58 * T + T * T + 600 * C - 330 * ePrime2) * Math.Pow(A, 6) / 720));
+
+            char hemisphere = lat >= 0 ? 'N' : 'S';
+            if (lat < 0) northing += 10000000.0; // add offset for southern hemisphere
+
+            return (zone, hemisphere, easting, northing);
         }
 
         private void MapControl_MouseMove(object sender, MouseEventArgs e)

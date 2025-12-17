@@ -18,6 +18,8 @@ namespace Maps.Services.Map
 
         public void Draw(Graphics g)
         {
+            System.Diagnostics.Debug.WriteLine("GMapAttackZoneOverlay.Draw called");
+            Console.WriteLine("GMapAttackZoneOverlay.Draw called");
             var zone = _getZone();
             if (zone == null || zone.AttackPoint == PointF.Empty) return;
 

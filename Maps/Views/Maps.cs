@@ -477,50 +477,8 @@ namespace Maps
 
         private void EnsureViewAreaInsideAllowed()
         {
-            if (mapControl == null || _allowedArea.IsEmpty)
-                return;
-
-            var view = mapControl.ViewArea;
-            if (view.IsEmpty || mapControl.Width <= 0 || mapControl.Height <= 0)
-                return;
-
-            // Піврозміри видимої області
-            double halfLat = view.HeightLat / 2.0;
-            double halfLng = view.WidthLng / 2.0;
-
-            // Який центр дозволений, щоб view повністю вліз у allowed
-            double minCenterLat = _allowedArea.Bottom + halfLat;
-            double maxCenterLat = _allowedArea.Top - halfLat;
-
-            double minCenterLng = _allowedArea.Left + halfLng;
-            double maxCenterLng = _allowedArea.Right - halfLng;
-
-            // Якщо view більший за allowed (наприклад, занадто маленький zoom) —
-            // тоді “влізти” неможливо. У такому випадку просто центруємо.
-            if (minCenterLat > maxCenterLat || minCenterLng > maxCenterLng)
-            {
-                double centerLat = (_allowedArea.Top + _allowedArea.Bottom) / 2.0;
-                double centerLng = (_allowedArea.Left + _allowedArea.Right) / 2.0;
-
-                if (mapControl.Position.Lat != centerLat || mapControl.Position.Lng != centerLng)
-                {
-                    _isAdjustingPosition = true;
-                    try { mapControl.Position = new PointLatLng(centerLat, centerLng); }
-                    finally { _isAdjustingPosition = false; }
-                }
-                return;
-            }
-
-            // Clamp центру
-            double clampedLat = Math.Max(minCenterLat, Math.Min(maxCenterLat, mapControl.Position.Lat));
-            double clampedLng = Math.Max(minCenterLng, Math.Min(maxCenterLng, mapControl.Position.Lng));
-
-            if (clampedLat != mapControl.Position.Lat || clampedLng != mapControl.Position.Lng)
-            {
-                _isAdjustingPosition = true;
-                try { mapControl.Position = new PointLatLng(clampedLat, clampedLng); }
-                finally { _isAdjustingPosition = false; }
-            }
+            // Restrictions on view area have been removed — do nothing.
+            return;
         }
 
         private void BtnShowGMap_Click(object sender, EventArgs e)
@@ -541,8 +499,22 @@ namespace Maps
                     _gmapProvider.Initialize(panelMap);
                     mapControl = _gmapProvider.Control; // зворотна сумісність з існуючим кодом
 
+                    // Ensure any legacy overlay click marker is cleared when switching to GMap
+                    clickedPointMarker = null;
+
                     // Підключаємо події провайдера до існуючих обробників (малі адаптації)
                     _gmapProvider.OnPositionChanged += p => Gmap_OnPositionChanged(new PointLatLng(p.X, p.Y));
+                    // Клік на GMap (Lat/Lng) -> перетворимо в пікселі контролу та викликаємо старий HandleClickAction
+                    _gmapProvider.OnClick += latlng =>
+                    {
+                        try
+                        {
+                            var screen = _gmapProvider.GeoToScreen(latlng);
+                            HandleGMapClick(screen);
+                            try { _gmapProvider.Refresh(); } catch { }
+                        }
+                        catch { }
+                    };
 
                     // Test overlays: додамо дебажні оверлеї (тестовий маркер та дублювання позиції на поверхню карти)
                     if (_gmapProvider.Control != null)
@@ -552,6 +524,18 @@ namespace Maps
 
                         // Overlay for attack zone on GMap
                         _gmapProvider.AddOverlay(new Services.Map.GMapAttackZoneOverlay(() => attackZone));
+
+                        // Marker overlay (calibration / clicked point / scale markers) wrapped for GMap
+                        var markerOverlay = new Rendering.Overlays.MarkerOverlay(
+                            () => clickedPointMarker,
+                            () => calibrationMarkers,
+                            () => currentCornerIndex,
+                            () => isScaleMarkersVisible,
+                            () => referencePoints
+                        );
+
+                        // For GMap we render using identity mapping because coordinates are in client pixels
+                        _gmapProvider.AddOverlay(new Services.Map.RenderingOverlayAdapter(markerOverlay, p => new Point((int)Math.Round(p.X), (int)Math.Round(p.Y))));
 
                         // Додатково лог для перевірки подій позиції
                         _gmapProvider.OnPositionChanged += p => System.Diagnostics.Debug.WriteLine($"Provider.OnPositionChanged: {p.X:F6},{p.Y:F6}");
@@ -564,22 +548,13 @@ namespace Maps
                     pictureBox1.SendToBack();
                 }
 
-                // Визначаємо область
-                double topLat = 49.814536;    // Північ (верх)
-                double leftLng = 37.33012;    // Захід (ліво)
-                double bottomLat = 49.55683;  // Південь (низ)
-                double rightLng = 37.843171;  // Схід (право)
+                // Раніше тут встановлювалась 'allowed area' та блокування прокрутки карти.
+                // Видаляємо будь-які обмеження переміщення карти/маркерів — тепер користувач може вільно панити/зумити.
+                // (Колишні виклики SetBounds / SetLockToAllowedArea видалені)
 
-                _allowedArea = GMap.NET.RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
-
-                // Синхронізуємо провайдер (за потреби)
-                _gmapProvider?.SetBounds(topLat, bottomLat, rightLng, leftLng);
-                // Заблокувати прокрутку карти в межах заданої області
-                _gmapProvider?.SetLockToAllowedArea(true);
-
-                // Центр області
-                double centerLat = (topLat + bottomLat) / 2.0;
-                double centerLng = (leftLng + rightLng) / 2.0;
+                // Початкова позиція: немає обмежень — використовуємо (0,0) або існуючу позицію карти
+                double centerLat = 0.0;
+                double centerLng = 0.0;
 
                 // Налаштування карти
                 mapControl.MapProvider = GMap.NET.MapProviders.GMapProviders.GoogleMap;
@@ -612,8 +587,8 @@ namespace Maps
                 // Найпростіше — через BeginInvoke:
                 mapControl.BeginInvoke(new Action(() =>
                 {
-                    RecalculateMinZoomForAllowed();
-                    EnsureViewAreaInsideAllowed();
+                    // Disabled: previously recalculated min-zoom and enforced view area inside allowed bounds.
+                    // Movement/zoom restrictions have been removed to allow free panning/zooming.
                 }));
 
                 // 7. Додамо оверлей для маркерів (опційно)
@@ -637,61 +612,13 @@ namespace Maps
 
         private void RecalculateMinZoomForAllowed()
         {
-            //if (mapControl == null || _allowedArea.IsEmpty) return;
-            //if (mapControl.Width <= 0 || mapControl.Height <= 0) return;
-
-            //// Почнемо з поточного зуму і, якщо треба, будемо "наближати", доки ViewArea не влізе
-            //double z = mapControl.Zoom;
-
-            //// Захист від нескінченних циклів
-            //for (int i = 0; i < 200; i++)
-            //{
-            //    var view = mapControl.ViewArea;
-            //    if (!view.IsEmpty &&
-            //        view.WidthLng <= _allowedArea.WidthLng &&
-            //        view.HeightLat <= _allowedArea.HeightLat)
-            //    {
-            //        _minZoomForAllowed = z;
-            //        mapControl.MinZoom = (int)_minZoomForAllowed;   // ✅ забороняємо віддаляти далі
-            //        return;
-            //    }
-
-            //    // Якщо ViewArea ще занадто велика — збільшуємо zoom (наближаємо)
-            //    z += 0.2;
-            //    mapControl.Zoom = z;
-            //}
-
-            if (mapControl == null || _allowedArea.IsEmpty) return;
-            if (mapControl.Width <= 0 || mapControl.Height <= 0) return;
-
-            double z = mapControl.Zoom;
-
-            _isAdjustingZoom = true;
-            try
+            // Movement/zoom restrictions are intentionally disabled.
+            // Previously this method calculated a conservative minimum zoom that kept the view inside an allowed area;
+            // that behaviour has been removed per user request.
+            _minZoomForAllowed = 0;
+            if (mapControl != null)
             {
-                for (int i = 0; i < 200; i++)
-                {
-                    var view = mapControl.ViewArea;
-                    if (!view.IsEmpty &&
-                        view.WidthLng <= _allowedArea.WidthLng &&
-                        view.HeightLat <= _allowedArea.HeightLat)
-                    {
-                        _minZoomForAllowed = z;
-
-                        // системне MinZoom — грубе (int), але ми ще й “дотиснемо” в ZoomChanged
-                        mapControl.MinZoom = Math.Max(mapControl.MinZoom, (int)Math.Floor(_minZoomForAllowed));
-
-                        return;
-                    }
-
-                    z += 0.2;          // наближаємо
-                    if (z > mapControl.MaxZoom) break;
-                    mapControl.Zoom = z;
-                }
-            }
-            finally
-            {
-                _isAdjustingZoom = false;
+                try { mapControl.MinZoom = 0; } catch { }
             }
         }
 
@@ -704,7 +631,13 @@ namespace Maps
             if (_minZoomForAllowed > 0 && mapControl.Zoom < _minZoomForAllowed)
             {
                 _isAdjustingZoom = true;
-                try { mapControl.Zoom = _minZoomForAllowed; }
+                try
+                {
+                    // Preserve current center to avoid sudden recentering to library defaults
+                    var prev = mapControl.Position;
+                    mapControl.Zoom = _minZoomForAllowed;
+                    try { mapControl.Position = prev; } catch { }
+                }
                 finally { _isAdjustingZoom = false; }
             }
 
@@ -715,7 +648,60 @@ namespace Maps
         private void Gmap_OnPositionChanged(PointLatLng point)
         {
             if (_isAdjustingPosition) return;
-            EnsureViewAreaInsideAllowed();
+            // Recalculate side-panel distance when the map center moves (for GMap mode)
+            UpdateDistanceFromCenterToMarker();
+        }
+
+        private void UpdateDistanceFromCenterToMarker()
+        {
+            try
+            {
+                // GMap provider mode: compute geodesic distance between control center and clicked marker (if present)
+                if (_gmapProvider != null && _gmapProvider.Control != null)
+                {
+                    var gprov = _gmapProvider as Services.Map.GMapProvider;
+                    if (gprov != null)
+                    {
+                        var marker = gprov.GetClickedMarkerLatLng();
+                        if (marker.HasValue)
+                        {
+                            var center = _gmapProvider.Control.Position;
+                            double meters = HaversineDistanceMeters(center.Lat, center.Lng, marker.Value.Lat, marker.Value.Lng);
+                            selectedrange_tmp = (int)(MathF.Round((float)meters / 100f) * 100f);
+                            UpdateDistanceDisplay(selectedrange_tmp);
+                            return;
+                        }
+                    }
+                }
+
+                // SVG / pictureBox mode: distance from view center pixel to chosen overlay marker (if present)
+                if (clickedPointMarker.HasValue)
+                {
+                    // Center of view in screen coordinates
+                    var centerScreen = new Point(panelMap.Width / 2, panelMap.Height / 2);
+                    var centerMap = ScreenToMapCoordinates(centerScreen);
+                    float dx = clickedPointMarker.Value.X - centerMap.X;
+                    float dy = clickedPointMarker.Value.Y - centerMap.Y;
+                    float distanceToAttack = MathF.Sqrt(dx * dx + dy * dy);
+                    if (pixelsToMeters != null && pixelsToMeters > 0f)
+                    {
+                        float distanceInMeters = distanceToAttack * pixelsToMeters.GetValueOrDefault();
+                        selectedrange_tmp = (int)(MathF.Round(distanceInMeters / 100f) * 100f);
+                        UpdateDistanceDisplay(selectedrange_tmp);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static double HaversineDistanceMeters(double lat1, double lon1, double lat2, double lon2)
+        {
+            const double R = 6371000.0; // Earth radius in meters
+            double dLat = (lat2 - lat1) * Math.PI / 180.0;
+            double dLon = (lon2 - lon1) * Math.PI / 180.0;
+            double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+            double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+            return R * c;
         }
 
 
@@ -1312,6 +1298,9 @@ namespace Maps
                 ConstrainImagePosition();
                 pictureBox1.Invalidate();
                 SafeInvalidate(GetAttackZoneBounds());
+
+                // Recompute distance between current view center and any placed marker (SVG mode)
+                UpdateDistanceFromCenterToMarker();
             }
             if (_courseStartPoint.HasValue && (Control.MouseButtons & MouseButtons.Right) != 0)   //<< != 0 >> можна замінити на == MouseButtons.Right
             {
@@ -1405,6 +1394,36 @@ namespace Maps
 
             // Оновлюємо відображення дистанції
             UpdateDistanceDisplay(selectedrange_tmp);
+        }
+
+        // Handle clicks on GMap: coordinates are already client pixels of the map control
+        // NOTE: Do not store the click into `clickedPointMarker` (screen overlay) for GMap —
+        // we want the red marker to be part of the map control itself so it moves with the map.
+        private void HandleGMapClick(Point screen)
+        {
+            Console.WriteLine($"HandleGMapClick at {screen}");
+
+            // Use the provided screen coordinates for measurements, but do NOT persist
+            // them into `clickedPointMarker` (that would create a fixed overlay marker).
+            var screenPt = new PointF(screen.X, screen.Y);
+
+            LoadScaleValue();
+
+            if (pixelsToMeters is null || pixelsToMeters <= 0f)
+            {
+                MessageBox.Show("Карта ще не відкалібрована! Виконайте калібрування.", "Увага");
+                return;
+            }
+
+            float dx = screenPt.X - attackZone.AttackPoint.X;
+            float dy = screenPt.Y - attackZone.AttackPoint.Y;
+            float distanceToAttack = MathF.Sqrt(dx * dx + dy * dy);
+            float distanceInMeters = distanceToAttack * pixelsToMeters.GetValueOrDefault();
+            selectedrange_tmp = (int)(MathF.Round(distanceInMeters / 100f) * 100f);
+            UpdateDistanceDisplay(selectedrange_tmp);
+
+            // Ensure side panel updates (distance from center to newly placed marker)
+            UpdateDistanceFromCenterToMarker();
         }
 
         private void UpdateDistanceDisplay(int distance)
@@ -1828,30 +1847,8 @@ namespace Maps
 
         private void ConstrainImagePosition()//підрахунок положення після змінень
         {
-            int newWidth = (int)(_originalImageSize.Width * _scale);
-            int newHeight = (int)(_originalImageSize.Height * _scale);
-
-            // Обмеження для горизонтальної осі
-            if (newWidth > panelMap.Width)
-            {
-                if (_imageOffset.X > 0) _imageOffset.X = 0;
-                if (_imageOffset.X + newWidth < panelMap.Width) _imageOffset.X = panelMap.Width - newWidth;
-            }
-            else
-            {
-                _imageOffset.X = (panelMap.Width - newWidth) / 2;
-            }
-
-            // Обмеження для вертикальної осі
-            if (newHeight > panelMap.Height)
-            {
-                if (_imageOffset.Y > 0) _imageOffset.Y = 0;
-                if (_imageOffset.Y + newHeight < panelMap.Height) _imageOffset.Y = panelMap.Height - newHeight;
-            }
-            else
-            {
-                _imageOffset.Y = (panelMap.Height - newHeight) / 2;
-            }
+            // Movement constraints removed: allow free panning of the SVG image in Maps view.
+            return;
         }
 
         private void InvalidateMap()
