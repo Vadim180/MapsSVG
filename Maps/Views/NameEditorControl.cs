@@ -4,7 +4,7 @@ using System;
 using System.Drawing.Printing;
 using System.Windows.Forms;
 
-namespace Maps
+namespace Maps.Views
 {
     public partial class NameEditorControl : UserControl
     {

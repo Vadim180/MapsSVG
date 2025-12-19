@@ -1,4 +1,4 @@
-﻿namespace Maps
+﻿namespace Maps.Views
 {
     partial class NameEditorControl
     {

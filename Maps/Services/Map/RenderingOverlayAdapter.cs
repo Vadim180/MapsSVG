@@ -4,15 +4,13 @@ using Maps.Rendering.Overlays;
 
 namespace Maps.Services.Map
 {
-    /// <summary>
-    /// Adapter to allow Rendering.IMapOverlay to be used by Services.Map provider overlays (which expect Draw(Graphics)).
-    /// </summary>
+    // Адаптер для Rendering.IMapOverlay до Services.Map provider
     public class RenderingOverlayAdapter : IMapOverlay
     {
         private readonly global::Maps.Rendering.Overlays.IMapOverlay _inner;
-        private readonly Func<PointF, Point> _geoToScreen;
+        private readonly Func<PointF, PointF> _geoToScreen;
 
-        public RenderingOverlayAdapter(global::Maps.Rendering.Overlays.IMapOverlay inner, Func<PointF, Point> geoToScreen)
+        public RenderingOverlayAdapter(global::Maps.Rendering.Overlays.IMapOverlay inner, Func<PointF, PointF> geoToScreen)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
             _geoToScreen = geoToScreen ?? throw new ArgumentNullException(nameof(geoToScreen));
@@ -20,9 +18,7 @@ namespace Maps.Services.Map
 
         public void Draw(Graphics g)
         {
-            System.Diagnostics.Debug.WriteLine($"RenderingOverlayAdapter.Draw called for {_inner.GetType().Name}");
-            Console.WriteLine($"RenderingOverlayAdapter.Draw called for {_inner.GetType().Name}");
-            _inner.Render(g, _geoToScreen);
+            _inner.Draw(g, RectangleF.Empty, _geoToScreen);
         }
     }
 }

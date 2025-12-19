@@ -32,11 +32,7 @@ namespace Maps.Controllers
         public void SetCoordinateConverter(CoordinateConverter conv)
         {
             _coordinateConverter = conv ?? throw new ArgumentNullException(nameof(conv));
-            // If current provider is SVG, ensure it has the converter assigned
-            if (_provider is SvgMapProvider svg)
-            {
-                svg.CoordinateConverter = _coordinateConverter;
-            }
+            // SVG provider removed, now only GMap.NET
         }
 
         /// <summary>
@@ -61,11 +57,7 @@ namespace Maps.Controllers
 
             _provider = provider;
 
-            // Якщо це SVG — встановимо CoordinateConverter
-            if (_provider is SvgMapProvider svgProvider && _coordinateConverter != null)
-            {
-                svgProvider.CoordinateConverter = _coordinateConverter;
-            }
+            // GMap.NET provider initialization only
 
             _provider.OnClick += Provider_OnClick;
             _provider.OnPositionChanged += Provider_OnPositionChanged;
@@ -89,16 +81,17 @@ namespace Maps.Controllers
             try { _provider?.AddOverlay(overlay); } catch { }
         }
 
-        /// <summary>
-        /// Додає Rendering overlay (логічні координати) — створює адаптер і додає до провайдера.
-        /// geoToScreen буде делегувати в провайдера GeoToScreen.
-        /// </summary>
+        // Додає Rendering overlay (логічні координати) — створює адаптер і додає до провайдера
         public void AddRenderingOverlay(RenderingOverlay overlay)
         {
             if (overlay == null) return;
             if (_provider == null) throw new InvalidOperationException("Provider not set");
 
-            Func<PointF, Point> geoToScreen = geo => _provider.GeoToScreen(geo);
+            Func<PointF, PointF> geoToScreen = geo => 
+            {
+                var pt = _provider.GeoToScreen(geo);
+                return new PointF(pt.X, pt.Y);
+            };
             var adapter = new RenderingOverlayAdapter(overlay, geoToScreen);
             AddProviderOverlay(adapter);
         }
@@ -108,15 +101,15 @@ namespace Maps.Controllers
         public void SetBounds(double north, double south, double east, double west) => _provider?.SetBounds(north, south, east, west);
 
         /// <summary>
-        /// Застосувати коефіцієнти калібрування у CoordinateConverter та передати їх SVG провайдеру якщо він активний.
+        /// Застосувати коефіцієнти калібрування у CoordinateConverter
         /// </summary>
         public void ApplyCalibrationCoefficients(double[] eastingCoeffs, double[] northingCoeffs)
         {
             if (_coordinateConverter == null) _coordinateConverter = new CoordinateConverter();
             _coordinateConverter.SetCoefficients(eastingCoeffs, northingCoeffs);
             _coordinateConverter.RebuildInverse();
-
-            if (_provider is SvgMapProvider svg) svg.CoordinateConverter = _coordinateConverter;
+            
+            // SVG provider removed, only GMap.NET now
         }
 
         public void Dispose()

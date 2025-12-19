@@ -1,4 +1,4 @@
-﻿using Accord.Math;
+using Accord.Math;
 using CoordinateSharp;
 using GMap.NET;
 using GMap.NET.MapProviders;
@@ -26,7 +26,6 @@ namespace Maps
 {
     public partial class Maps : Form, Controllers.IReportContext, Controllers.IInputContext
     {
-        private RectLatLng _allowedArea;   // область, в межах якої живе карта
         private Point _lastMouse;
 
         private GMapControl? mapControl;
@@ -39,8 +38,6 @@ namespace Maps
         // Report controller (handles report generation and button logic)
         private ReportController? _reportController;
 
-        private bool _dragging;
-        private double _minZoomForAllowed = 0;
         private bool _isAdjustingZoom = false;
 
         private static readonly Random random = new();
@@ -288,9 +285,7 @@ namespace Maps
                 return;
             }
 
-            if (e.Button != MouseButtons.Left || mapControl == null) return;
-            _dragging = true;
-            _lastMouse = e.Location;
+            // No custom dragging logic needed - GMap.NET handles panning natively
         }
 
         private void Gmap_MouseMove(object sender, MouseEventArgs e)
@@ -307,22 +302,7 @@ namespace Maps
                 }
             }
             catch { }
-
-            if (!_dragging || mapControl == null || _allowedArea.IsEmpty)
-                return;
-
-            int dx = e.X - _lastMouse.X;
-            int dy = e.Y - _lastMouse.Y;
-            if (dx == 0 && dy == 0)
-                return;
-
-            var view = mapControl.ViewArea;
-            if (view.IsEmpty || mapControl.Width <= 0 || mapControl.Height <= 0)
-                return;
-
-            // градуси на 1 піксель у поточному зумі
-            double latPerPixel = view.HeightLat / mapControl.Height;
-            double lngPerPixel = view.WidthLng / mapControl.Width;
+        }
 
             // Рахуємо новий центр від руху миші
             // (ці знаки зазвичай “правильні” для відчуття як у Google Maps)
@@ -362,8 +342,7 @@ namespace Maps
 
         private void Gmap_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
-                _dragging = false;
+            // No custom dragging logic needed - GMap.NET handles this natively
         }
                
         private void SafeInvalidate(RectangleF bounds)
@@ -639,9 +618,7 @@ namespace Maps
         private void RecalculateMinZoomForAllowed()
         {
             // Movement/zoom restrictions are intentionally disabled.
-            // Previously this method calculated a conservative minimum zoom that kept the view inside an allowed area;
-            // that behaviour has been removed per user request.
-            _minZoomForAllowed = 0;
+            // This method previously calculated minimum zoom restrictions but is now a no-op.
             if (mapControl != null)
             {
                 try { mapControl.MinZoom = 0; } catch { }
@@ -650,25 +627,10 @@ namespace Maps
 
         private void Map_OnMapZoomChanged()
         {
-            if (mapControl == null || _allowedArea.IsEmpty) return;
-            if (_isAdjustingZoom) return;
-
-            // 1) Не даємо зум-аутись нижче мінімального
-            if (_minZoomForAllowed > 0 && mapControl.Zoom < _minZoomForAllowed)
-            {
-                _isAdjustingZoom = true;
-                try
-                {
-                    // Preserve current center to avoid sudden recentering to library defaults
-                    var prev = mapControl.Position;
-                    mapControl.Zoom = _minZoomForAllowed;
-                    try { mapControl.Position = prev; } catch { }
-                }
-                finally { _isAdjustingZoom = false; }
-            }
-
-            // 2) І на всяк випадок підтискаємо позицію, щоб ViewArea була всередині allowed
-            EnsureViewAreaInsideAllowed();
+            if (mapControl == null) return;
+            
+            // Update distance calculation when zoom changes
+            UpdateDistanceFromCenterToMarker();
         }
 
         private void Gmap_OnPositionChanged(PointLatLng point)

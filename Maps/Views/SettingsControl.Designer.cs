@@ -28,35 +28,9 @@
         /// </summary>
         private void InitializeComponent()
         {
-            btnCalibrate = new Button();
-            btnSetPoint = new Button();
             btnInfo = new Button();
-            btnCalculateScale = new Button();
-            btnLocalities = new Button();
             btnRenameClicked = new Button();
             SuspendLayout();
-            // 
-            // btnCalibrate
-            // 
-            btnCalibrate.Location = new Point(178, 86);
-            btnCalibrate.Margin = new Padding(3, 2, 3, 2);
-            btnCalibrate.Name = "btnCalibrate";
-            btnCalibrate.Size = new Size(175, 59);
-            btnCalibrate.TabIndex = 0;
-            btnCalibrate.Text = "Калібрувати карту";
-            btnCalibrate.UseVisualStyleBackColor = true;
-            btnCalibrate.Click += btnCalibrate_Click;
-            // 
-            // btnSetPoint
-            // 
-            btnSetPoint.Location = new Point(178, 232);
-            btnSetPoint.Margin = new Padding(3, 2, 3, 2);
-            btnSetPoint.Name = "btnSetPoint";
-            btnSetPoint.Size = new Size(175, 59);
-            btnSetPoint.TabIndex = 2;
-            btnSetPoint.Text = "Виставити позицію";
-            btnSetPoint.UseVisualStyleBackColor = true;
-            btnSetPoint.Click += btnSetPoint_Click;
             // 
             // btnInfo
             // 
@@ -68,28 +42,6 @@
             btnInfo.Text = "Статистика польотів";
             btnInfo.UseVisualStyleBackColor = true;
             btnInfo.Click += btnInfo_Click;
-            // 
-            // btnCalculateScale
-            // 
-            btnCalculateScale.Location = new Point(178, 159);
-            btnCalculateScale.Margin = new Padding(3, 2, 3, 2);
-            btnCalculateScale.Name = "btnCalculateScale";
-            btnCalculateScale.Size = new Size(175, 59);
-            btnCalculateScale.TabIndex = 4;
-            btnCalculateScale.Text = "калібрувати відстань карти";
-            btnCalculateScale.UseVisualStyleBackColor = true;
-            btnCalculateScale.Click += btnCalculateScale_Click;
-            // 
-            // btnLocalities
-            // 
-            btnLocalities.Location = new Point(178, 307);
-            btnLocalities.Margin = new Padding(3, 2, 3, 2);
-            btnLocalities.Name = "btnLocalities";
-            btnLocalities.Size = new Size(175, 59);
-            btnLocalities.TabIndex = 5;
-            btnLocalities.Text = "Населені пункти";
-            btnLocalities.UseVisualStyleBackColor = true;
-            btnLocalities.Click += btnLocalities_Click;
             // 
             // button1
             // 
@@ -106,11 +58,7 @@
             AutoScaleDimensions = new SizeF(10F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             Controls.Add(btnRenameClicked);
-            Controls.Add(btnLocalities);
-            Controls.Add(btnCalculateScale);
             Controls.Add(btnInfo);
-            Controls.Add(btnSetPoint);
-            Controls.Add(btnCalibrate);
             Margin = new Padding(3, 2, 3, 2);
             Name = "SettingsControl";
             Size = new Size(553, 724);
@@ -119,11 +67,7 @@
 
         #endregion
 
-        private Button btnCalibrate;
-        private Button btnSetPoint;
         private Button btnInfo;
-        private Button btnCalculateScale;
-        private Button btnLocalities;
         private Button btnRenameClicked;
     }
 }

@@ -1,6 +1,6 @@
 ﻿using System.Security.Policy;
 
-namespace Maps
+namespace Maps.Views
 {
     partial class LocalityControl
     {

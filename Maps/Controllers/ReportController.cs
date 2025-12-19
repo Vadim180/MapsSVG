@@ -18,6 +18,12 @@ namespace Maps.Controllers
         bool TryGetUTM(out PointF utm); // shows messagebox if no point selected
         string FormatShortMGRSFromUTM(PointF utm);
         string FindClosestLocality(PointF utm);
+
+        // Fallbacks for when map is not calibrated (use lat/lng from GMap)
+        bool TryGetClickedLatLng(out GMap.NET.PointLatLng latlng);
+        string FormatShortMGRSFromLatLng(GMap.NET.PointLatLng latlng);
+        string FindClosestLocalityFromLatLng(GMap.NET.PointLatLng latlng);
+
         int GetCourseValue();
         string GetTargetType();
         string GetAndSetTime(); // sets internal start time and returns formatted time range
@@ -55,10 +61,26 @@ namespace Maps.Controllers
             string selectedheight = _ctx.GetHeightText().Trim();
             string selectedrange2 = _ctx.GetSelectedRange().ToString();
 
-            if (!_ctx.TryGetUTM(out PointF utm)) return string.Empty;
+            PointF utm;
+            string mgrsShort;
+            string nearestLocality;
 
-            string mgrsShort = _ctx.FormatShortMGRSFromUTM(utm);
-            string nearestLocality = _ctx.FindClosestLocality(utm).ToUpper(new CultureInfo("uk-UA"));
+            if (_ctx.TryGetUTM(out utm))
+            {
+                mgrsShort = _ctx.FormatShortMGRSFromUTM(utm);
+                nearestLocality = _ctx.FindClosestLocality(utm).ToUpper(new CultureInfo("uk-UA"));
+            }
+            else if (_ctx.TryGetClickedLatLng(out var clickedLatLng))
+            {
+                mgrsShort = _ctx.FormatShortMGRSFromLatLng(clickedLatLng);
+                nearestLocality = _ctx.FindClosestLocalityFromLatLng(clickedLatLng).ToUpper(new CultureInfo("uk-UA"));
+            }
+            else
+            {
+                // No selected point available
+                return string.Empty;
+            }
+
             string courseStr = _ctx.GetCourseValue().ToString();
             string selectedTarget = _ctx.GetTargetType();
             string timeString_ = string.IsNullOrEmpty(_ctx.GetCurrentTimeString()) ? "" : _ctx.GetCurrentTimeString().Replace(':', '.');

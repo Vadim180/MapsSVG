@@ -74,8 +74,6 @@ namespace Maps
             Position = new ComboBox();
             panelSettingsView = new Panel();
             panelSettings = new Panel();
-            label1 = new Label();
-            button1 = new Button();
             btnHome = new Button();
             btnSettingsScreen = new Button();
             timer = new System.Windows.Forms.Timer(components);
@@ -119,16 +117,18 @@ namespace Maps
             // 
             // labelCoordinates
             // 
-            labelCoordinates.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            labelCoordinates.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             labelCoordinates.AutoSize = true;
             labelCoordinates.BackColor = Color.FromArgb(30, 30, 30);
             labelCoordinates.BorderStyle = BorderStyle.FixedSingle;
             labelCoordinates.Font = new Font("Consolas", 10F);
             labelCoordinates.ForeColor = Color.White;
-            labelCoordinates.Location = new Point(1201, 58);
+            labelCoordinates.Location = new Point(10, 10);
             labelCoordinates.Name = "labelCoordinates";
-            labelCoordinates.Size = new Size(2, 25);
+            labelCoordinates.Padding = new Padding(5);
+            labelCoordinates.Size = new Size(200, 100);
             labelCoordinates.TabIndex = 0;
+            labelCoordinates.Text = "Відкалібруйте карту";
             // 
             // labelScale
             // 
@@ -144,20 +144,8 @@ namespace Maps
             labelScale.Text = "Кут: 0°";
             labelScale.TextAlign = ContentAlignment.MiddleRight;
             // 
-            // pictureBox1
+            // pictureBox1 - видалено, використовується mapControl (GMap.NET)
             // 
-            pictureBox1.Dock = DockStyle.Fill;
-            pictureBox1.Location = new Point(0, 0);
-            pictureBox1.Margin = new Padding(0, 6, 0, 6);
-            pictureBox1.Name = "pictureBox1";
-            pictureBox1.Size = new Size(1412, 1061);
-            pictureBox1.TabIndex = 0;
-            pictureBox1.TabStop = false;
-            pictureBox1.Paint += pictureBox1_Paint;
-            pictureBox1.MouseDown += pictureBox1_MouseDown;
-            pictureBox1.MouseMove += pictureBox1_MouseMove;
-            pictureBox1.MouseUp += pictureBox1_MouseUp;
-            pictureBox1.MouseWheel += Maps_MouseWheel;
             // 
             // panelRight
             // 
@@ -456,8 +444,6 @@ namespace Maps
             // panelSettings
             // 
             panelSettings.BackColor = Color.Gray;
-            panelSettings.Controls.Add(label1);
-            panelSettings.Controls.Add(button1);
             panelSettings.Controls.Add(btnHome);
             panelSettings.Controls.Add(btnSettingsScreen);
             panelSettings.Dock = DockStyle.Top;
@@ -465,25 +451,6 @@ namespace Maps
             panelSettings.Name = "panelSettings";
             panelSettings.Size = new Size(512, 100);
             panelSettings.TabIndex = 1;
-            // 
-            // label1
-            // 
-            label1.AutoSize = true;
-            label1.Location = new Point(255, 74);
-            label1.Name = "label1";
-            label1.Size = new Size(53, 20);
-            label1.TabIndex = 3;
-            label1.Text = "label1";
-            // 
-            // button1
-            // 
-            button1.Location = new Point(153, 71);
-            button1.Name = "button1";
-            button1.Size = new Size(75, 23);
-            button1.TabIndex = 2;
-            button1.Text = "Test";
-            button1.UseVisualStyleBackColor = true;
-            button1.Click += BtnShowGMap_Click;
             // 
             // btnHome
             // 
@@ -585,8 +552,6 @@ namespace Maps
         private CheckBox targetBoardCheckBox;
         private PictureBox pictureBox1;
         private ToolTip toolTip1;
-        private Button button1;
-        private Label label1;
         private Label label2;
     }
 }
