@@ -33,8 +33,7 @@
 
   <ItemGroup>
     <Resource Include="CustomMarkers\bigMarkerGreen.png" />
-    <Resource Include="Resources\zoom+.png" />
-    <Resource Include="Resources\zoom-.png" />
+
     <Resource Include="CustomMarkers\red-dot.png" />
   </ItemGroup>
 

@@ -8,70 +8,13 @@
         KeyboardNavigation.DirectionalNavigation="Once"
         xmlns:src="clr-namespace:Demo.WindowsPresentation"
         MinHeight="775" MinWidth="600" KeyUp="Window_KeyUp" PreviewKeyDown="Window_PreviewKeyDown">
-    <Window.Resources>
-        <Style x:Key="ZoomUpButton" TargetType="Button">
-            <Setter Property="Width" Value="23.5" />
-            <Setter Property="Height" Value="25.5" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Grid Width="23.5" Height="25.5">
-                            <Image Source="/Demo.WindowsPresentation;component/Resources/zoom+.png" Stretch="Fill" />
-                            <ContentPresenter HorizontalAlignment="Center" />
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect ShadowDepth="2" />
-                                    </Setter.Value>
-                                </Setter>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="ZoomDownButton" TargetType="Button">
-            <Setter Property="Width" Value="23.5" />
-            <Setter Property="Height" Value="25.5" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Grid Width="23.5" Height="25.5">
-                            <Image Source="/Demo.WindowsPresentation;component/Resources/zoom-.png" Stretch="Fill" />
-                            <ContentPresenter HorizontalAlignment="Center" />
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect ShadowDepth="2" />
-                                    </Setter.Value>
-                                </Setter>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
+    <!-- Zoom control styles removed -->
     <Grid>
         <GroupBox Name="MapGroup" Header="gmap" Margin="12,7,241,12" VerticalContentAlignment="Stretch"
                   HorizontalContentAlignment="Stretch">
-            <src:Map x:Name="MainMap" Zoom="13" MaxZoom="24" MinZoom="1" />
+            <src:Map x:Name="MainMap" Zoom="7" MaxZoom="24" MinZoom="1" />
         </GroupBox>
-        <GroupBox HorizontalAlignment="Right" Margin="0,7,186,12" VerticalAlignment="Stretch" Header="Zoom">
-            <Grid>
-                <Button x:Name="CzuZoomUp" Style="{StaticResource ZoomUpButton}" HorizontalAlignment="Center"
-                        VerticalAlignment="Top" Width="23.5" Height="25.5" Click="czuZoomUp_Click" />
-                <Slider Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Stretch" Maximum="17"
-                        Minimum="12" Value="{Binding ElementName=MainMap, Path=Zoom}" TickPlacement="Both"
-                        Margin="0,35,0,35" SmallChange="1" x:Name="SliderZoom" ValueChanged="sliderZoom_ValueChanged" />
-                <Button Style="{StaticResource ZoomDownButton}" x:Name="CzuZoomDown" HorizontalAlignment="Center"
-                        VerticalAlignment="Bottom" Width="23" Height="25" Click="czuZoomDown_Click" />
-            </Grid>
-        </GroupBox>
+
         <GroupBox Header="gmap" HorizontalAlignment="Right" Margin="0,158,12,0" Name="GroupBox2" Width="169"
                   VerticalAlignment="Top" Height="135">
             <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
@@ -127,11 +70,14 @@
                 <TextBox Margin="6,35,36,0" Name="TextBoxLng" Height="22.04" VerticalAlignment="Top" />
                 <TextBox Height="22.04" Margin="6,0,36,36" Name="TextBoxGeo" VerticalAlignment="Bottom"
                          KeyUp="textBoxGeo_KeyUp">
-                    lietuva vilnius
+                    Kyiv
                 </TextBox>
                 <Button Height="23" HorizontalAlignment="Left" Margin="6,0,0,7" Name="Button2"
                         VerticalAlignment="Bottom" Width="68" Click="button2_Click">
                     Go To!
+                </Button>
+                <Button Height="23" HorizontalAlignment="Left" Margin="80,0,0,7" Name="ButtonSearch" VerticalAlignment="Bottom" Width="68" Click="buttonSearch_Click">
+                    Search
                 </Button>
                 <Label Height="23" HorizontalAlignment="Right" Margin="0,4,12,0" Name="Label2" VerticalAlignment="Top"
                        Width="27" VerticalContentAlignment="Center">
@@ -183,19 +129,7 @@
                 </CheckBox>
             </Grid>
         </GroupBox>
-        <GroupBox Header="Real Time" Height="74" HorizontalAlignment="Right" Margin="0,471,12,0" Name="GroupBox5"
-                  VerticalAlignment="Top" Width="169">
-            <Grid>
-                <RadioButton Margin="6,28,56,0" Name="RadioButtonPerformance" Checked="RealTimeChanged" Height="17.04"
-                             VerticalAlignment="Top">
-                    Performance
-                </RadioButton>
-                <RadioButton HorizontalAlignment="Right" Margin="0,0,-6,7" Name="RadioButtonNone" Width="56"
-                             Height="16.04" VerticalAlignment="Bottom" IsChecked="True" Checked="RealTimeChanged">
-                    None
-                </RadioButton>
-            </Grid>
-        </GroupBox>
+
         <GroupBox Header="markers" HorizontalAlignment="Right" Name="Markers" Width="169" Margin="0,299,11,283"
                   Height="80" VerticalAlignment="Top">
             <Grid>
@@ -214,22 +148,6 @@
                 </Button>
             </Grid>
         </GroupBox>
-        <GroupBox Header="routes" HorizontalAlignment="Right" Name="Routes" Width="169" Margin="0,385,11,283"
-                  Height="80" VerticalAlignment="Top">
-            <Grid>
-                <Button Margin="7,6,0,0" Name="Button11" Height="21.04" VerticalAlignment="Top"
-                        HorizontalAlignment="Left" Width="65" Click="button11_Click">
-                    set start
-                </Button>
-                <Button HorizontalAlignment="Right" Margin="0,6,5,0" Name="Button9" Width="65" Height="21.04"
-                        VerticalAlignment="Top" Click="button9_Click">
-                    set end
-                </Button>
-                <Button Margin="7,0,6,6" Name="Button12" Height="21.04" VerticalAlignment="Bottom"
-                        Click="button12_Click">
-                    Add route
-                </Button>
-            </Grid>
-        </GroupBox>
+
     </Grid>
 </Window>

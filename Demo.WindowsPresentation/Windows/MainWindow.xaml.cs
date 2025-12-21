@@ -22,8 +22,7 @@ namespace Demo.WindowsPresentation
 {
     public partial class MainWindow : Window
     {
-        PointLatLng _start;
-        PointLatLng _end;
+        // routing (set start/end/add route) removed
 
         // marker
         GMapMarker currentMarker;
@@ -60,9 +59,12 @@ namespace Demo.WindowsPresentation
 
             GoogleMapProvider.Instance.ApiKey = Stuff.GoogleMapsApiKey;
 
-            // config map
-            MainMap.MapProvider = GMapProviders.OpenStreetMap;
-            MainMap.Position = new PointLatLng(54.6961334816182, 25.2985095977783);
+            // config map (default: Google Hybrid, default position: Kyiv)
+            MainMap.MapProvider = GMapProviders.GoogleHybridMap;
+            MainMap.Position = new PointLatLng(50.4501, 30.52001953125); // Kyiv
+
+            // ensure zoom is set to default 7 (some providers may reset zoom during initialization)
+            MainMap.Zoom = 7;
 
             MainMap.TouchEnabled = false;
             MainMap.MultiTouchEnabled = true;
@@ -83,11 +85,41 @@ namespace Demo.WindowsPresentation
             MainMap.OnTileLoadStart += MainMap_OnTileLoadStart;
             MainMap.OnMapTypeChanged += MainMap_OnMapTypeChanged;
             MainMap.MouseMove += MainMap_MouseMove;
-            MainMap.MouseLeftButtonDown += MainMap_MouseLeftButtonDown;
+            MainMap.MouseRightButtonDown += MainMap_MouseRightButtonDown; // place marker with right click
             MainMap.MouseEnter += MainMap_MouseEnter;
+            MainMap.Loaded += MainMap_Loaded; // ensure default zoom after control initialization
 
-            // get map types
-            ComboBoxMapType.ItemsSource = GMapProviders.List;
+            // get map types (order: Google (Hybrid first), Bing (Hybrid first), OpenStreet, Others)
+            var providers = GMapProviders.List.ToList();
+
+            Func<GMapProvider, bool> isGoogle = p => p.Name.IndexOf("google", StringComparison.OrdinalIgnoreCase) >= 0;
+            Func<GMapProvider, bool> isBing = p => p.Name.IndexOf("bing", StringComparison.OrdinalIgnoreCase) >= 0;
+            Func<GMapProvider, bool> isOSM = p => p.Name.IndexOf("openstreet", StringComparison.OrdinalIgnoreCase) >= 0 || p.Name.IndexOf("open street", StringComparison.OrdinalIgnoreCase) >= 0 || p.Name.IndexOf("osm", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            Func<GMapProvider, bool> isChina = p => p.Name.IndexOf("china", StringComparison.OrdinalIgnoreCase) >= 0;
+            Func<GMapProvider, bool> isHybrid = p => p.Name.IndexOf("hybrid", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            var google = providers.Where(isGoogle)
+                .OrderBy(p => isHybrid(p) ? 0 : (isChina(p) ? 2 : 1))
+                .ThenBy(p => p.Name)
+                .ToList();
+
+            var bing = providers.Where(isBing)
+                .OrderBy(p => isHybrid(p) ? 0 : (isChina(p) ? 2 : 1))
+                .ThenBy(p => p.Name)
+                .ToList();
+
+            var osm = providers.Where(isOSM).OrderBy(p => p.Name).ToList();
+
+            var others = providers.Where(p => !isGoogle(p) && !isBing(p) && !isOSM(p)).OrderBy(p => p.Name).ToList();
+
+            var ordered = new List<GMapProvider>();
+            ordered.AddRange(google);
+            ordered.AddRange(bing);
+            ordered.AddRange(osm);
+            ordered.AddRange(others);
+
+            ComboBoxMapType.ItemsSource = ordered;
             ComboBoxMapType.DisplayMemberPath = "Name";
             ComboBoxMapType.SelectedItem = MainMap.MapProvider;
 
@@ -182,11 +214,15 @@ namespace Demo.WindowsPresentation
                 {
                     MainMap.ZoomAndCenterMarkers(null);
                 }
+
+                // enforce default zoom and update marker/text fields
+                MainMap.Zoom = 7; // default zoom level per project settings
+                currentMarker.Position = MainMap.Position;
+                TextBoxLat.Text = MainMap.Position.Lat.ToString(CultureInfo.InvariantCulture);
+                TextBoxLng.Text = MainMap.Position.Lng.ToString(CultureInfo.InvariantCulture);
             }
 
-            // perfromance test
-            timer.Interval = TimeSpan.FromMilliseconds(44);
-            timer.Tick += timer_Tick;
+            // performance test removed
 
             // transport demo removed
         }
@@ -237,54 +273,7 @@ namespace Demo.WindowsPresentation
 
         Random r = new Random();
 
-        int _tt;
-
-        void timer_Tick(object sender, EventArgs e)
-        {
-            var pos = new PointLatLng(NextDouble(r, MainMap.ViewArea.Top, MainMap.ViewArea.Bottom),
-                NextDouble(r, MainMap.ViewArea.Left, MainMap.ViewArea.Right));
-            var m = new GMapMarker(pos);
-            {
-                var s = new Test((_tt++).ToString());
-
-                var image = new Image();
-                {
-                    RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.LowQuality);
-                    image.Stretch = Stretch.None;
-                    image.Opacity = s.Opacity;
-
-                    image.MouseEnter += image_MouseEnter;
-                    image.MouseLeave += image_MouseLeave;
-
-                    image.Source = ToImageSource(s);
-                }
-
-                m.Shape = image;
-
-                m.Offset = new Point(-s.Width, -s.Height);
-            }
-            MainMap.Markers.Add(m);
-
-            if (_tt >= 333)
-            {
-                timer.Stop();
-                _tt = 0;
-            }
-        }
-
-        void image_MouseLeave(object sender, MouseEventArgs e)
-        {
-            var img = sender as Image;
-            img.RenderTransform = null;
-        }
-
-        void image_MouseEnter(object sender, MouseEventArgs e)
-        {
-            var img = sender as Image;
-            img.RenderTransform = new ScaleTransform(1.2, 1.2, 12.5, 12.5);
-        }
-
-        DispatcherTimer timer = new DispatcherTimer();
+        // Performance test removed (timer and helper methods removed)
 
         #endregion
 
@@ -297,6 +286,17 @@ namespace Demo.WindowsPresentation
         // transport_ProgressChanged removed (transport demo deleted)
 
         // transport demo removed
+
+        void MainMap_Loaded(object sender, RoutedEventArgs e)
+        {
+            // enforce defaults once control is loaded (some providers may change settings during init)
+            MainMap.Zoom = 7;
+            MainMap.Position = new PointLatLng(50.4501, 30.52001953125); // Kyiv
+
+            TextBoxLat.Text = MainMap.Position.Lat.ToString(CultureInfo.InvariantCulture);
+            TextBoxLng.Text = MainMap.Position.Lng.ToString(CultureInfo.InvariantCulture);
+            currentMarker.Position = MainMap.Position;
+        }
 
         // add objects and zone around them
         void AddDemoZone(double areaRadius, PointLatLng center, List<PointAndInfo> objects)
@@ -367,16 +367,17 @@ namespace Demo.WindowsPresentation
             SliderZoom.Maximum = MainMap.MaxZoom;
         }
 
-        void MainMap_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        void MainMap_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
+            // place marker with right-click
             var p = e.GetPosition(MainMap);
             currentMarker.Position = MainMap.FromLocalToLatLng((int)p.X, (int)p.Y);
         }
 
-        // move current marker with left holding
+        // move current marker with right holding
         void MainMap_MouseMove(object sender, MouseEventArgs e)
         {
-            if (e.LeftButton == MouseButtonState.Pressed)
+            if (e.RightButton == MouseButtonState.Pressed)
             {
                 var p = e.GetPosition(MainMap);
                 currentMarker.Position = MainMap.FromLocalToLatLng((int)p.X, (int)p.Y);
@@ -500,18 +501,28 @@ namespace Demo.WindowsPresentation
         {
             if (e.Key == Key.Enter)
             {
-                var status = MainMap.SetPositionByKeywords(TextBoxGeo.Text);
-                if (status != GeoCoderStatusCode.OK)
-                {
-                    MessageBox.Show("Geocoder can't find: '" + TextBoxGeo.Text + "', reason: " + status.ToString(),
-                        "GMap.NET",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Exclamation);
-                }
-                else
-                {
-                    currentMarker.Position = MainMap.Position;
-                }
+                SearchByKeywords();
+            }
+        }
+
+        private void buttonSearch_Click(object sender, RoutedEventArgs e)
+        {
+            SearchByKeywords();
+        }
+
+        private void SearchByKeywords()
+        {
+            var status = MainMap.SetPositionByKeywords(TextBoxGeo.Text);
+            if (status != GeoCoderStatusCode.OK)
+            {
+                MessageBox.Show("Geocoder can't find: '" + TextBoxGeo.Text + "', reason: " + status.ToString(),
+                    "GMap.NET",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Exclamation);
+            }
+            else
+            {
+                currentMarker.Position = MainMap.Position;
             }
         }
 
@@ -677,14 +688,7 @@ namespace Demo.WindowsPresentation
                 }
             }
 
-            if (RadioButtonPerformance.IsChecked == true)
-            {
-                _tt = 0;
-                if (!timer.IsEnabled)
-                {
-                    timer.Start();
-                }
-            }
+
         }
 
         // add marker
@@ -719,48 +723,12 @@ namespace Demo.WindowsPresentation
             MainMap.Markers.Add(m);
         }
 
-        // sets route start
-        private void button11_Click(object sender, RoutedEventArgs e)
-        {
-            _start = currentMarker.Position;
-        }
+        // sets route start removed
 
-        // sets route end
-        private void button9_Click(object sender, RoutedEventArgs e)
-        {
-            _end = currentMarker.Position;
-        }
+        // sets route end removed
 
         // adds route
-        private void button12_Click(object sender, RoutedEventArgs e)
-        {
-            var rp = MainMap.MapProvider as RoutingProvider;
-            if (rp == null)
-            {
-                rp = GMapProviders.OpenStreetMap; // use OpenStreetMap if provider does not implement routing
-            }
-
-            var route = rp.GetRoute(_start, _end, false, false, (int)MainMap.Zoom);
-            if (route != null)
-            {
-                var m1 = new GMapMarker(_start);
-                m1.Shape = new CustomMarkerDemo(this, m1, "Start: " + route.Name);
-
-                var m2 = new GMapMarker(_end);
-                m2.Shape = new CustomMarkerDemo(this, m2, "End: " + _start.ToString());
-
-                var mRoute = new GMapRoute(route.Points);
-                {
-                    mRoute.ZIndex = -1;
-                }
-
-                MainMap.Markers.Add(m1);
-                MainMap.Markers.Add(m2);
-                MainMap.Markers.Add(mRoute);
-
-                MainMap.ZoomAndCenterMarkers(null);
-            }
-        }
+        // Add route functionality removed
 
         // enables tile grid view
         private void checkBox1_Checked(object sender, RoutedEventArgs e)
@@ -807,24 +775,7 @@ namespace Demo.WindowsPresentation
             }
         }
 
-        // set real time demo
-        private void RealTimeChanged(object sender, RoutedEventArgs e)
-        {
-            MainMap.Markers.Clear();
-
-            // start performance test
-            if (RadioButtonPerformance.IsChecked == true)
-            {
-                timer.Start();
-            }
-            else
-            {
-                // stop performance test
-                timer.Stop();
-            }
-
-
-        }
+        // Real-time controls removed; no action required on change.
 
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
         {

@@ -505,7 +505,7 @@ namespace GMap.NET.WindowsPresentation
         /// <summary>
         ///     map dragg button
         /// </summary>
-        [Category("GMap.NET")] public MouseButton DragButton = MouseButton.Right;
+        [Category("GMap.NET")] public MouseButton DragButton = MouseButton.Left; // changed: drag map with left mouse button
 
         /// <summary>
         ///     use circle for selection
@@ -1164,41 +1164,13 @@ namespace GMap.NET.WindowsPresentation
 
                         if (ShowTileGridLines)
                         {
+                            // draw only tile borders when grid is enabled; do not render DEBUG tile text
                             g.DrawRectangle(null,
                                 EmptyTileBorders,
                                 new Rect(_core.TileRect.X,
                                     _core.TileRect.Y,
                                     _core.TileRect.Width,
                                     _core.TileRect.Height));
-
-                            if (tilePoint.PosXY == _core.CenterTileXYLocation)
-                            {
-                                var tileText = new FormattedText("CENTER:" + tilePoint.ToString(),
-                                    CultureInfo.CurrentUICulture,
-                                    FlowDirection.LeftToRight,
-                                    _tileTypeface,
-                                    16,
-                                    Brushes.Red);
-                                tileText.MaxTextWidth = _core.TileRect.Width;
-                                g.DrawText(tileText,
-                                    new Point(
-                                        _core.TileRect.X + _core.TileRect.Width / 2 - EmptyTileText.Width / 2,
-                                        _core.TileRect.Y + _core.TileRect.Height / 2 - tileText.Height / 2));
-                            }
-                            else
-                            {
-                                var tileText = new FormattedText("TILE: " + tilePoint.ToString(),
-                                    CultureInfo.CurrentUICulture,
-                                    FlowDirection.LeftToRight,
-                                    _tileTypeface,
-                                    16,
-                                    Brushes.Red);
-                                tileText.MaxTextWidth = _core.TileRect.Width;
-                                g.DrawText(tileText,
-                                    new Point(
-                                        _core.TileRect.X + _core.TileRect.Width / 2 - EmptyTileText.Width / 2,
-                                        _core.TileRect.Y + _core.TileRect.Height / 2 - tileText.Height / 2));
-                            }
                         }
                     }
                 }
