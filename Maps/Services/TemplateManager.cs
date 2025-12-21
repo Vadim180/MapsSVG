@@ -6,7 +6,7 @@ using System.Xml;
 
 namespace Maps.Services
 {
-     public class ShablonManager
+     public class TemplateManager
     {
         //знищено - не знищено
         public Dictionary<string, List<string>> Position_Point { get; set; } = new Dictionary<string, List<string>>();
@@ -28,14 +28,14 @@ namespace Maps.Services
         {
             Position_Point = new Dictionary<string, List<string>>
             {
-                ["ФОРПОСТ"] = new List<string> { "GREENDAY", "GREENDAY, Kasper" },
-                ["ДЕТРОЙТ"] = new List<string> { "GREENDAY", "Kasper", "Volt" }
+                ["ФОРПОСТ"] = ["GREENDAY", "GREENDAY, Kasper"],
+                ["ДЕТРОЙТ"] = ["GREENDAY", "Kasper", "Volt"]
             };
 
             DroneByPosition = new Dictionary<string, List<string>>
             {
-                ["ФОРПОСТ"] = new List<string> { "BARABASH MAX FLY", "BARABASH 10", "BLINK 8", "F7", "СПОРТИВНИЙ ПОВІТРЯНИЙ РОБОТ","PILUM 10" },
-                ["ДЕТРОЙТ"] = new List<string> { "Дикі шершні '10'", "Rusoriz '10'" }
+                ["ФОРПОСТ"] = ["BARABASH MAX FLY", "BARABASH 10", "BLINK 8", "F7", "СПОРТИВНИЙ ПОВІТРЯНИЙ РОБОТ", "PILUM 10"],
+                ["ДЕТРОЙТ"] = ["Дикі шершні '10'", "Rusoriz '10'"]
             }; 
 
             LocalCiti = new List<string>
@@ -76,10 +76,10 @@ namespace Maps.Services
                         "{Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрдн."
                     };
 
-            TargetTypeShablon = new List<string>
-            {
+            TargetTypeShablon =
+            [
                 "Молнія 2", "Зала", "Куб", "Орлан", "Ланцет", "Суперкам"
-            };
+            ];
 
             // Якщо потрібно, ініціалізуйте порожній список
             if (CustomReportWorkShablon == null)

@@ -28,7 +28,7 @@ namespace Maps.Controllers
         string GetTargetType();
         string GetAndSetTime(); // sets internal start time and returns formatted time range
         string GetCurrentTimeString();
-        ShablonManager GetShablon();
+        TemplateManager GetShablon();
         bool IsTargetDestroyed();
         bool IsTargetBoardLost();
         void SetReportText(string text);

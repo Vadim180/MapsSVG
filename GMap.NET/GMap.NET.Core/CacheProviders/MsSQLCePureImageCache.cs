@@ -1,19 +1,19 @@
 ﻿namespace GMap.NET.CacheProviders
 {
-#if !SQLite
-   using System;
-   using System.Data;
-   using System.Diagnostics;
-   using System.IO;
-   using SqlCommand = System.Data.SqlServerCe.SqlCeCommand;
-   using SqlConnection = System.Data.SqlServerCe.SqlCeConnection;
+    #if NETFRAMEWORK && !SQLite
+    using System;
+    using System.Data;
+    using System.Diagnostics;
+    using System.IO;
+    using SqlCommand = System.Data.SqlServerCe.SqlCeCommand;
+    using SqlConnection = System.Data.SqlServerCe.SqlCeConnection;
     using GMap.NET.MapProviders;
 
-   /// <summary>
-   /// image cache for ms sql server
-   /// </summary>
-   public class MsSQLCePureImageCache : PureImageCache, IDisposable
-   {
+    /// <summary>
+    /// image cache for ms sql server
+    /// </summary>
+    public class MsSQLCePureImageCache : PureImageCache, IDisposable
+    {
       string cache;
       string gtileCache;
 

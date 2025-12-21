@@ -15,7 +15,7 @@ namespace Maps.Views
         public event EventHandler ResetUserDataClicked;
         public event EventHandler<string> UnitNameChanged;
 
-        private ShablonManager _shablonManager;
+        private TemplateManager _shablonManager;
 
         public event EventHandler<List<string>> ReportTemplateChanged;
         public event EventHandler ReportTemplateReset;
@@ -25,7 +25,7 @@ namespace Maps.Views
             InitializeComponent();
         }
 
-        public void SetShablonManager(ShablonManager shablonManager)
+        public void SetShablonManager(TemplateManager shablonManager)
         {
             _shablonManager = shablonManager;
             txtLaunchArea.Text = _shablonManager?.LaunchArea ?? ""; 

@@ -131,36 +131,43 @@ namespace GMap.NET.Internals
             set
             {
                 _cache = value;
-#if SQLite
+            #if SQLite
                 if (ImageCache is SQLitePureImageCache)
                 {
                     (ImageCache as SQLitePureImageCache).CacheLocation = value;
                 }
-#else
-            if(ImageCache is MsSQLCePureImageCache)
-            {
-               (ImageCache as MsSQLCePureImageCache).CacheLocation = value;
-            }
-#endif
+            #else
+                #if NETFRAMEWORK
+                if (ImageCache is MsSQLCePureImageCache)
+                {
+                    (ImageCache as MsSQLCePureImageCache).CacheLocation = value;
+                }
+                #endif
+            #endif
                 CacheLocator.Delay = true;
             }
         }
 
-        public static Cache Instance { get; } = new Cache();
+                public static Cache Instance { get; } = new Cache();
 
-        private Cache()
-        {
-#if SQLite
-            ImageCache = new SQLitePureImageCache();
-#else
-         // you can use $ms stuff if you like too ;}
-         ImageCache = new MsSQLCePureImageCache();
-#endif
+                private Cache()
+                {
+        #if SQLite
+                    ImageCache = new SQLitePureImageCache();
+        #else
+                    #if NETFRAMEWORK
+                    // you can use $ms stuff if you like too ;}
+                    ImageCache = new MsSQLCePureImageCache();
+                    #else
+                    // No cache provider available for non-Framework non-SQLite builds
+                    ImageCache = null;
+                    #endif
+        #endif
 
-            {
-                string newCache = CacheLocator.Location;
+                    {
+                        string newCache = CacheLocator.Location;
 
-                string oldCache = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
+                        string oldCache = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) +
                                   Path.DirectorySeparatorChar + "GMap.NET" + Path.DirectorySeparatorChar;
 
                 // move database to non-roaming user directory

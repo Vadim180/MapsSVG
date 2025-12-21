@@ -9,14 +9,6 @@
     <UseWindowsForms>true</UseWindowsForms>
     <DefineConstants>ContinuesMapNo;$(DefineConstants)</DefineConstants>
     
-    <PackageReleaseNotes>
-- Insert and IndexOf are implemented in ObservableCollection
-- .Net Framework 4.6, 4.7, 4.8 support added
-- .Net Core 3.1, 5.0, 6.0 support added
-
-History Release Notes
-https://github.com/judero01col/GMap.NET/blob/master/README.md#release-notes
-    </PackageReleaseNotes>
   </PropertyGroup>
 
 	<PropertyGroup>

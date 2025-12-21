@@ -26,39 +26,34 @@ namespace Maps
 {
     public partial class Maps : Form, Controllers.IReportContext, Controllers.IInputContext
     {
-        private RectLatLng _allowedArea;   // область, в межах якої живе карта
         private Point _lastMouse;
+        private bool _dragging;
+
 
         private GMapControl? mapControl;
 
-        // Абстракція провайдера карти (поступова міграція на IMapProvider)
+        // Абстракція провайдера карти
         private Services.Map.GMapProvider? _gmapProvider;
         private MapController? _mapController;
         private InputController? _inputController;
 
-        // Report controller (handles report generation and button logic)
+        // Report controller
         private ReportController? _reportController;
 
-        private bool _dragging;
         private double _minZoomForAllowed = 0;
         private bool _isAdjustingZoom = false;
 
         private static readonly Random random = new();
-        private List<ReferencePoint> referencePoints = new();
+        private List<ReferencePoint> referencePoints = [];
         private Control[] previousControls;
 
-        private Stack<Control> panelHistory = new Stack<Control>();
-        private Control? previousControl = null;
+        private Stack<Control> panelHistory = new();
 
-        // Перехідна залежність: CoordinateConverter обробляє всі перетворення
         private Services.Map.CoordinateConverter? coordinateConverter = null;
-
-        // Сервіс для завантаження даних населених пунктів
-        private Services.Map.LocalityService? localityService = null;
 
         private Dictionary<string, List<PointF>> _scaledPointsCache = new();
 
-        private readonly object _invalidateLock = new object();
+        private readonly object _invalidateLock = new();
         private volatile bool _isInvalidating = false;
 
         private HashSet<string> highlightedLocalities = new();
@@ -88,15 +83,10 @@ namespace Maps
         private readonly Stopwatch _fpsSw = Stopwatch.StartNew(); // FPS-тротлінг перемальовування (~60 FPS)
         private const int MinFrameMs = 16;
 
-
-
         private System.Windows.Forms.Timer? timer;
 
-
-
-
         // Модель зони атаки
-        private Models.AttackZone attackZone = new()
+        private AttackZone attackZone = new()
         {
             AttackPoint = PointF.Empty,
             Angle = 0f,
@@ -111,16 +101,14 @@ namespace Maps
 
 
         // Змінні для зберігання контролів
-        private UserControl? currentControl;
-        private readonly SettingsControl settingsControl = new SettingsControl();
+        private readonly SettingsControl settingsControl = new();
 
-        private readonly ShablonManager Shablon = new ShablonManager();
+        private readonly TemplateManager TemplateManager = new();
         private readonly HashSet<string> LocalCities = new(StringComparer.CurrentCultureIgnoreCase);
         private DateTime time_Start;
         private string timeString = "";
-        private string azimyth_Combat = "0";
 
-        private readonly GMap.NET.PointLatLng StartupLatLng = new GMap.NET.PointLatLng(49.707398, 37.570155);
+        private readonly GMap.NET.PointLatLng StartupMapPoint = new(49.707398, 37.570155);
 
         private readonly string filePath_shablon = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shablon.json");
         private readonly string attackPointPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings", "attack_point.json");
@@ -179,18 +167,10 @@ namespace Maps
         public Maps()
         {
             InitializeComponent();
+        }
 
-            this.FormClosing += Maps_FormClosing;
-
-            this.WindowState = FormWindowState.Maximized;
-
-            this.KeyPreview = true;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(overridesPath)!);
-
-            // завантажуємо дані з шаблону
-            Shablon.LoadAllData();
-
+        private void Maps_Load(object sender, EventArgs e)
+        {
             // Подвійна буферизація
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
             this.UpdateStyles();
@@ -198,22 +178,34 @@ namespace Maps
             // Коректне масштабування на різних DPI
             this.AutoScaleMode = AutoScaleMode.Dpi;
 
-            ResizePanels();
+            //this.WindowState = FormWindowState.Maximized;
 
+
+            //-- EVENTS
+
+            this.FormClosing += Maps_FormClosing;
+
+            this.KeyPreview = true;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(overridesPath)!);
+
+            // завантажуємо дані з шаблону
+            TemplateManager.LoadAllData();
+
+
+
+
+
+            ResizePanels();
             CreateEmptyJsonFile();
-            GenerateButtons(Shablon.LocalCiti);
 
             // стрілки завжди підуть у KeyDown/KeyUp форми, навіть коли фокус на кнопках/комбобоксах
             MarkArrowsAsInput(panelMainView);
             MarkArrowsAsInput(pictureBox1);
 
-            // Ініціалізуємо сервіси
-            localityService = new Services.Map.LocalityService();
 
             timer.Enabled = false;
 
-            // стартовий фокус на карті
-            //this.Shown += (_, __) => { mapControl.Select(); mapControl.Focus(); shown = true; };
             this.Shown += (_, __) =>
             {
                 mapControl?.Select();
@@ -222,6 +214,37 @@ namespace Maps
                 BeginInvoke(new Action(UpdateLabelPosition)); // ще раз після лейауту
             };
 
+            try
+            {
+                // Ініціалізуємо GMap відразу при старті
+                InitializeGMap();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Помилка при завантаженні карти: " + ex.Message, "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
+            flightLogger = new FlightLogger();
+            flightLogger.Initialize();
+
+            LoadAttackPoint();
+
+            // Input controller (keyboard & rotation handling)
+            _inputController = new Controllers.InputController(this);
+            // Set rotation speed and timer interval for smooth updates
+            try { _inputController.SetRotationSpeedDegPerSec(90.0); } catch { }
+            try { if (timer != null) timer.Interval = 16; } catch { }
+
+            // Report controller
+            _reportController = new Controllers.ReportController(this);
+
+            // Ініціалізуємо MapController з GMap.NET
+            _mapController = new MapController(coordinateConverter);
+
+            ConfigureSettingsEvents(settingsControl);
+            LoadJsonData();
+            FillTargetTypeCombo();
+            LoadUserSettings();
         }
 
         //-- Обробка малювання GMap.NET
@@ -307,56 +330,6 @@ namespace Maps
                 }
             }
             catch { }
-
-            if (!_dragging || mapControl == null || _allowedArea.IsEmpty)
-                return;
-
-            int dx = e.X - _lastMouse.X;
-            int dy = e.Y - _lastMouse.Y;
-            if (dx == 0 && dy == 0)
-                return;
-
-            var view = mapControl.ViewArea;
-            if (view.IsEmpty || mapControl.Width <= 0 || mapControl.Height <= 0)
-                return;
-
-            // градуси на 1 піксель у поточному зумі
-            double latPerPixel = view.HeightLat / mapControl.Height;
-            double lngPerPixel = view.WidthLng / mapControl.Width;
-
-            // Рахуємо новий центр від руху миші
-            // (ці знаки зазвичай “правильні” для відчуття як у Google Maps)
-            double targetLat = mapControl.Position.Lat + dy * latPerPixel;
-            double targetLng = mapControl.Position.Lng - dx * lngPerPixel;
-
-            // Тепер найважливіше:
-            // тримаємо ВИДИМУ ОБЛАСТЬ (view) всередині allowed
-            // Для цього обмежуємо центр так, щоб краї view не вилізали.
-
-            double halfLat = view.HeightLat / 2.0;
-            double halfLng = view.WidthLng / 2.0;
-
-            double minCenterLat = _allowedArea.Bottom + halfLat;
-            double maxCenterLat = _allowedArea.Top - halfLat;
-
-            double minCenterLng = _allowedArea.Left + halfLng;
-            double maxCenterLng = _allowedArea.Right - halfLng;
-
-            // Якщо view більший за allowed — "влізти" неможливо.
-            // Тоді просто не даємо перетягувати (карта стоїть).
-            if (minCenterLat > maxCenterLat || minCenterLng > maxCenterLng)
-                return;
-
-            // Clamp центру
-            double clampedLat = Math.Max(minCenterLat, Math.Min(maxCenterLat, targetLat));
-            double clampedLng = Math.Max(minCenterLng, Math.Min(maxCenterLng, targetLng));
-
-            // Якщо вперлись — clamped == поточній позиції → карта не рухається далі
-            if (clampedLat != mapControl.Position.Lat || clampedLng != mapControl.Position.Lng)
-            {
-                mapControl.Position = new PointLatLng(clampedLat, clampedLng);
-            }
-
             _lastMouse = e.Location;
         }
 
@@ -448,7 +421,7 @@ namespace Maps
                         _gmapProvider.SetMinZoom(10);
                         _gmapProvider.SetMaxZoom(25);
                         _gmapProvider.SetZoomLimitEnabled(true);
-                        _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                        _gmapProvider.SetPosition(StartupMapPoint.Lat, StartupMapPoint.Lng);
                     } catch { }
                     mapControl = _gmapProvider.Control; // зворотна сумісність з існуючим кодом
 
@@ -493,7 +466,7 @@ namespace Maps
                             try
                             {
                                 Console.WriteLine("Maps: startup timer tick — re-applying startup position");
-                                _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                                _gmapProvider.SetPosition(StartupMapPoint.Lat, StartupMapPoint.Lng);
                             }
                             catch { }
                             finally
@@ -510,8 +483,8 @@ namespace Maps
                     {
                         try
                         {
-                            Console.WriteLine($"Maps: centering map at startup fallback {StartupLatLng.Lat},{StartupLatLng.Lng}");
-                            _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                            Console.WriteLine($"Maps: centering map at startup fallback {StartupMapPoint.Lat},{StartupMapPoint.Lng}");
+                            _gmapProvider.SetPosition(StartupMapPoint.Lat, StartupMapPoint.Lng);
                         }
                         catch (Exception ex) { Console.WriteLine("Maps: failed to set startup position: " + ex.Message); }
                     }
@@ -529,7 +502,7 @@ namespace Maps
                                 try
                                 {
                                     Console.WriteLine("Maps: OnMapZoomChanged fired — re-applying startup position");
-                                    _gmapProvider.SetPosition(StartupLatLng.Lat, StartupLatLng.Lng);
+                                    _gmapProvider.SetPosition(StartupMapPoint.Lat, StartupMapPoint.Lng);
                                 }
                                 catch { }
                                 finally
@@ -636,21 +609,9 @@ namespace Maps
 
         }
 
-        private void RecalculateMinZoomForAllowed()
-        {
-            // Movement/zoom restrictions are intentionally disabled.
-            // Previously this method calculated a conservative minimum zoom that kept the view inside an allowed area;
-            // that behaviour has been removed per user request.
-            _minZoomForAllowed = 0;
-            if (mapControl != null)
-            {
-                try { mapControl.MinZoom = 0; } catch { }
-            }
-        }
-
         private void Map_OnMapZoomChanged()
         {
-            if (mapControl == null || _allowedArea.IsEmpty) return;
+            if (mapControl == null) return;
             if (_isAdjustingZoom) return;
 
             // 1) Не даємо зум-аутись нижче мінімального
@@ -720,10 +681,6 @@ namespace Maps
             catch { }
         }
 
-
-
-
-
         private void Timer_Tick(object sender, EventArgs e)
         {
             try
@@ -734,50 +691,6 @@ namespace Maps
         }
 
 
-        private void LoadMap()
-        {
-            // Тепер використовуємо тільки GMap.NET, SVG видалено
-        }
-
-
-
-        private void Maps_Load(object sender, EventArgs e)
-        {
-            try
-            {
-                Console.WriteLine("=== Початок завантаження мапи ===");
-                LoadMap(); // Тепер тільки GMap.NET
-                
-                // Ініціалізуємо GMap відразу при старті
-                InitializeGMap();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Помилка при завантаженні карти: " + ex.Message, "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-
-            flightLogger = new FlightLogger();
-            flightLogger.Initialize();
-
-            LoadAttackPoint();
-
-            // Input controller (keyboard & rotation handling)
-            _inputController = new Controllers.InputController(this);
-            // Set rotation speed and timer interval for smooth updates
-            try { _inputController.SetRotationSpeedDegPerSec(90.0); } catch { }
-            try { if (timer != null) timer.Interval = 16; } catch { }
-
-            // Report controller
-            _reportController = new Controllers.ReportController(this);
-
-            // Ініціалізуємо MapController з GMap.NET
-            _mapController = new Controllers.MapController(coordinateConverter);
-            
-            ConfigureSettingsEvents(settingsControl);
-            LoadJsonData();
-            FillTargetTypeCombo();
-            LoadUserSettings();
-        }
 
         // Обробники кнопок
         //private void btnSettings_Click(object sender, EventArgs e) => ShowSettingsTab();
@@ -1238,30 +1151,6 @@ namespace Maps
             }
         }
 
-        private void DrawClickedPoint(Graphics g) //Точка кліку користувача
-        {
-            if (clickedPointMarker == null) return;
-
-            PointF point = clickedPointMarker.Value;
-            float radius = 18f;
-            DrawEllipse(g, Brushes.Red, clickedPointMarker.Value, radius);
-        }
-
-        private void UpdateDebugLabel()
-        {
-            try
-            {
-                label2.Text = $"Attack: {(attackZone.AttackPoint.IsEmpty ? "none" : attackZone.AttackPoint.ToString())} | Angle: {attackZone.Angle:F0} | AwaitingSet: {isAttakPointSet} | Localities: {localityService?.Localities?.Count ?? 0}";
-            }
-            catch { }
-        }
-
-        private void DrawEllipse(Graphics g, Brush brush, PointF point, float radius)// Загальний метод для малювання еліпсів
-        {
-            float scaledRadius = radius / _scale;
-            g.FillEllipse(brush, point.X - scaledRadius / 2, point.Y - scaledRadius / 2, scaledRadius, scaledRadius);
-        }
-
         private void DrawCourseLine(Graphics g) //Лінія курсу
         {
             if (_courseStartPoint.HasValue && _courseEndPoint.HasValue)
@@ -1284,14 +1173,14 @@ namespace Maps
             mapControl?.Refresh();
         }
 
-        private void FitMapToScreen()//вспоміжні дані координат для об'єкту
+        private void FitMapToScreen() // вспоміжні дані координат для об'єкту
         {
             float scaleX = (float)panelMap.Width / _originalImageSize.Width;
             float scaleY = (float)panelMap.Height / _originalImageSize.Height;
             _scale = Math.Max(scaleX, scaleY);
         }
 
-        private void CenterImage()//центрування карти
+        private void CenterImage() // центрування карти
         {
             int newWidth = (int)(_originalImageSize.Width * _scale);
             int newHeight = (int)(_originalImageSize.Height * _scale);
@@ -1352,11 +1241,11 @@ namespace Maps
 
         private void FillTargetTypeCombo()
         {
-            var source = Shablon.TargetTypeShablon;
+            var source = TemplateManager.TargetTypeShablon;
 
             if (source == null || source.Count == 0) return;
 
-            var items = Shablon.TargetTypeShablon
+            var items = TemplateManager.TargetTypeShablon
                 .Distinct(StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();
 
@@ -1376,7 +1265,7 @@ namespace Maps
         private void PopulatePilotComboBox()
         {
             Position.Items.Clear();
-            foreach (var key in Shablon.Position_Point.Keys)
+            foreach (var key in TemplateManager.Position_Point.Keys)
             {
                 Position.Items.Add(key);
             }
@@ -1391,7 +1280,7 @@ namespace Maps
         private void PopulatePositionComboBox(string key)
         {
             Pilot.Items.Clear();
-            if (Shablon.Position_Point.TryGetValue(key, out var positionList))
+            if (TemplateManager.Position_Point.TryGetValue(key, out var positionList))
             {
                 foreach (var position in positionList)
                 {
@@ -1400,7 +1289,7 @@ namespace Maps
             }
 
             DroneBy.Items.Clear();
-            if (Shablon.DroneByPosition.TryGetValue(key, out var droneList))
+            if (TemplateManager.DroneByPosition.TryGetValue(key, out var droneList))
             {
                 foreach (var drone in droneList)
                 {
@@ -1563,7 +1452,7 @@ namespace Maps
         string Controllers.IReportContext.GetTargetType() => Target_Type?.Text ?? "";
         string Controllers.IReportContext.GetAndSetTime() => GetTime();
         string Controllers.IReportContext.GetCurrentTimeString() => timeString ?? "";
-        ShablonManager Controllers.IReportContext.GetShablon() => Shablon;
+        TemplateManager Controllers.IReportContext.GetShablon() => TemplateManager;
         bool Controllers.IReportContext.IsTargetDestroyed() => targetDestroyedCheckBox.Checked;
         bool Controllers.IReportContext.IsTargetBoardLost() => targetBoardCheckBox.Checked;
         void Controllers.IReportContext.SetReportText(string text) { textBox1.Text = text; }
@@ -1619,27 +1508,6 @@ namespace Maps
             mapControl?.Refresh();
         }
         #endregion
-
-        private void GenerateButtons(List<string> elements)
-        {
-            elements.Sort((x, y) => x.Length.CompareTo(y.Length));
-            flowLayoutLocalities.Controls.Clear();
-
-            foreach (var element in elements)
-            {
-                var button = new System.Windows.Forms.Button
-                {
-                    Text = element,
-                    AutoSize = true,
-                    UseVisualStyleBackColor = true,
-                    Margin = new Padding(3),
-                    Tag = false
-                };
-
-                button.Click += ToggleButtonSelection;
-                flowLayoutLocalities.Controls.Add(button);
-            }
-        }
 
         private void ToggleButtonSelection(object sender, EventArgs e)
         {
@@ -1982,20 +1850,20 @@ namespace Maps
             return new SettingsControl { Dock = DockStyle.Fill };
         }
 
-        private LocalityControl CreateLocalityControl(SettingsControl settingsControl)
-        {
-            var control = new LocalityControl();
-            control.SetLocalities(GetLocalityNames());
-            ConfigureLocalityEvents(control, settingsControl);
-            return control;
-        }
+        //private LocalityControl CreateLocalityControl(SettingsControl settingsControl)
+        //{
+        //    var control = new LocalityControl();
+        //    control.SetLocalities(GetLocalityNames());
+        //    ConfigureLocalityEvents(control, settingsControl);
+        //    return control;
+        //}
 
-        private string[] GetLocalityNames()
-        {
-            return localityService?.Localities?.Keys?
-                .Where(name => !string.IsNullOrEmpty(name))
-                .ToArray() ?? Array.Empty<string>();
-        }
+        //private string[] GetLocalityNames()
+        //{
+        //    return localityService?.Localities?.Keys?
+        //        .Where(name => !string.IsNullOrEmpty(name))
+        //        .ToArray() ?? Array.Empty<string>();
+        //}
 
         // === Налаштування подій ===
         private void ConfigureSettingsEvents(SettingsControl settingsControl)
@@ -2012,21 +1880,21 @@ namespace Maps
 
         }
 
-        private void ConfigureLocalityEvents(LocalityControl localityControl, SettingsControl settingsControl)
-        {
-            localityControl.LocalitySelected -= HighlightLocality;
-            localityControl.LocalitySelected += HighlightLocality;
+        //private void ConfigureLocalityEvents(LocalityControl localityControl, SettingsControl settingsControl)
+        //{
+        //    localityControl.LocalitySelected -= HighlightLocality;
+        //    localityControl.LocalitySelected += HighlightLocality;
 
-            localityControl.BackClicked -= ReturnToSettings;
-            localityControl.BackClicked += ReturnToSettings;
+        //    localityControl.BackClicked -= ReturnToSettings;
+        //    localityControl.BackClicked += ReturnToSettings;
 
-            void ReturnToSettings(object s, EventArgs e)
-            {
-                localityControl.LocalitySelected -= HighlightLocality;
-                localityControl.BackClicked -= ReturnToSettings;
-                ShowSettingsPanel(settingsControl);
-            }
-        }
+        //    void ReturnToSettings(object s, EventArgs e)
+        //    {
+        //        localityControl.LocalitySelected -= HighlightLocality;
+        //        localityControl.BackClicked -= ReturnToSettings;
+        //        ShowSettingsPanel(settingsControl);
+        //    }
+        //}
 
         private void ShowInfoWindow(object sender, EventArgs e)
         {
@@ -2043,36 +1911,36 @@ namespace Maps
             }
         }
 
-        private void HighlightLocality(string name)
-        {
-            try
-            {
-                ToggleLocalityHighlight(name);
-            }
-            catch (Exception ex)
-            {
-                ShowErrorMessage($"Помилка при виділенні міста: {ex.Message}");
-            }
-        }
+        //private void HighlightLocality(string name)
+        //{
+        //    try
+        //    {
+        //        ToggleLocalityHighlight(name);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        ShowErrorMessage($"Помилка при виділенні міста: {ex.Message}");
+        //    }
+        //}
 
-        private void ShowLocalitiesPanel(object sender, EventArgs e)
-        {
-            //if (sender is SettingsControl settingsControl)
-            //{
-            try
-            {
-                var localityPanel = CreateLocalityControl(settingsControl);
-                panelSettings.Visible = false;
-                panelSettingsView.Controls.Clear();
-                panelSettingsView.Controls.Add(localityPanel);
-            }
-            catch (Exception ex)
-            {
-                ShowErrorMessage("Помилка при завантаженні списку міст", ex);
-                ShowSettingsPanel(settingsControl);
-            }
-            //}
-        }
+        //private void ShowLocalitiesPanel(object sender, EventArgs e)
+        //{
+        //    //if (sender is SettingsControl settingsControl)
+        //    //{
+        //    try
+        //    {
+        //        var localityPanel = CreateLocalityControl(settingsControl);
+        //        panelSettings.Visible = false;
+        //        panelSettingsView.Controls.Clear();
+        //        panelSettingsView.Controls.Add(localityPanel);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        ShowErrorMessage("Помилка при завантаженні списку міст", ex);
+        //        ShowSettingsPanel(settingsControl);
+        //    }
+        //    //}
+        //}
 
         private void OnRenameClicked(object sender, EventArgs e)
         {
@@ -2109,7 +1977,7 @@ namespace Maps
                 }
 
                 // Перезавантажуємо дані (тільки програмні)
-                Shablon.InitializeData();
+                TemplateManager.InitializeData();
 
                 // Оновлюємо UI
                 PopulatePilotComboBox();
@@ -2154,32 +2022,32 @@ namespace Maps
             var c = new NameEditorControl { Dock = DockStyle.Fill };
 
             // 1) Підтягнути поточні Позиції
-            var positions = Shablon.Position_Point?.Keys?.ToArray() ?? Array.Empty<string>();
+            var positions = TemplateManager.Position_Point?.Keys?.ToArray() ?? Array.Empty<string>();
             c.SetPositions(positions);
 
             // Встановлюємо поточну назву підрозділу
-            c.SetUnitName(Shablon.CustomUnit); // Використовуємо метод замість прямого доступу
+            c.SetUnitName(TemplateManager.CustomUnit); // Використовуємо метод замість прямого доступу
 
             // Встановлюємо ShablonManager для редактора шаблонів
-            c.SetShablonManager(Shablon); // ← Додаємо цей рядок
+            c.SetShablonManager(TemplateManager); // ← Додаємо цей рядок
 
             // Підписуємось на подію
             c.UnitNameChanged += (_, unitName) =>
             {
-                Shablon.CustomUnit = unitName;
-                Shablon.SaveShablon();
+                TemplateManager.CustomUnit = unitName;
+                TemplateManager.SaveShablon();
             };
 
             // Підписуємось на події для шаблону бойової доповіді
             c.ReportTemplateChanged += (_, template) =>
             {
-                Shablon.SaveCustomReportTemplate(template);
+                TemplateManager.SaveCustomReportTemplate(template);
                 MessageBox.Show("Шаблон бойової доповіді збережено!", "Успіх");
             };
 
             c.ReportTemplateReset += (_, __) =>
             {
-                Shablon.ResetReportTemplate();
+                TemplateManager.ResetReportTemplate();
                 MessageBox.Show("Шаблон скинуто до програмного варіанту!", "Успіх");
             };
 
@@ -2204,22 +2072,22 @@ namespace Maps
                 }
 
                 // уникаємо дублів (без урахування регістру)
-                if (Shablon.Position_Point.Keys.Any(k => string.Equals(k, newPos, StringComparison.CurrentCultureIgnoreCase)))
+                if (TemplateManager.Position_Point.Keys.Any(k => string.Equals(k, newPos, StringComparison.CurrentCultureIgnoreCase)))
                 {
                     MessageBox.Show("Така позиція вже існує.", "Увага");
                     return;
                 }
 
                 // додаємо
-                Shablon.Position_Point[newPos] = new List<string>(); // порожній список пілотів
-                if (!Shablon.DroneByPosition.ContainsKey(newPos))
-                    Shablon.DroneByPosition[newPos] = new List<string>();
+                TemplateManager.Position_Point[newPos] = new List<string>(); // порожній список пілотів
+                if (!TemplateManager.DroneByPosition.ContainsKey(newPos))
+                    TemplateManager.DroneByPosition[newPos] = new List<string>();
 
                 // збережемо
-                Shablon.SaveShablon();
+                TemplateManager.SaveShablon();
 
                 // оновимо UI (редактор + головну)
-                c.SetPositions(Shablon.Position_Point.Keys.ToArray());
+                c.SetPositions(TemplateManager.Position_Point.Keys.ToArray());
                 Position.Items.Add(newPos);
 
                 MessageBox.Show("Позицію додано.", "OK");
@@ -2240,7 +2108,7 @@ namespace Maps
                     return;
                 }
 
-                if (!Shablon.Position_Point.TryGetValue(pos, out var pilots))
+                if (!TemplateManager.Position_Point.TryGetValue(pos, out var pilots))
                 {
                     MessageBox.Show("Такої позиції не знайдено.", "Помилка");
                     return;
@@ -2253,7 +2121,7 @@ namespace Maps
                 }
 
                 pilots.Add(pilot);
-                Shablon.SaveShablon();
+                TemplateManager.SaveShablon();
 
                 // якщо на головній вибрана саме ця позиція — підкинемо елемент у її комбобокс
                 if (string.Equals(Position.SelectedItem?.ToString(), pos, StringComparison.CurrentCultureIgnoreCase))
@@ -2278,11 +2146,11 @@ namespace Maps
                     return;
                 }
 
-                if (!Shablon.DroneByPosition.TryGetValue(pos, out var drones))
+                if (!TemplateManager.DroneByPosition.TryGetValue(pos, out var drones))
                 {
                     // якщо ключа не було — створимо
                     drones = new List<string>();
-                    Shablon.DroneByPosition[pos] = drones;
+                    TemplateManager.DroneByPosition[pos] = drones;
                 }
 
                 if (drones.Any(d => string.Equals(d, drone, StringComparison.CurrentCultureIgnoreCase)))
@@ -2292,7 +2160,7 @@ namespace Maps
                 }
 
                 drones.Add(drone);
-                Shablon.SaveShablon();
+                TemplateManager.SaveShablon();
 
                 // якщо на головній вибрана саме ця позиція — підкинемо елемент у комбобокс дронів
                 if (string.Equals(Position.SelectedItem?.ToString(), pos, StringComparison.CurrentCultureIgnoreCase))
@@ -2712,7 +2580,6 @@ namespace Maps
 
                     // прибираємо з панелі, щоб точно не лишився в Controls
                     panelMap?.Controls.Remove(mapControl);
-
                     mapControl.Dispose();
                 }
             }
@@ -2734,10 +2601,8 @@ namespace Maps
             }
             catch { }
         }
-
     }   
-
 }
 
-//1 - добавити перевірку якщо населений пункт за межами карти, то щоб показувалось повіддомлення За межами карти
-//Зробити валідацію висоти
+// 1 - добавити перевірку якщо населений пункт за межами карти, то щоб показувалось повіддомлення За межами карти
+// Зробити валідацію висоти

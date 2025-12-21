@@ -3,21 +3,13 @@
   <PropertyGroup>
     <PackageId>GMap.NET.WinPresentation</PackageId>    
     <Product>GMap.NET.WindowsPresentation</Product>
-    <AssemblyTitle>GMap.NET.WindowsPresentation</AssemblyTitle>
-    
-    <TargetFrameworks>net46;net461;net462;net47;net471;net472;net48;net481;netcoreapp3.0;netcoreapp3.1;net5.0-windows;net6.0-windows;net7.0-windows</TargetFrameworks>
-    <UseWPF>true</UseWPF>
-    
-    <PackageReleaseNotes>
-- .Net Framework 4.6, 4.7, 4.8 support added
-- .Net Core 3.1, 5.0, 6.0 support added
-
-History Release Notes
-https://github.com/judero01col/GMap.NET/blob/master/README.md#release-notes
-    </PackageReleaseNotes>
+    <AssemblyTitle>GMap.NET.WindowsPresentation</AssemblyTitle>    
+    <TargetFrameworks>net481;netcoreapp3.1;net10.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>    
   </PropertyGroup>
 
-    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net\d'))">
+    <!-- match only .NET Framework monikers like net4*, avoid matching net5/net6/net10 -->
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net4'))">
         <DefineConstants>NETFRAMEWORK</DefineConstants>
     </PropertyGroup>
     <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netstandard\d'))">

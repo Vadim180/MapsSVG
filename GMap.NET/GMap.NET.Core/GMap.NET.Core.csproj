@@ -18,7 +18,8 @@ https://github.com/judero01col/GMap.NET/blob/master/README.md#release-notes
     </PackageReleaseNotes>    
   </PropertyGroup>
     
-    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net\d'))">
+    <!-- match only .NET Framework monikers like net4*, avoid matching modern net5/net6/net10 -->
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net4'))">
         <DefineConstants>NETFRAMEWORK;MONO_disabled;SQLite;MySQL_disabled;PostgreSQL_disabled;$(DefineConstants)</DefineConstants>
     </PropertyGroup>
     <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netstandard\d'))">

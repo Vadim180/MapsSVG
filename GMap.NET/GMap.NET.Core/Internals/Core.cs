@@ -614,7 +614,21 @@ namespace GMap.NET.Internals
             }
         }
 
-#if !NETFRAMEWORK
+#if NETFRAMEWORK
+        public Task ReloadMapAsync()
+        {
+            ReloadMap();
+            return Task.Factory.StartNew(() =>
+            {
+                bool wait;
+                do
+                {
+                    Thread.Sleep(100);
+                    wait = TileLoadQueue4.Count > 0;
+                } while (wait);
+            });
+        }
+#else
         public Task ReloadMapAsync()
         {
             ReloadMap();

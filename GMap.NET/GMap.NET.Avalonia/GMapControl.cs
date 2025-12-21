@@ -1946,14 +1946,10 @@ namespace GMap.NET.Avalonia
             _core.ReloadMap();
         }
 
-#if !NETFRAMEWORK
-
         public Task ReloadMapAsync()
         {
             return _core.ReloadMapAsync();
         }
-
-#endif
 
         /// <summary>
         ///     sets position using geocoder
