@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch WPF (.NET 10)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/Demo.WindowsPresentation/bin/Debug/net10.0-windows/Demo.WindowsPresentation.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/Demo.WindowsPresentation",
+            "stopAtEntry": false,
+            "justMyCode": true,
+            "console": "internalConsole",
+            "internalConsoleOptions": "openOnSessionStart",
+            "sourceFileMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Attach to WPF (process)",
+            "type": "coreclr",
+            "request": "attach",
+            "processId": "${command:pickProcess}"
+        }
+    ]
+}

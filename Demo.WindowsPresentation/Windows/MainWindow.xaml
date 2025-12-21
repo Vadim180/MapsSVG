@@ -8,146 +8,249 @@
         KeyboardNavigation.DirectionalNavigation="Once"
         xmlns:src="clr-namespace:Demo.WindowsPresentation"
         MinHeight="775" MinWidth="600" KeyUp="Window_KeyUp" PreviewKeyDown="Window_PreviewKeyDown">
-    <!-- Zoom control styles removed -->
+    
     <Grid>
-        <GroupBox Name="MapGroup" Header="gmap" Margin="12,7,241,12" VerticalContentAlignment="Stretch"
-                  HorizontalContentAlignment="Stretch">
-            <src:Map x:Name="MainMap" Zoom="7" MaxZoom="24" MinZoom="1" />
-        </GroupBox>
 
-        <GroupBox Header="gmap" HorizontalAlignment="Right" Margin="0,158,12,0" Name="GroupBox2" Width="169"
-                  VerticalAlignment="Top" Height="135">
-            <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-                <ComboBox FontSize="12" Margin="6,6,45,0" Name="ComboBoxMapType" Height="25.04" VerticalAlignment="Top">
-                    <ComboBox.SelectedItem>
-                        <Binding Path="MapProvider" ElementName="MainMap">
-                            <Binding.ValidationRules>
-                                <src:MapValidationRule x:Name="Validator" />
-                            </Binding.ValidationRules>
-                        </Binding>
-                    </ComboBox.SelectedItem>
-                </ComboBox>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="250" />
+        </Grid.ColumnDefinitions>
 
-                <Label HorizontalAlignment="Right" Margin="0,6,6,0" Name="Label1" Width="33" Height="25.04"
-                       VerticalAlignment="Top">
-                    type
-                </Label>
-                <CheckBox Margin="6,0,21,6" Name="CheckBoxDragMap" IsChecked="True" Height="16.04"
-                          VerticalAlignment="Bottom" Checked="checkBoxDragMap_Checked"
-                          Unchecked="checkBoxDragMap_Unchecked">
-                    Drag Map
-                </CheckBox>
-                <CheckBox Height="16" Margin="6,0,45,28" IsChecked="True" Name="CheckBoxCurrentMarker"
-                          VerticalAlignment="Bottom" Checked="checkBoxCurrentMarker_Checked"
-                          Unchecked="checkBoxCurrentMarker_Unchecked">
-                    Current Marker
-                </CheckBox>
-                <ComboBox FontSize="12" Height="25.04" Margin="6,37,45,0" Name="ComboBoxMode" VerticalAlignment="Top"
-                          DropDownClosed="comboBoxMode_DropDownClosed" />
-                <Label Height="25.04" HorizontalAlignment="Right" Margin="0,37,-4,0" Name="Label5"
-                       VerticalAlignment="Top" Width="43">
-                    mode
-                </Label>
-                <Button Height="22" HorizontalAlignment="Right" Name="Button7" VerticalAlignment="Bottom" Width="54"
-                        Click="button7_Click" Margin="0,0,6,3.06">
-                    Save
-                </Button>
-                <CheckBox Height="16" Margin="0,0,4,28" Name="CheckBoxDebug" VerticalAlignment="Bottom"
-                          HorizontalAlignment="Right" Width="43" Checked="checkBox1_Checked"
-                          Unchecked="checkBox1_Unchecked">
-                    Grid
-                </CheckBox>
-            </Grid>
-        </GroupBox>
-        <GroupBox Header="coordinates" Height="144" HorizontalAlignment="Right" Margin="0,7,12,0" Name="GroupBox1"
-                  VerticalAlignment="Top" Width="169">
-            <Grid>
-                <Button Height="23" Margin="0,0,6,6" Name="Button1" VerticalAlignment="Bottom" Click="button1_Click"
-                        HorizontalAlignment="Right" Width="71">
-                    Reload
-                </Button>
-                <TextBox Height="23" Margin="6,6,36,0" Name="TextBoxLat" VerticalAlignment="Top" />
-                <TextBox Margin="6,35,36,0" Name="TextBoxLng" Height="22.04" VerticalAlignment="Top" />
-                <TextBox Height="22.04" Margin="6,0,36,36" Name="TextBoxGeo" VerticalAlignment="Bottom"
-                         KeyUp="textBoxGeo_KeyUp">
-                    Kyiv
-                </TextBox>
-                <Button Height="23" HorizontalAlignment="Left" Margin="6,0,0,7" Name="Button2"
-                        VerticalAlignment="Bottom" Width="68" Click="button2_Click">
-                    Go To!
-                </Button>
-                <Button Height="23" HorizontalAlignment="Left" Margin="80,0,0,7" Name="ButtonSearch" VerticalAlignment="Bottom" Width="68" Click="buttonSearch_Click">
-                    Search
-                </Button>
-                <Label Height="23" HorizontalAlignment="Right" Margin="0,4,12,0" Name="Label2" VerticalAlignment="Top"
-                       Width="27" VerticalContentAlignment="Center">
-                    lat
-                </Label>
-                <Label Height="23" HorizontalAlignment="Right" Margin="0,33,12,0" Name="Label3" VerticalAlignment="Top"
-                       VerticalContentAlignment="Center" Width="27">
-                    lng
-                </Label>
-                <Label Height="23" HorizontalAlignment="Right" Margin="0,0,6,36" Name="Label4"
-                       VerticalAlignment="Bottom" VerticalContentAlignment="Center" Width="33">
-                    geo
-                </Label>
-            </Grid>
-        </GroupBox>
-        <GroupBox Header="loading" Height="50" HorizontalAlignment="Right" Margin="0,0,12,12" Name="GroupBox3"
-                  VerticalAlignment="Bottom" Width="169">
-            <Grid>
-                <ProgressBar Margin="2" Name="ProgressBar1" IsIndeterminate="True" />
-            </Grid>
-        </GroupBox>
-        <GroupBox Header="Cache" Height="104" HorizontalAlignment="Right" Margin="0,0,12,68" Name="GroupBox4"
-                  VerticalAlignment="Bottom" Width="169">
-            <Grid>
-                <Button Margin="0,0,12,6" Name="Button3" Click="button3_Click" Height="23" VerticalAlignment="Bottom"
-                        HorizontalAlignment="Right" Width="65">
-                    Prefetch
-                </Button>
-                <Button Height="23" HorizontalAlignment="Left" Margin="6,0,0,6" Name="Button4"
-                        VerticalAlignment="Bottom" Width="68" Click="button4_Click">
-                    Clear All
-                </Button>
-                <Button HorizontalAlignment="Right" Margin="0,28.138,12,0" Name="Button5" Width="65"
-                        Click="button5_Click" Height="19.317" VerticalAlignment="Top">
-                    Import
-                </Button>
-                <Button HorizontalAlignment="Left" Margin="7,27,0,0" Name="Button6" Width="66"
-                        VerticalContentAlignment="Center" Click="button6_Click" Height="20.455" VerticalAlignment="Top">
-                    Export
-                </Button>
-                <CheckBox Height="15" Margin="8,6,0,0" Name="CheckBoxCacheRoute" VerticalAlignment="Top"
-                          Checked="checkBoxCacheRoute_Checked" Unchecked="checkBoxCacheRoute_Checked"
-                          HorizontalAlignment="Left" Width="65">
-                    routing
-                </CheckBox>
-                <CheckBox Height="15" HorizontalAlignment="Right" Margin="0,7,0,0" Name="CheckBoxGeoCache"
-                          VerticalAlignment="Top" Width="78" Checked="checkBoxGeoCache_Checked">
-                    geocoding
-                </CheckBox>
-            </Grid>
-        </GroupBox>
+        <!--MAP-->
+        <src:Map x:Name="MainMap" Zoom="7" MaxZoom="24" MinZoom="1" Grid.Column="0" Margin="0,0,5,0" />
 
-        <GroupBox Header="markers" HorizontalAlignment="Right" Name="Markers" Width="169" Margin="0,299,11,283"
-                  Height="80" VerticalAlignment="Top">
-            <Grid>
-                <Button Margin="7,6,77,0" Name="Button8" Height="21.04" VerticalAlignment="Top" Click="button8_Click">Add Marker</Button>
-                <Button Margin="7,0,0,6" Name="Button10" Height="21.04" VerticalAlignment="Bottom"
-                        Click="button10_Click" HorizontalAlignment="Left" Width="56">
-                    Clear All
-                </Button>
-                <CheckBox HorizontalAlignment="Right" Margin="0,9,0,0" Name="CheckBoxPlace" Width="71" Height="16.04"
-                          VerticalAlignment="Top" IsChecked="True">
-                    place info
-                </CheckBox>
-                <Button Margin="78,0,1,5" Name="Button13" Height="21.04" VerticalAlignment="Bottom"
-                        Click="button13_Click">
-                    Zoom Center
-                </Button>
-            </Grid>
-        </GroupBox>
+        <!--SETTINGS-->
+        <Grid Grid.Column="1" Margin="0,0,5,0">
+
+            <Grid.RowDefinitions>
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="auto" />
+            </Grid.RowDefinitions>
+
+            <!--COORDINATES-->
+            <GroupBox Grid.Row="0" Header="Coordinates" Name="GroupBoxCoordinates">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Label Height="28" Name="LabelLatLng" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="2"  VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                        Lat=0.00000000, Lng=0.00000000
+                    </Label>
+
+                    <Label Height="28" Name="LabelMGRS" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                        MGRS:
+                    </Label>
+
+                    <Label Height="28" Name="LabelUTM" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                        UTM:
+                    </Label>
+
+                    <Label Height="28" Name="LabelZoom" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="3" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="2,0,0,0">
+                        Zoom:
+                    </Label>
+                </Grid>
+            </GroupBox>
+
+            <!--GMAP-->
+            <GroupBox Grid.Row="1" Header="Gmap" Name="GroupBox2" >
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Map Provider -->
+                    <ComboBox Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="0" FontSize="12" Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMapType" Height="24">
+                        <ComboBox.SelectedItem>
+                            <Binding Path="MapProvider" ElementName="MainMap">
+                                <Binding.ValidationRules>
+                                    <src:MapValidationRule x:Name="Validator" />
+                                </Binding.ValidationRules>
+                            </Binding>
+                        </ComboBox.SelectedItem>
+                    </ComboBox>
+
+                    <!-- Map Mode -->
+                    <ComboBox Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2" FontSize="12" Height="24" Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMode" DropDownClosed="comboBoxMode_DropDownClosed" />
+
+                    <!-- Checkboxes -->
+                    <StackPanel Grid.Column="0" Grid.Row="2" Margin="5,5,0,5" Orientation="Horizontal">
+                        <CheckBox Name="CheckBoxDragMap" IsChecked="True" Height="16"  Checked="checkBoxDragMap_Checked" Unchecked="checkBoxDragMap_Unchecked">
+                            Drag Map
+                        </CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxCurrentMarker" Height="16" IsChecked="True" Checked="checkBoxCurrentMarker_Checked" Unchecked="checkBoxCurrentMarker_Unchecked">
+                            Marker
+                        </CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxDebug" Height="16" Checked="checkBox1_Checked" Unchecked="checkBox1_Unchecked">
+                            Grid
+                        </CheckBox>
+                    </StackPanel>
+
+                    <!-- Buttons -->
+                    <Button Margin="5,0,5,5" Grid.Column="0" Grid.Row="3" Height="24"  Name="Button7" Click="button7_Click"  >
+                        Save Picture
+                    </Button>
+
+                </Grid>
+            </GroupBox>
+
+            <!--CACHE-->
+            <GroupBox Grid.Row="2" Header="Cache" Name="GroupBox4">
+                <Grid>
+
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+
+                    <Button  Margin="0,0,5,5" Grid.Column="0" Grid.Row="0" Name="Button3" Click="button3_Click" Height="24" >
+                        Prefetch
+                    </Button>
+                    <Button Margin="0,0,5,5" Grid.Column="1" Grid.Row="0" Height="24" Name="Button4" Click="button4_Click">
+                        Clear All
+                    </Button>
+                    <Button Margin="0,0,5,5" Grid.Column="0" Grid.Row="1" Name="Button5" Click="button5_Click" Height="24" >
+                        Import
+                    </Button>
+                    <Button Margin="0,0,5,5" Grid.Column="1" Grid.Row="1" Name="Button6" Click="button6_Click" Height="24" >
+                        Export
+                    </Button>
+
+                    <StackPanel Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,7,0,0">
+                        <CheckBox Height="15" Name="CheckBoxCacheRoute" Checked="checkBoxCacheRoute_Checked" Unchecked="checkBoxCacheRoute_Checked" >
+                            routing
+                        </CheckBox>
+                        <CheckBox Margin="5,0,0,0" Height="15" Name="CheckBoxGeoCache" Checked="checkBoxGeoCache_Checked">
+                            geocoding
+                        </CheckBox>
+                    </StackPanel>
+
+                </Grid>
+            </GroupBox>
+
+            <!--GO-->
+            <GroupBox Grid.Row="3" Header="Go" Name="GroupBox1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- LATITUDE -->
+                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="0" Height="24" Name="TextBoxLat"  VerticalContentAlignment="Center" />
+                    <!-- LABEL -->
+                    <Label Margin="0,0,5,0" Grid.Row="0" Grid.Column="2"  HorizontalAlignment="Center" Name="Label2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
+                        Lat
+                    </Label>
+
+                    <!-- LONGITUDE -->
+                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="1" Name="TextBoxLng" Height="24" HorizontalContentAlignment="Left" VerticalContentAlignment="Center"/>
+                    <!-- LABEL -->
+                    <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2"  HorizontalAlignment="Center" Name="Label3" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
+                        Lng
+                    </Label>
+
+                    <!-- GEO -->
+                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">
+                        Kyiv
+                    </TextBox>
+                    <!-- LABEL -->
+                    <Label Margin="0,0,5,0" Grid.Row="2" Grid.Column="2"  HorizontalAlignment="Center" Name="Label4" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
+                        Geo
+                    </Label>
+                    
+                    <!-- BUTTONS -->
+                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="3"  Height="24" Name="Button2" Click="button2_Click">
+                        Go
+                    </Button>
+
+                    <Button Margin="0,3,5,5"  Grid.Column="1" Grid.Row="3" Height="24" Name="ButtonSearch" Click="buttonSearch_Click">
+                        Search
+                    </Button>
+                    
+                    <Button Margin="0,3,5,5" Grid.Column="2" Grid.Row="3"  Height="24" Name="Button1" Click="button1_Click">
+                        🔄
+                    </Button>
+
+                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="3" Name="Button13" Height="24" VerticalAlignment="Bottom" Click="button13_Click">
+                        Zoom Center
+                    </Button>
+
+                </Grid>
+            </GroupBox>
+
+            <!--MARKERS-->
+            <GroupBox Grid.Row="4" Header="Markers" Name="Markers">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Button Margin="5,0,5,0" Grid.Column="0" Grid.Row="0" Name="Button8" Height="24" Click="button8_Click">Add Marker</Button>
+                    <Button Margin="5,0,5,0" Grid.Column="1" Grid.Row="0" Name="Button10" Height="24" Click="button10_Click">
+                        Clear All
+                    </Button>
+                    <CheckBox Margin="5,5,5,0" Grid.Column="0" Grid.Row="1" Name="CheckBoxPlace" Height="16" IsChecked="True">
+                        place info
+                    </CheckBox>
+
+                </Grid>
+            </GroupBox>
+
+            <!--SPACER-->
+            <Grid Grid.Row="5"/>
+        
+            <!--LOADING-->
+            <GroupBox Grid.Row="6" Margin="0,0,0,5" Header="Loading" Name="GroupBox3">
+                <ProgressBar Name="ProgressBar1" Height="10" IsIndeterminate="True"  />
+            </GroupBox>
+        
+        </Grid>
+        
+
 
     </Grid>
 </Window>

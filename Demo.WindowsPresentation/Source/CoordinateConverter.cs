@@ -1,7 +1,11 @@
 using CoordinateSharp;
 using Accord.Math;
 
-namespace Maps.Services.Map
+using System.Drawing;
+using System.Collections.Generic;
+using System;
+
+namespace Demo.WindowsPresentation
 {
     public class CoordinateConverter
     {
@@ -181,6 +185,56 @@ namespace Maps.Services.Map
             if (index > 19) index = 19;
 
             return bands[index];
+        }
+
+        /// <summary>
+        /// Попытка перетворити широту/довготу в UTM (Easting, Northing) з визначенням зони та літери пояса.
+        /// Використовує CoordinateSharp для отримання значень UTM.
+        /// </summary>
+        public bool TryLatLngToUTM(double latitude, double longitude, out System.Drawing.PointF utm, out int utmZone, out char bandLetter)
+        {
+            utm = PointF.Empty;
+            utmZone = 0;
+            bandLetter = ' ';
+
+            try
+            {
+                // Create coordinate and read UTM values
+                var coord = new CoordinateSharp.Coordinate(latitude, longitude);
+
+                // CoordinateSharp provides UTM info on the Coordinate object
+                double easting = coord.UTM.Easting;
+                double northing = coord.UTM.Northing;
+
+                // Compute UTM zone from longitude
+                utmZone = (int)Math.Floor((longitude + 180) / 6) + 1;
+
+                bandLetter = GetUTMBandLetter(latitude);
+
+                utm = new PointF((float)easting, (float)northing);
+                return true;
+            }
+            catch
+            {
+                utm = PointF.Empty;
+                utmZone = 0;
+                bandLetter = ' ';
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Форматування UTM рядка для відображення.
+        /// </summary>
+        public string FormatUTM(PointF utm, int utmZone, char bandLetter)
+        {
+            if (utm == PointF.Empty)
+            {
+                return "UTM: N/A";
+            }
+
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "UTM: {0}{1} {2:F2} E {3:F2} N", utmZone, bandLetter, utm.X, utm.Y);
         }
     }
 }

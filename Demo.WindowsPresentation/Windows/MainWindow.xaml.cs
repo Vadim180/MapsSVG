@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Drawing;
+using System.Text.RegularExpressions;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -29,6 +31,9 @@ namespace Demo.WindowsPresentation
 
         // zones list
         List<GMapMarker> Circles = new List<GMapMarker>();
+
+        // coordinate converter
+        private CoordinateConverter _coordinateConverter = new CoordinateConverter();
 
         public MainWindow()
         {
@@ -81,12 +86,14 @@ namespace Demo.WindowsPresentation
 
             //-- map events
             MainMap.OnPositionChanged += MainMap_OnCurrentPositionChanged;
+            MainMap.OnMapZoomChanged += MainMap_OnMapZoomChanged;
             MainMap.OnTileLoadComplete += MainMap_OnTileLoadComplete;
             MainMap.OnTileLoadStart += MainMap_OnTileLoadStart;
             MainMap.OnMapTypeChanged += MainMap_OnMapTypeChanged;
             MainMap.MouseMove += MainMap_MouseMove;
             MainMap.MouseRightButtonDown += MainMap_MouseRightButtonDown; // place marker with right click
             MainMap.MouseEnter += MainMap_MouseEnter;
+            MainMap.MouseWheel += MainMap_MouseWheel;
             MainMap.Loaded += MainMap_Loaded; // ensure default zoom after control initialization
 
             // get map types (order: Google (Hybrid first), Bing (Hybrid first), OpenStreet, Others)
@@ -131,9 +138,7 @@ namespace Demo.WindowsPresentation
             CheckBoxCacheRoute.IsChecked = MainMap.Manager.UseRouteCache;
             CheckBoxGeoCache.IsChecked = MainMap.Manager.UseGeocoderCache;
 
-            // setup zoom min/max
-            SliderZoom.Maximum = MainMap.MaxZoom;
-            SliderZoom.Minimum = MainMap.MinZoom;
+            // setup zoom min/max (zoom control removed)
 
             // get position
             TextBoxLat.Text = MainMap.Position.Lat.ToString(CultureInfo.InvariantCulture);
@@ -155,7 +160,7 @@ namespace Demo.WindowsPresentation
             currentMarker = new GMapMarker(MainMap.Position);
             {
                 currentMarker.Shape = new CustomMarkerRed(this, currentMarker, "custom position marker");
-                currentMarker.Offset = new Point(-15, -15);
+                currentMarker.Offset = new System.Windows.Point(-15, -15);
                 currentMarker.ZIndex = int.MaxValue;
                 MainMap.Markers.Add(currentMarker);
             }
@@ -245,7 +250,7 @@ namespace Demo.WindowsPresentation
             obj.Margin = new Thickness(0, 0, margin.Right - margin.Left, margin.Bottom - margin.Top);
 
             // Get the size of canvas
-            var size = new Size(obj.Width, obj.Height);
+            var size = new System.Windows.Size(obj.Width, obj.Height);
 
             // force control to Update
             obj.Measure(size);
@@ -358,13 +363,12 @@ namespace Demo.WindowsPresentation
 
             c.Width = 55 + pxCircleRadius * 2;
             c.Height = 55 + pxCircleRadius * 2;
-            (c.Tag as GMapMarker).Offset = new Point(-c.Width / 2, -c.Height / 2);
+            (c.Tag as GMapMarker).Offset = new System.Windows.Point(-c.Width / 2, -c.Height / 2);
         }
 
         void MainMap_OnMapTypeChanged(GMapProvider type)
         {
-            SliderZoom.Minimum = MainMap.MinZoom;
-            SliderZoom.Maximum = MainMap.MaxZoom;
+            // zoom control removed; no slider to update
         }
 
         void MainMap_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -430,7 +434,7 @@ namespace Demo.WindowsPresentation
                     new Action(() =>
                     {
                         ProgressBar1.Visibility = Visibility.Hidden;
-                        GroupBox3.Header = "loading, last in " + MainMap.ElapsedMilliseconds + "ms";
+                        GroupBox3.Header = "Loading: " + MainMap.ElapsedMilliseconds + "ms";
                     }));
             }
             catch
@@ -441,7 +445,58 @@ namespace Demo.WindowsPresentation
         // current location changed
         void MainMap_OnCurrentPositionChanged(PointLatLng point)
         {
-            MapGroup.Header = "gmap: " + point;
+            try
+            {
+                LabelLatLng.Content = "Lat: " + point.Lat.ToString("F8", CultureInfo.InvariantCulture) + ", Lng: " + point.Lng.ToString("F8", CultureInfo.InvariantCulture);
+
+                // Конвертація в UTM та MGRS
+                if (_coordinateConverter.TryLatLngToUTM(point.Lat, point.Lng, out System.Drawing.PointF utm, out int utmZone, out char bandLetter))
+                {
+                    LabelUTM.Content = _coordinateConverter.FormatUTM(utm, utmZone, bandLetter);
+                    LabelMGRS.Content = "MGRS: " + _coordinateConverter.FormatShortMGRSFromUTM(utm);
+                }
+                else
+                {
+                    LabelUTM.Content = "UTM: Помилка конвертації";
+                    LabelMGRS.Content = "MGRS: Помилка конвертації";
+                }
+
+                LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+            }
+        }
+
+        // zoom changed
+        void MainMap_OnMapZoomChanged()
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+                {
+                    LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+                }));
+            }
+            catch
+            {
+            }
+        }
+
+        // immediate wheel zoom update
+        void MainMap_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            try
+            {
+                // schedule update at Render priority to ensure map applied the zoom change
+                Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+                {
+                    LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+                }));
+            }
+            catch
+            {
+            }
         }
 
         // reload
@@ -526,15 +581,7 @@ namespace Demo.WindowsPresentation
             }
         }
 
-        // zoom changed
-        private void sliderZoom_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            // updates circles on map
-            foreach (var c in Circles)
-            {
-                UpdateCircle(c.Shape as Circle);
-            }
-        }
+        // zoom changed handler removed (zoom control removed)
 
         // zoom up
         private void czuZoomUp_Click(object sender, RoutedEventArgs e)
@@ -786,6 +833,53 @@ namespace Demo.WindowsPresentation
             else if (e.Key == Key.Z)
             {
                 MainMap.Bearing++;
+            }
+        }
+
+        private void Label_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Label lbl)
+            {
+                string text = lbl.Content?.ToString() ?? string.Empty;
+                string toCopy = text;
+
+                if (lbl.Name == "LabelLatLng")
+                {
+                    // extract two numeric values (lat, lng)
+                    var matches = Regex.Matches(text, "-?\\d+[\\.,]?\\d*");
+                    if (matches.Count >= 2)
+                    {
+                        // normalize decimal separator to dot
+                        var a = matches[0].Value.Replace(',', '.');
+                        var b = matches[1].Value.Replace(',', '.');
+                        toCopy = a + ", " + b;
+                    }
+                    else
+                    {
+                        int idx = text.IndexOf(':');
+                        if (idx >= 0) toCopy = text.Substring(idx + 1).Trim();
+                    }
+                }
+                else if (lbl.Name == "LabelZoom")
+                {
+                    // Do not copy zoom on click
+                    return;
+                }
+                else
+                {
+                    int idx = text.IndexOf(':');
+                    if (idx >= 0) toCopy = text.Substring(idx + 1).Trim();
+                }
+
+                try
+                {
+                    Clipboard.SetText(toCopy);
+                    Debug.WriteLine($"Label clicked, copied: {toCopy}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to copy to clipboard: {ex.Message}");
+                }
             }
         }
     }

@@ -18,7 +18,7 @@ namespace Demo.WindowsPresentation
         private int _counter;
         readonly Typeface _tf = new Typeface("GenericSansSerif");
         readonly FlowDirection fd = new FlowDirection();
-        private readonly Stopwatch _stopwatch = new Stopwatch();
+        public static readonly Stopwatch _stopwatch = new Stopwatch();
 
         /// <summary>
         ///     any custom drawing here
@@ -32,17 +32,17 @@ namespace Demo.WindowsPresentation
             base.OnRender(drawingContext);
             _stopwatch.Stop();
 
-            var text =
-                new FormattedText(
-                    string.Format(CultureInfo.InvariantCulture, "{0:0.0}", Zoom) + "z, " + MapProvider + ", refresh: " +
-                    _counter++ + ", load: " + ElapsedMilliseconds + "ms, render: " + _stopwatch.ElapsedMilliseconds +
-                    "ms",
-                    CultureInfo.InvariantCulture,
-                    fd,
-                    _tf,
-                    20,
-                    Brushes.Blue);
-            drawingContext.DrawText(text, new Point(text.Height, text.Height));
+            var text = new FormattedText(
+                "Render: " + _stopwatch.ElapsedMilliseconds +
+                "ms",
+                CultureInfo.InvariantCulture,
+                fd,
+                _tf,
+                12,
+                Brushes.Red);
+
+            // Правий нижній кут карти з відступом 10 пікселів
+            drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 10));
         }
 #endif
     }

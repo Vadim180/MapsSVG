@@ -32,6 +32,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CoordinateSharp" Version="2.8.1.1" />
+    <PackageReference Include="Accord.Math" Version="3.8.2-alpha" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="CustomMarkers\bigMarkerGreen.png" />
 
     <Resource Include="CustomMarkers\red-dot.png" />
