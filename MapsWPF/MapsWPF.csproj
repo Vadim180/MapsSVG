@@ -1,0 +1,51 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+	<PropertyGroup>
+		<AssemblyTitle>MapsWPF</AssemblyTitle>
+		<Description>MapsWPF</Description>
+		<Product>MapsWPF</Product>
+		<TargetFrameworks>net10.0-windows</TargetFrameworks>
+		<UseWPF>true</UseWPF>
+		<OutputType>WinExe</OutputType>
+		<SignAssembly>True</SignAssembly>
+		<Prefer32Bit>false</Prefer32Bit>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+		<OutputPath>..\Build\Debug\</OutputPath>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+		<OutputPath>..\Build\Release\</OutputPath>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Compile Include="..\Demo.WindowsForms\Source\DemoStuff.cs">
+			<Link>DemoStuff.cs</Link>
+		</Compile>
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj" />
+		<ProjectReference Include="..\GMap.NET\GMap.NET.WindowsPresentation\GMap.NET.WindowsPresentation.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="CoordinateSharp" Version="2.8.1.1" />
+		<PackageReference Include="Accord.Math" Version="3.8.2-alpha" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Resource Include="CustomMarkers\bigMarkerGreen.png" />
+
+		<Resource Include="CustomMarkers\red-dot.png" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="C:\Users\Lion\.nuget\packages\accord\3.8.2-alpha\build\Accord.dll.config">
+			<Visible>False</Visible>
+		</None>
+	</ItemGroup>
+
+</Project>

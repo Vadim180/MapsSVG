@@ -17,7 +17,7 @@ History Release Notes
 https://github.com/judero01col/GMap.NET/blob/master/README.md#release-notes
     </PackageReleaseNotes>    
   </PropertyGroup>
-    
+
     <!-- match only .NET Framework monikers like net4*, avoid matching modern net5/net6/net10 -->
     <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net4'))">
         <DefineConstants>NETFRAMEWORK;MONO_disabled;SQLite;MySQL_disabled;PostgreSQL_disabled;$(DefineConstants)</DefineConstants>
@@ -28,7 +28,11 @@ https://github.com/judero01col/GMap.NET/blob/master/README.md#release-notes
     <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netcoreapp\d'))">
         <DefineConstants>NETCORE;MONO_disabled;SQLite;MySQL_disabled;PostgreSQL_disabled;$(DefineConstants)</DefineConstants>
     </PropertyGroup>
-    
+    <!-- .NET 5+ (net5.0, net6.0, net7.0, net8.0, net9.0, net10.0, etc.) -->
+    <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net[5-9]\d*\.0')) OR $([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^net1\d+\.0'))">
+        <DefineConstants>NET5_0_OR_GREATER;MONO_disabled;SQLite;MySQL_disabled;PostgreSQL_disabled;$(DefineConstants)</DefineConstants>
+    </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="System.Data.SQLite" Version="1.0.117" />

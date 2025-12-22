@@ -1013,22 +1013,22 @@ namespace GMap.NET.WindowsPresentation
         ///     render map in WPF
         /// </summary>
         /// <param name="g"></param>
-        void DrawMap(DrawingContext g)
-        {
-            if (MapProvider == EmptyProvider.Instance || MapProvider == null)
-            {
-                return;
-            }
-
-            _core.TileDrawingListLock.AcquireReaderLock();
-            _core.Matrix.EnterReadLock();
-
-            try
-            {
-                foreach (var tilePoint in _core.TileDrawingList)
+                void DrawMap(DrawingContext g)
                 {
-                    _core.TileRect.Location = tilePoint.PosPixel;
-                    _core.TileRect.OffsetNegative(_core.CompensationOffset);
+                    if (MapProvider == EmptyProvider.Instance || MapProvider == null)
+                    {
+                        return;
+                    }
+
+                    _core.TileDrawingListLock.AcquireReaderLock();
+                    _core.Matrix.EnterReadLock();
+
+                    try
+                    {
+                        foreach (var tilePoint in _core.TileDrawingList)
+                        {
+                            _core.TileRect.Location = tilePoint.PosPixel;
+                            _core.TileRect.OffsetNegative(_core.CompensationOffset);
 
                     //if(region.IntersectsWith(Core.tileRect) || IsRotated)
                     {
@@ -1164,23 +1164,23 @@ namespace GMap.NET.WindowsPresentation
 
                         if (ShowTileGridLines)
                         {
-                            // draw only tile borders when grid is enabled; do not render DEBUG tile text
-                            g.DrawRectangle(null,
-                                EmptyTileBorders,
-                                new Rect(_core.TileRect.X,
-                                    _core.TileRect.Y,
-                                    _core.TileRect.Width,
-                                    _core.TileRect.Height));
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                _core.Matrix.LeaveReadLock();
-                _core.TileDrawingListLock.ReleaseReaderLock();
-            }
-        }
+                                                        // draw only tile borders when grid is enabled; do not render DEBUG tile text
+                                                        g.DrawRectangle(null,
+                                                            EmptyTileBorders,
+                                                            new Rect(_core.TileRect.X,
+                                                                _core.TileRect.Y,
+                                                                _core.TileRect.Width,
+                                                                _core.TileRect.Height));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                            finally
+                                            {
+                                                _core.Matrix.LeaveReadLock();
+                                                _core.TileDrawingListLock.ReleaseReaderLock();
+                                            }
+                                        }
 
         /// <summary>
         ///     gets image of the current view
@@ -1357,12 +1357,22 @@ namespace GMap.NET.WindowsPresentation
             {
                 if (IsRotated)
                 {
-                    var p = new Point(x, y);
-                    p = _rotationMatrixInvert.Transform(p);
-                    x = (int)p.X;
-                    y = (int)p.Y;
+                    // Use Bearing directly to rotate the vector (x,y)
+                    // We want to rotate by +Bearing (inverse of map rotation -Bearing)
+                    // Standard rotation matrix for angle A:
+                    // x' = x cos A - y sin A
+                    // y' = x sin A + y cos A
+                    // Here A = Bearing (in degrees).
+                    // Note: WPF RotateTransform uses degrees. Math.Cos/Sin use radians.
 
-                    _core.DragOffset(new GPoint(x, y));
+                    double angleRad = Bearing * Math.PI / 180.0;
+                    double cos = Math.Cos(angleRad);
+                    double sin = Math.Sin(angleRad);
+
+                    double dx = x * cos - y * sin;
+                    double dy = x * sin + y * cos;
+
+                    _core.DragOffset(new GPoint((long)dx, (long)dy));
 
                     ForceUpdateOverlays();
                 }
@@ -1688,78 +1698,99 @@ namespace GMap.NET.WindowsPresentation
             set { SetValue(IgnoreMarkerOnMouseWheelProperty, value); }
         }
 
-        protected override void OnMouseWheel(MouseWheelEventArgs e)
-        {
-            base.OnMouseWheel(e);
-
-            if (MouseWheelZoomEnabled && (IsMouseDirectlyOver || IgnoreMarkerOnMouseWheel) && !_core.IsDragging)
-            {
-                var p = e.GetPosition(this);
-
-                if (MapScaleTransform != null)
+                protected override void OnMouseWheel(MouseWheelEventArgs e)
                 {
-                    p = MapScaleTransform.Inverse.Transform(p);
+                    base.OnMouseWheel(e);
+
+                    if (MouseWheelZoomEnabled && (IsMouseDirectlyOver || IgnoreMarkerOnMouseWheel) && !_core.IsDragging)
+                    {
+                        var p = e.GetPosition(this);
+
+                        if (MapScaleTransform != null)
+                        {
+                            p = MapScaleTransform.Inverse.Transform(p);
+                        }
+
+                        p = ApplyRotationInversion(p.X, p.Y);
+
+                        // Accumulate zoom delta for debouncing
+                        if (e.Delta > 0)
+                        {
+                            _pendingZoomDelta += InvertedMouseWheelZooming ? -1 : 1;
+                        }
+                        else
+                        {
+                            _pendingZoomDelta += InvertedMouseWheelZooming ? 1 : -1;
+                        }
+
+                        _pendingZoomMousePosition = p;
+
+                        // Initialize or restart debounce timer
+                        if (_zoomDebounceTimer == null)
+                        {
+                            _zoomDebounceTimer = new System.Windows.Threading.DispatcherTimer
+                            {
+                                Interval = TimeSpan.FromMilliseconds(100) // 100ms debounce
+                            };
+                            _zoomDebounceTimer.Tick += (s, args) =>
+                            {
+                                _zoomDebounceTimer.Stop();
+
+                                if (_pendingZoomDelta != 0)
+                                {
+                                    // Apply accumulated zoom change
+                                    if (_core.MouseLastZoom.X != (int)_pendingZoomMousePosition.X &&
+                                        _core.MouseLastZoom.Y != (int)_pendingZoomMousePosition.Y)
+                                    {
+                                        if (MouseWheelZoomType == MouseWheelZoomType.MousePositionAndCenter)
+                                        {
+                                            Position = FromLocalToLatLng((int)_pendingZoomMousePosition.X,
+                                                (int)_pendingZoomMousePosition.Y);
+                                        }
+                                        else if (MouseWheelZoomType == MouseWheelZoomType.ViewCenter)
+                                        {
+                                            Position = FromLocalToLatLng((int)ActualWidth / 2, (int)ActualHeight / 2);
+                                        }
+                                        else if (MouseWheelZoomType == MouseWheelZoomType.MousePositionWithoutCenter)
+                                        {
+                                            Position = FromLocalToLatLng((int)_pendingZoomMousePosition.X,
+                                                (int)_pendingZoomMousePosition.Y);
+                                        }
+
+                                        _core.MouseLastZoom.X = (int)_pendingZoomMousePosition.X;
+                                        _core.MouseLastZoom.Y = (int)_pendingZoomMousePosition.Y;
+                                    }
+
+                                    // set mouse position to map center
+                                    if (MouseWheelZoomType != MouseWheelZoomType.MousePositionWithoutCenter)
+                                    {
+                                        var ps = PointToScreen(new Point(ActualWidth / 2, ActualHeight / 2));
+                                        Stuff.SetCursorPos((int)ps.X, (int)ps.Y);
+                                    }
+
+                                    _core.MouseWheelZooming = true;
+        #if DEBUG
+                                    Debug.WriteLine($"[ZOOM] Applying accumulated zoom delta: {_pendingZoomDelta} (from {Zoom} to {Zoom + _pendingZoomDelta})");
+        #endif
+                                    Zoom = Math.Max(MinZoom, Math.Min(MaxZoom, (int)Zoom + _pendingZoomDelta));
+                                    _core.MouseWheelZooming = false;
+
+                                    _pendingZoomDelta = 0;
+                                }
+                            };
+                        }
+
+                        _zoomDebounceTimer.Stop();
+                        _zoomDebounceTimer.Start();
+                    }
                 }
-
-                p = ApplyRotationInversion(p.X, p.Y);
-
-                if (_core.MouseLastZoom.X != (int)p.X && _core.MouseLastZoom.Y != (int)p.Y)
-                {
-                    if (MouseWheelZoomType == MouseWheelZoomType.MousePositionAndCenter)
-                    {
-                        Position = FromLocalToLatLng((int)p.X, (int)p.Y);
-                    }
-                    else if (MouseWheelZoomType == MouseWheelZoomType.ViewCenter)
-                    {
-                        Position = FromLocalToLatLng((int)ActualWidth / 2, (int)ActualHeight / 2);
-                    }
-                    else if (MouseWheelZoomType == MouseWheelZoomType.MousePositionWithoutCenter)
-                    {
-                        Position = FromLocalToLatLng((int)p.X, (int)p.Y);
-                    }
-
-                    _core.MouseLastZoom.X = (int)p.X;
-                    _core.MouseLastZoom.Y = (int)p.Y;
-                }
-
-                // set mouse position to map center
-                if (MouseWheelZoomType != MouseWheelZoomType.MousePositionWithoutCenter)
-                {
-                    var ps =
-                        PointToScreen(new Point(ActualWidth / 2, ActualHeight / 2));
-                    Stuff.SetCursorPos((int)ps.X, (int)ps.Y);
-                }
-
-                _core.MouseWheelZooming = true;
-
-                if (e.Delta > 0)
-                {
-                    if (!InvertedMouseWheelZooming)
-                    {
-                        Zoom = (int)Zoom + 1;
-                    }
-                    else
-                    {
-                        Zoom = (int)(Zoom + 0.99) - 1;
-                    }
-                }
-                else
-                {
-                    if (InvertedMouseWheelZooming)
-                    {
-                        Zoom = (int)Zoom + 1;
-                    }
-                    else
-                    {
-                        Zoom = (int)(Zoom + 0.99) - 1;
-                    }
-                }
-
-                _core.MouseWheelZooming = false;
-            }
-        }
 
         bool _isSelected;
+
+        // MouseWheel zoom debouncing to prevent lag from rapid zoom changes
+        private System.Windows.Threading.DispatcherTimer _zoomDebounceTimer;
+        private int _pendingZoomDelta = 0;
+        private Point _pendingZoomMousePosition;
 
         protected override void OnMouseDown(MouseButtonEventArgs e)
         {
@@ -1900,40 +1931,40 @@ namespace GMap.NET.WindowsPresentation
                     Mouse.Capture(this);
                 }
 
-                if (BoundsOfMap.HasValue && !BoundsOfMap.Value.Contains(Position))
-                {
-                    // ...
-                }
-                else
-                {
-                    var p = e.GetPosition(this);
+                                if (BoundsOfMap.HasValue && !BoundsOfMap.Value.Contains(Position))
+                                {
+                                    // ...
+                                }
+                                else
+                                {
+                                    var p = e.GetPosition(this);
 
-                    if (MapScaleTransform != null)
-                    {
-                        p = MapScaleTransform.Inverse.Transform(p);
-                    }
+                                    if (MapScaleTransform != null)
+                                    {
+                                        p = MapScaleTransform.Inverse.Transform(p);
+                                    }
 
-                    p = ApplyRotationInversion(p.X, p.Y);
+                                    p = ApplyRotationInversion(p.X, p.Y);
 
-                    _core.MouseCurrent.X = (int)p.X;
-                    _core.MouseCurrent.Y = (int)p.Y;
-                    {
-                        _core.Drag(_core.MouseCurrent);
-                    }
+                                    _core.MouseCurrent.X = (int)p.X;
+                                    _core.MouseCurrent.Y = (int)p.Y;
+                                    {
+                                        _core.Drag(_core.MouseCurrent);
+                                    }
 
-                    if (IsRotated || _scaleMode != ScaleModes.Integer)
-                    {
-                        ForceUpdateOverlays();
-                    }
-                    else
-                    {
-                        UpdateMarkersOffset();
-                    }
-                }
+                                    if (IsRotated || _scaleMode != ScaleModes.Integer)
+                                    {
+                                        ForceUpdateOverlays();
+                                    }
+                                    else
+                                    {
+                                        UpdateMarkersOffset();
+                                    }
+                                }
 
-                InvalidateVisual(true);
-            }
-            else
+                                InvalidateVisual(true);
+                                                }
+                                                else
             {
                 if (_isSelected && !_selectionStart.IsEmpty &&
                     (Keyboard.Modifiers == ModifierKeys.Shift || Keyboard.Modifiers == ModifierKeys.Alt ||
