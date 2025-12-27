@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Security.Principal;
 using GMap.NET.CacheProviders;
 
 namespace GMap.NET.Internals
@@ -66,7 +67,7 @@ namespace GMap.NET.Internals
             bool isSystem = false;
             try
             {
-                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                using (var identity = WindowsIdentity.GetCurrent())
                 {
                     if (identity != null)
                     {

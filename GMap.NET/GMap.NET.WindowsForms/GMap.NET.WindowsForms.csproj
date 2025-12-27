@@ -5,10 +5,14 @@
     <Product>GMap.NET.WindowsForms</Product>
     <AssemblyTitle>GMap.NET.WindowsForms</AssemblyTitle>
     
-    <TargetFrameworks>net48;netcoreapp3.1;net10.0-windows</TargetFrameworks>
+    <TargetFrameworks>net481;netcoreapp3.1;net10.0-windows</TargetFrameworks>
     <UseWindowsForms>true</UseWindowsForms>
     <DefineConstants>ContinuesMapNo;$(DefineConstants)</DefineConstants>
     
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net481'">
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
 
 	<PropertyGroup>
@@ -24,9 +28,18 @@
     <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(TargetFramework)', '^netcoreapp\d'))">
         <DefineConstants>NETCORE;ContinuesMapNo;$(DefineConstants)</DefineConstants>
     </PropertyGroup>
+    <ItemGroup>
+      <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
+    </ItemGroup>
     
   <ItemGroup>
     <ProjectReference Include="..\GMap.NET.Core\GMap.NET.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net481'">
+    <PackageReference Include="System.Resources.Extensions">
+      <Version>10.0.1</Version>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
@@ -16,11 +17,18 @@ namespace MapsWPF
         public long ElapsedMilliseconds;
 
         // Attack zone properties
-        public System.Drawing.PointF AttackPoint { get; set; } = System.Drawing.PointF.Empty;
+        // Changed to PointLatLng to anchor to map
+        public PointLatLng AttackPoint { get; set; } = PointLatLng.Empty;
+        public bool IsAttackPointSet { get; set; } = false;
+
         public float AttackAngle { get; set; } = 0f;
-        public float AttackRayLength { get; set; } = 500;
-        public float AttackSectorRadius { get; set; } = 500;
+
+        // Dimensions in METERS now, not pixels
+        public double AttackRayLengthMeters { get; set; } = 5000;
+        public double AttackSectorRadiusMeters { get; set; } = 5000;
+
         public float AttackSectorWidth { get; set; } = 30f;
+        public double TargetDistance { get; set; } = -1; // Distance to target in meters
 
 #if DEBUG
 
@@ -32,8 +40,10 @@ namespace MapsWPF
         private PathGeometry _cachedSectorGeometry;
         private float _lastCachedAngle = float.MinValue;
         private float _lastCachedWidth = float.MinValue;
-        private float _lastCachedRadius = float.MinValue;
-        private System.Drawing.PointF _lastCachedPoint = System.Drawing.PointF.Empty;
+        private double _lastCachedRadiusMeters = double.MinValue;
+        private PointLatLng _lastCachedPoint = PointLatLng.Empty;
+        private double _lastCachedZoom = -1;
+        private Point _lastCachedCenter = new Point(double.MinValue, double.MinValue);
 
         // Статичні ресурси (створюються один раз)
         private static readonly SolidColorBrush _sectorBrush;
@@ -71,12 +81,17 @@ namespace MapsWPF
         private static readonly SolidColorBrush _overlayBackground;
         private static readonly Pen _overlayBorder;
         private static readonly SolidColorBrush _overlayTextBrush;
-        
+
         /// <summary>
         /// Optional provider that given a lat/lng returns additional coordinate strings (UTM, MGRS, etc.).
         /// MainWindow can set this to render UTM/MGRS the same way as the WinForms app.
         /// </summary>
         public System.Func<GMap.NET.PointLatLng, (string UTM, string MGRS)> CoordinateFormatter { get; set; }
+
+        /// <summary>
+        /// Show coordinates overlay
+        /// </summary>
+        public bool ShowCoordinates { get; set; } = true;
 
         /// <summary>
         ///     any custom drawing here
@@ -90,13 +105,16 @@ namespace MapsWPF
             base.OnRender(drawingContext);
 
             // Draw attack zone if attack point is set
-            if (AttackPoint != System.Drawing.PointF.Empty)
+            if (IsAttackPointSet)
             {
                 DrawAttackZone(drawingContext);
             }
 
             // Draw coordinates overlay (top-right corner) using WinForms style (black text on semi-transparent background)
-            DrawCoordinatesOverlay(drawingContext);
+            if (ShowCoordinates)
+            {
+                DrawCoordinatesOverlay(drawingContext);
+            }
 
             _stopwatch.Stop();
 
@@ -115,20 +133,33 @@ namespace MapsWPF
 
         private void DrawAttackZone(DrawingContext dc)
         {
-            var center = new Point(AttackPoint.X, AttackPoint.Y);
+            // Convert Geo point to Screen point
+            var gCenter = FromLatLngToLocal(AttackPoint);
+            var center = new Point(gCenter.X, gCenter.Y);
+
+            // Calculate radius in pixels based on zoom level
+            // We take a point at distance X North and measure pixel distance
+            // This is an approximation but good enough for visual
+            // Better: use MapProvider projection
+
+            var pxRadius = GetPixelDistance(AttackPoint, AttackSectorRadiusMeters);
+            var pxRayLength = GetPixelDistance(AttackPoint, AttackRayLengthMeters);
 
             // Перевіряємо чи змінилися параметри (якщо ні - використовуємо кеш!)
             bool needsUpdate = _cachedSectorGeometry == null ||
                               _lastCachedAngle != AttackAngle ||
                               _lastCachedWidth != AttackSectorWidth ||
-                              _lastCachedRadius != AttackSectorRadius ||
-                              _lastCachedPoint != AttackPoint;
+                              Math.Abs(_lastCachedRadiusMeters - AttackSectorRadiusMeters) > 0.001 ||
+                              _lastCachedPoint != AttackPoint ||
+                              Math.Abs(_lastCachedZoom - Zoom) > 0.01 ||
+                              _lastCachedCenter != center;
 
             if (needsUpdate)
             {
                 // Тільки якщо змінилося - перестворюємо геометрію
                 float drawAngle = AttackAngle - 90f;
-                var radius = AttackSectorRadius;
+                // Use calculated pixel radius
+                var radius = pxRadius;
 
                 var startAngle = drawAngle - (AttackSectorWidth / 2);
                 var endAngle = drawAngle + (AttackSectorWidth / 2);
@@ -164,8 +195,10 @@ namespace MapsWPF
                 _cachedSectorGeometry = pathGeometry;
                 _lastCachedAngle = AttackAngle;
                 _lastCachedWidth = AttackSectorWidth;
-                _lastCachedRadius = AttackSectorRadius;
+                _lastCachedRadiusMeters = AttackSectorRadiusMeters;
                 _lastCachedPoint = AttackPoint;
+                _lastCachedZoom = Zoom;
+                _lastCachedCenter = center;
             }
 
             // Малюємо сектор з кешу (швидко!)
@@ -174,12 +207,53 @@ namespace MapsWPF
             // Малюємо промінь (центральна лінія)
             float drawAngleForRay = AttackAngle - 90f;
             float rad = (float)(drawAngleForRay * System.Math.PI / 180.0);
-            float endX = AttackPoint.X + (float)System.Math.Cos(rad) * AttackRayLength;
-            float endY = AttackPoint.Y + (float)System.Math.Sin(rad) * AttackRayLength;
+
+            // Use calculated pixel len
+            float endX = (float)(center.X + System.Math.Cos(rad) * pxRayLength);
+            float endY = (float)(center.Y + System.Math.Sin(rad) * pxRayLength);
             dc.DrawLine(_rayPen, center, new Point(endX, endY));
 
             // Малюємо центральний маркер (червоне коло)
             dc.DrawEllipse(Brushes.Red, null, center, 3, 3);
+        }
+
+        private double GetPixelDistance(PointLatLng centerInfo, double meters)
+        {
+            if (MapProvider == null) return 0;
+
+            // Simplest way:
+            // 1. Get center PX
+            // 2. Calculate point "meters" away in lat/lng
+            // 3. Get that point PX
+            // 4. Distance
+
+            var p1G = FromLatLngToLocal(centerInfo);
+            var p1 = new Point(p1G.X, p1G.Y);
+
+            // Move East
+            var offsetPoint = DestPoint(centerInfo, 90, meters / 1000.0); // Meters to KM
+            var p2G = FromLatLngToLocal(offsetPoint);
+            var p2 = new Point(p2G.X, p2G.Y);
+
+            var dx = p1.X - p2.X;
+            var dy = p1.Y - p2.Y;
+            return System.Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        // Helper for destination point given distance in km
+        private PointLatLng DestPoint(PointLatLng start, double bearing, double distKm)
+        {
+            var R = 6371d; // Earth Radius
+            var brng = bearing * System.Math.PI / 180d;
+            var lat1 = start.Lat * System.Math.PI / 180d;
+            var lon1 = start.Lng * System.Math.PI / 180d;
+
+            var lat2 = System.Math.Asin(System.Math.Sin(lat1) * System.Math.Cos(distKm / R) +
+                                  System.Math.Cos(lat1) * System.Math.Sin(distKm / R) * System.Math.Cos(brng));
+            var lon2 = lon1 + System.Math.Atan2(System.Math.Sin(brng) * System.Math.Sin(distKm / R) * System.Math.Cos(lat1),
+                                          System.Math.Cos(distKm / R) - System.Math.Sin(lat1) * System.Math.Sin(lat2));
+
+            return new PointLatLng(lat2 * 180d / System.Math.PI, lon2 * 180d / System.Math.PI);
         }
 
         private void DrawCoordinatesOverlay(DrawingContext dc)
@@ -209,6 +283,11 @@ namespace MapsWPF
                 if (!string.IsNullOrEmpty(utm)) rows.Add(("UTM:", utm));
                 if (!string.IsNullOrEmpty(mgrs)) rows.Add(("MGRS:", mgrs));
                 rows.Add(("Кут:", AttackAngle.ToString("F1", CultureInfo.InvariantCulture) + "°"));
+
+                if (TargetDistance >= 0)
+                {
+                    rows.Add(("Відстань:", $"{TargetDistance:F0} m"));
+                }
 
                 double padding = 10.0;
                 double labelSpacing = 8.0;

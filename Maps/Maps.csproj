@@ -24,13 +24,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Accord.Math" Version="3.8.0" />
+    <PackageReference Include="Accord.Math" Version="3.8.2-alpha" />
     <PackageReference Include="CoordinateSharp" Version="3.3.2.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="ProjNet" Version="2.1.0" />
     <PackageReference Include="SharpDX" Version="4.2.0" />
     <PackageReference Include="SharpDX.Direct2D1" Version="4.2.0" />
     <PackageReference Include="SharpDX.DXGI" Version="4.2.0" />
+    <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
     <PackageReference Include="System.IO.Ports" Version="10.0.1" />
   </ItemGroup>
 

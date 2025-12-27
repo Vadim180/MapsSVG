@@ -20,6 +20,7 @@ namespace GMap.NET.MapProviders
             //only if one valid available. by providing http://www.openstreetmap.org/ a 418 error is given by the server.
             //RefererUrl = "http://www.openstreetmap.org/";
             Copyright = string.Format("© OpenStreetMap - Map data ©{0} OpenStreetMap", DateTime.Today.Year);
+            UserAgent = "MapsWPF/1.0 (GMap.NET)";
         }
 
         public readonly string ServerLetters = "abc";
@@ -336,18 +337,30 @@ namespace GMap.NET.MapProviders
 
                     var p = new Placemark(result.display_name);
 
-                    p = new Placemark
+                    if (result.address != null)
                     {
-                        PlacemarkId = result.place_id,
-                        Address = result.address.ToString(),
-                        CountryName = result.address.country,
-                        CountryNameCode = result.address.country_code,
-                        PostalCodeNumber = result.address.postcode,
-                        AdministrativeAreaName = result.address.state,
-                        SubAdministrativeAreaName = result.address.city,
-                        LocalityName = result.address.suburb,
-                        ThoroughfareName = result.address.road
-                    };
+                        p = new Placemark
+                        {
+                            PlacemarkId = result.place_id,
+                            Address = result.display_name,
+                            CountryName = result.address.country,
+                            CountryNameCode = result.address.country_code,
+                            PostalCodeNumber = result.address.postcode,
+                            AdministrativeAreaName = result.address.state,
+                            SubAdministrativeAreaName = !string.IsNullOrEmpty(result.address.city) ? result.address.city :
+                                                       (!string.IsNullOrEmpty(result.address.town) ? result.address.town :
+                                                       (!string.IsNullOrEmpty(result.address.village) ? result.address.village : result.address.hamlet)),
+                            LocalityName = result.address.suburb,
+                            ThoroughfareName = result.address.road
+                        };
+                    }
+                    else
+                    {
+                        p = new Placemark(result.display_name)
+                        {
+                            PlacemarkId = result.place_id
+                        };
+                    }
 
                     ret.Add(p);
 
@@ -359,6 +372,7 @@ namespace GMap.NET.MapProviders
                 ret = null;
                 status = GeoCoderStatusCode.EXCEPTION_IN_CODE;
                 Debug.WriteLine("GetPlacemarkFromReverseGeocoderUrl: " + ex);
+                Console.WriteLine("GetPlacemarkFromReverseGeocoderUrl EXCEPTION: " + ex);
             }
 
             return ret;

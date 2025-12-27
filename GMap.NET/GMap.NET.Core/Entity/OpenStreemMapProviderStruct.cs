@@ -23,6 +23,9 @@ namespace GMap.NET.Entity
             public string road { get; set; }
             public string suburb { get; set; }
             public string city { get; set; }
+            public string town { get; set; }
+            public string village { get; set; }
+            public string hamlet { get; set; }
             public string municipality { get; set; }
             public string county { get; set; }
             public string state { get; set; }

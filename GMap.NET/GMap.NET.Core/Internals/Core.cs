@@ -18,13 +18,13 @@ namespace GMap.NET.Internals
     /// </summary>
     internal sealed class Core : IDisposable
     {
-        internal PointLatLng _position;
-        private GPoint _positionPixel;
+        internal    PointLatLng _position;
+        private     GPoint _positionPixel;
 
-        internal GPoint RenderOffset;
-        internal GPoint CenterTileXYLocation;
-        private GPoint _centerTileXYLocationLast;
-        private GPoint _dragPoint;
+        internal    GPoint RenderOffset;
+        internal    GPoint CenterTileXYLocation;
+        private     GPoint _centerTileXYLocationLast;
+        private     GPoint _dragPoint;
 
         /// <summary>
         /// Throttling mechanism for UpdateBounds during drag operations.
@@ -372,6 +372,11 @@ namespace GMap.NET.Internals
         ///     occurs on map type changed
         /// </summary>
         public event MapTypeChanged OnMapTypeChanged;
+
+        /// <summary>
+        ///     Map pan limits. If set, map cannot be dragged outside this boundary.
+        /// </summary>
+        public RectLatLng? BoundsOfMap = null;
 
         readonly List<Thread> _gThreadPool = new List<Thread>();
 
@@ -755,7 +760,35 @@ namespace GMap.NET.Internals
         /// <param name="offset"></param>
         public void DragOffset(GPoint offset)
         {
-            RenderOffset.Offset(offset);
+            var newOffset = RenderOffset;
+            newOffset.Offset(offset);
+            
+            // Check bounds before applying offset
+            if (BoundsOfMap.HasValue)
+            {
+                var oldOffset = RenderOffset;
+                RenderOffset = newOffset;
+                var testPosition = FromLocalToLatLng(Width / 2, Height / 2);
+                RenderOffset = oldOffset;
+                
+                if (!BoundsOfMap.Value.Contains(testPosition))
+                {
+                    // Clamp position to bounds
+                    var clampedLat = Math.Max(BoundsOfMap.Value.Bottom, Math.Min(BoundsOfMap.Value.Top, testPosition.Lat));
+                    var clampedLng = Math.Max(BoundsOfMap.Value.Left, Math.Min(BoundsOfMap.Value.Right, testPosition.Lng));
+                    
+                    // If position would be outside, adjust the offset to stay at boundary
+                    if (testPosition.Lat != clampedLat || testPosition.Lng != clampedLng)
+                    {
+                        // Calculate pixel position for clamped lat/lng
+                        var clampedPixel = Provider.Projection.FromLatLngToPixel(new PointLatLng(clampedLat, clampedLng), Zoom);
+                        newOffset.X = Width / 2 - clampedPixel.X + CompensationOffset.X;
+                        newOffset.Y = Height / 2 - clampedPixel.Y + CompensationOffset.Y;
+                    }
+                }
+            }
+            
+            RenderOffset = newOffset;
 
             UpdateCenterTileXYLocation();
 
@@ -783,50 +816,86 @@ namespace GMap.NET.Internals
         ///     drag map
         /// </summary>
         /// <param name="pt"></param>
-                                        public void Drag(GPoint pt)
-                                        {
-                                            RenderOffset.X = pt.X - _dragPoint.X;
-                                            RenderOffset.Y = pt.Y - _dragPoint.Y;
+        public void Drag(GPoint pt)
+        {
+            var newOffsetX = pt.X - _dragPoint.X;
+            var newOffsetY = pt.Y - _dragPoint.Y;
+            
+            // Check bounds before applying offset
+            if (BoundsOfMap.HasValue)
+            {
+                var testOffset = RenderOffset;
+                testOffset.X = newOffsetX;
+                testOffset.Y = newOffsetY;
+                
+                var oldOffset = RenderOffset;
+                RenderOffset = testOffset;
+                var testPosition = FromLocalToLatLng(Width / 2, Height / 2);
+                RenderOffset = oldOffset;
+                
+                if (!BoundsOfMap.Value.Contains(testPosition))
+                {
+                    // Clamp position to bounds
+                    var clampedLat = Math.Max(BoundsOfMap.Value.Bottom, Math.Min(BoundsOfMap.Value.Top, testPosition.Lat));
+                    var clampedLng = Math.Max(BoundsOfMap.Value.Left, Math.Min(BoundsOfMap.Value.Right, testPosition.Lng));
+                    
+                    // If position would be outside, adjust the offset to stay at boundary
+                    if (testPosition.Lat != clampedLat || testPosition.Lng != clampedLng)
+                    {
+                        // Calculate pixel position for clamped lat/lng
+                        var clampedPixel = Provider.Projection.FromLatLngToPixel(new PointLatLng(clampedLat, clampedLng), Zoom);
+                        newOffsetX = Width / 2 - clampedPixel.X + CompensationOffset.X;
+                        newOffsetY = Height / 2 - clampedPixel.Y + CompensationOffset.Y;
+                        
+                        // Update drag point to prevent drift
+                        _dragPoint.X = pt.X - newOffsetX;
+                        _dragPoint.Y = pt.Y - newOffsetY;
+                    }
+                }
+            }
+            
+            RenderOffset.X = newOffsetX;
+            RenderOffset.Y = newOffsetY;
 
-                                            UpdateCenterTileXYLocation();
+            UpdateCenterTileXYLocation();
 
-                                            if (CenterTileXYLocation != _centerTileXYLocationLast)
-                                            {
-                                                var now = DateTime.Now;
-                                                var timeSinceLastUpdate = (now - _lastUpdateBoundsTime).TotalMilliseconds;
+            if (CenterTileXYLocation != _centerTileXYLocationLast)
+            {
+                var now = DateTime.Now;
+                var timeSinceLastUpdate = (now - _lastUpdateBoundsTime).TotalMilliseconds;
 
-                                                // Throttle UpdateBounds during drag - only call if enough time has passed
-                                                if (timeSinceLastUpdate >= _updateBoundsThrottleMs)
-                                                {
-                                                    _centerTileXYLocationLast = CenterTileXYLocation;
-                                                    _pendingCenterTileUpdate = GPoint.Empty;
-                                                    _lastUpdateBoundsTime = now;
-                                                    UpdateBounds();
-                        #if DEBUG
-                                                    Debug.WriteLine($"  [THROTTLE] UpdateBounds executed (interval: {timeSinceLastUpdate:F0}ms)");
-                        #endif
-                                                }
-                                                else
-                                                {
-                                                    // Store pending update for later
-                                                    _pendingCenterTileUpdate = CenterTileXYLocation;
-                        #if DEBUG
-                                                    Debug.WriteLine($"  [THROTTLE] UpdateBounds skipped (next in {_updateBoundsThrottleMs - timeSinceLastUpdate:F0}ms)");
-                        #endif
-                                                }
-                                            }
+                // Throttle UpdateBounds during drag - only call if enough time has passed
+                if (timeSinceLastUpdate >= _updateBoundsThrottleMs)
+                {
+                    _centerTileXYLocationLast = CenterTileXYLocation;
+                    _pendingCenterTileUpdate = GPoint.Empty;
+                    _lastUpdateBoundsTime = now;
+                    UpdateBounds();
+#if DEBUG
+                    Debug.WriteLine($"  [THROTTLE] UpdateBounds executed (interval: {timeSinceLastUpdate:F0}ms)");
+#endif
+                }
+                else
+                {
+                    // Store pending update for later
+                    _pendingCenterTileUpdate = CenterTileXYLocation;
+#if DEBUG
+                    Debug.WriteLine($"  [THROTTLE] UpdateBounds skipped (next in {_updateBoundsThrottleMs - timeSinceLastUpdate:F0}ms)");
+#endif
+                }
+            }
 
-                                            if (IsDragging)
-                                            {
-                                                LastLocationInBounds = Position;
-                                                Position = FromLocalToLatLng(Width / 2, Height / 2);
+            if (IsDragging)
+            {
+                LastLocationInBounds = Position;
+                Position = FromLocalToLatLng(Width / 2, Height / 2);
 
-                                                if (OnMapDrag != null)
-                                                {
-                                                    OnMapDrag();
-                                                }
-                                            }
-                                        }
+                if (OnMapDrag != null)
+                {
+                    OnMapDrag();
+                }
+            }
+        }
 
         /// <summary>
         ///     cancels tile loaders and bounds checker

@@ -34,6 +34,7 @@
 	<ItemGroup>
 		<PackageReference Include="CoordinateSharp" Version="2.8.1.1" />
 		<PackageReference Include="Accord.Math" Version="3.8.2-alpha" />
+		<PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -46,6 +47,10 @@
 		<None Include="C:\Users\Lion\.nuget\packages\accord\3.8.2-alpha\build\Accord.dll.config">
 			<Visible>False</Visible>
 		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="MDs\" />
 	</ItemGroup>
 
 </Project>

@@ -4,7 +4,7 @@
         <AssemblyTitle>Demo.WindowsForms</AssemblyTitle>
         <Description>Demo for GMap.NET.WindowsForms</Description>
         <Product>Demo.WindowsForms</Product>
-		<TargetFrameworks>net48;netcoreapp3.1;net10.0-windows</TargetFrameworks>
+		<TargetFrameworks>net481;netcoreapp3.1;net10.0-windows</TargetFrameworks>
         <UseWindowsForms>true</UseWindowsForms>
         <OutputType>WinExe</OutputType>
         <SignAssembly>False</SignAssembly>
@@ -28,7 +28,8 @@
 	</PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="System.Data.SQLite" Version="1.0.117" />
+        <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
+        <PackageReference Include="System.Data.SQLite" Version="2.0.2" />
     </ItemGroup>
 
     <ItemGroup>

@@ -3,11 +3,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MapsWPF"
         Height="775" Width="888"
-        WindowStartupLocation="CenterScreen"
-        WindowState="Maximized"
+        WindowStartupLocation="Manual"
         KeyboardNavigation.DirectionalNavigation="Once"
         xmlns:src="clr-namespace:MapsWPF"
-        MinHeight="775" MinWidth="600" KeyUp="Window_KeyUp" PreviewKeyDown="Window_PreviewKeyDown">
+        MinHeight="775" MinWidth="600" KeyUp="Window_KeyUp" PreviewKeyDown="Window_PreviewKeyDown" Closing="MainWindow_Closing">
     
     <Grid>
 
@@ -29,12 +28,14 @@
                 <RowDefinition Height="auto" />
                 <RowDefinition Height="auto" />
                 <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
+                <RowDefinition Height="auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="auto" />
             </Grid.RowDefinitions>
 
             <!--COORDINATES-->
-            <GroupBox Grid.Row="0" Header="Coordinates" Name="GroupBoxCoordinates">
+            <Expander Grid.Row="0" Header="Coordinates" Name="ExpanderCoordinates" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -46,30 +47,35 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <Label Height="28" Name="LabelLatLng" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="2"  VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelLatLng" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="2"  VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
                                 Lat=0.00000000, Lng=0.00000000
                             </Label>
 
-                            <Label Height="28" Name="LabelMGRS" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelMGRS" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
                                 MGRS:
                             </Label>
 
-                            <Label Height="28" Name="LabelUTM" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
+                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelUTM" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
                                 UTM:
                             </Label>
 
-                            <Label Height="28" Name="LabelZoom" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="3" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="2,0,0,0">
+                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelZoom" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="3" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
                                 Zoom:
+                            </Label>
+
+                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelDistance" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0" Foreground="Blue" FontWeight="Bold">
+                                Distance: 0 m
                             </Label>
 
 
                         </Grid>
-                    </GroupBox>
+                    </Expander>
 
             <!--GMAP-->
-            <GroupBox Grid.Row="1" Header="Gmap" Name="GroupBox2" >
+            <Expander Grid.Row="1" Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -100,13 +106,16 @@
                     <!-- Checkboxes -->
                     <StackPanel Grid.Column="0" Grid.Row="2" Margin="5,5,0,5" Orientation="Horizontal">
                         <CheckBox Name="CheckBoxDragMap" IsChecked="True" Height="16"  Checked="checkBoxDragMap_Checked" Unchecked="checkBoxDragMap_Unchecked">
-                            Drag Map
+                            Drag
                         </CheckBox>
                         <CheckBox  Margin="5,0,0,0" Name="CheckBoxCurrentMarker" Height="16" IsChecked="True" Checked="checkBoxCurrentMarker_Checked" Unchecked="checkBoxCurrentMarker_Unchecked">
                             Marker
                         </CheckBox>
                         <CheckBox  Margin="5,0,0,0" Name="CheckBoxDebug" Height="16" Checked="checkBox1_Checked" Unchecked="checkBox1_Unchecked">
                             Grid
+                        </CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxShowCoordinates" Height="16" Checked="CheckBoxShowCoordinates_Checked" Unchecked="CheckBoxShowCoordinates_Unchecked">
+                            Coord
                         </CheckBox>
                     </StackPanel>
 
@@ -116,10 +125,10 @@
                     </Button>
 
                 </Grid>
-            </GroupBox>
+            </Expander>
 
             <!--CACHE-->
-            <GroupBox Grid.Row="2" Header="Cache" Name="GroupBox4">
+            <Expander Grid.Row="2" Header="Cache" Name="ExpanderCache" IsExpanded="True">
                 <Grid>
 
                     <Grid.ColumnDefinitions>
@@ -162,10 +171,10 @@
                             </StackPanel>
 
                         </Grid>
-                    </GroupBox>
+                    </Expander>
 
             <!--GO-->
-            <GroupBox Grid.Row="3" Header="Go" Name="GroupBox1">
+            <Expander Grid.Row="3" Header="Go" Name="ExpanderGo" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -183,17 +192,24 @@
 
                     <!-- LATITUDE -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="0" Height="24" Name="TextBoxLat"  VerticalContentAlignment="Center" />
-                    <!-- LABEL -->
-                    <Label Margin="0,0,5,0" Grid.Row="0" Grid.Column="2"  HorizontalAlignment="Center" Name="Label2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
-                        Lat
-                    </Label>
+                    <!-- LABEL + BUTTON -->
+                    <StackPanel Margin="0,0,5,0" Grid.Row="0" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Label Name="Label2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Content="Lat=" />
+                        <Button Name="ButtonInsertCoords" Click="buttonInsertCoords_Click" Width="24" Height="24" Margin="4,0,0,0" ToolTip="Вставити поточні координати">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE707;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                    </StackPanel>
 
                     <!-- LONGITUDE -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="1" Name="TextBoxLng" Height="24" HorizontalContentAlignment="Left" VerticalContentAlignment="Center"/>
-                    <!-- LABEL -->
-                    <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2"  HorizontalAlignment="Center" Name="Label3" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
-                        Lng
-                    </Label>
+                    <!-- LABEL + BUTTON -->
+                    <StackPanel Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Label Name="Label3" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Content="Lng" />
+                        <!-- Provided for symmetry; reuses same button functionality -->
+                        <Button Name="ButtonInsertCoordsRight" Click="buttonInsertCoords_Click" Width="24" Height="24" Margin="4,0,0,0" ToolTip="Вставити поточні координати">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE707;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                    </StackPanel>
 
                     <!-- GEO -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">
@@ -222,9 +238,10 @@
                     </Button>
 
                 </Grid>
-            </GroupBox>
+            </Expander>
 
-            <!--MARKERS-->
+            <!--MARKERS REMOVED-->
+            <!--
             <GroupBox Grid.Row="4" Header="Markers" Name="Markers">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -247,17 +264,18 @@
 
                 </Grid>
             </GroupBox>
+            -->
 
             <!--RAY-->
-            <GroupBox Grid.Row="5" Header="Ray" Name="Ray">
+            <Expander Grid.Row="5" Header="Ray" Name="ExpanderRay" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -271,6 +289,7 @@
                              Height="24" Margin="5,5,5,0" 
                              VerticalContentAlignment="Center"
                              TextChanged="TextBoxAttackAngle_TextChanged" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="°" VerticalAlignment="Center" Margin="0,5,5,0"/>
 
                     <!-- Ray Length -->
                     <Label Grid.Row="1" Grid.Column="0" Content="Довжина променя:" Margin="5,5,5,0" />
@@ -278,43 +297,80 @@
                              Height="24" Margin="5,5,5,0"
                              VerticalContentAlignment="Center"
                              TextChanged="TextBoxRayLength_TextChanged" />
-
-                    <!-- Sector Radius -->
-                    <Label Grid.Row="2" Grid.Column="0" Content="Радіус сектору:" Margin="5,5,5,0" />
-                    <TextBox Grid.Row="2" Grid.Column="1" Name="TextBoxSectorRadius" 
-                             Height="24" Margin="5,5,5,0"
-                             VerticalContentAlignment="Center"
-                             TextChanged="TextBoxSectorRadius_TextChanged" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="M" VerticalAlignment="Center" Margin="0,5,5,0"/>
 
                     <!-- Sector Width -->
-                    <Label Grid.Row="3" Grid.Column="0" Content="Ширина сектору:" Margin="5,5,5,0" />
-                    <TextBox Grid.Row="3" Grid.Column="1" Name="TextBoxSectorWidth" 
+                    <Label Grid.Row="2" Grid.Column="0" Content="Ширина сектору:" Margin="5,5,5,0" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Name="TextBoxSectorWidth" 
                              Height="24" Margin="5,5,5,0"
                              VerticalContentAlignment="Center"
                              TextChanged="TextBoxSectorWidth_TextChanged" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="°" VerticalAlignment="Center" Margin="0,5,5,0"/>
 
                     <!-- Rotate step -->
-                    <Label Grid.Row="4" Grid.Column="0" Content="Крок повороту:" Margin="5,5,5,0" />
-                    <TextBox Grid.Row="4" Grid.Column="1" Name="TextBoxRotateStep"
+                    <Label Grid.Row="3" Grid.Column="0" Content="Крок повороту:" Margin="5,5,5,0" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Name="TextBoxRotateStep"
                              Height="24" Margin="5,5,5,0"
                              VerticalContentAlignment="Center"
                              TextChanged="TextBoxRotateStep_TextChanged" />
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="°" VerticalAlignment="Center" Margin="0,5,5,0"/>
 
                     <!-- Rotate shift step (when Shift pressed) -->
-                    <Label Grid.Row="5" Grid.Column="0" Content="Кроку повороту (Shift):" Margin="5,5,5,5" />
-                    <TextBox Grid.Row="5" Grid.Column="1" Name="TextBoxRotateShiftStep"
+                    <Label Grid.Row="4" Grid.Column="0" Content="Кроку повороту (Shift):" Margin="5,5,5,5" />
+                    <TextBox Grid.Row="4" Grid.Column="1" Name="TextBoxRotateShiftStep"
                              Height="24" Margin="5,5,5,5"
                              VerticalContentAlignment="Center"
                              TextChanged="TextBoxRotateShiftStep_TextChanged" />
+                    <TextBlock Grid.Row="4" Grid.Column="2" Text="°" VerticalAlignment="Center" Margin="0,5,5,5"/>
 
                 </Grid>
-            </GroupBox>
+            </Expander>
+
+            <!--TARGET-->
+            <Expander Grid.Row="6" Header="Target" Name="ExpanderTarget" IsExpanded="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Label Grid.Row="0" Name="LabelTargetLocation" Margin="5" Content="Населений пункт: -" />
+                    <Label Grid.Row="1" Name="LabelTargetAddress" Margin="5,0,5,5" Content="Адреса: -" Foreground="Gray" FontSize="11" />
+                    <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
+                </Grid>
+            </Expander>
+            
+            <!--MAP LIMITS-->
+            <Expander Grid.Row="7" Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <CheckBox Grid.Row="0" Name="CheckBoxLimitMap" Content="Enable Limits" Margin="5" Checked="CheckBoxLimitMap_Checked" Unchecked="CheckBoxLimitMap_Unchecked"/>
+                    
+                    <StackPanel Grid.Row="1" Orientation="Vertical" Margin="5,0,5,5">
+                         <Label Content="Top Left (Lat, Lng):" Padding="0"/>
+                         <TextBox Name="TextBoxLimitTopLeft" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxLimitTopLeft_TextChanged"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Orientation="Vertical" Margin="5,0,5,5">
+                         <Label Content="Bottom Right (Lat, Lng):" Padding="0"/>
+                         <TextBox Name="TextBoxLimitBottomRight" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxLimitBottomRight_TextChanged"/>
+                    </StackPanel>
+                </Grid>
+            </Expander>
 
             <!--SPACER-->
-            <Grid Grid.Row="6"/>
+            <Grid Grid.Row="8"/>
         
             <!--LOADING-->
-            <GroupBox Grid.Row="7" Margin="0,0,0,5" Header="Loading" Name="GroupBox3">
+            <GroupBox Grid.Row="9" Margin="0,0,0,5" Header="Loading" Name="GroupBox3">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />

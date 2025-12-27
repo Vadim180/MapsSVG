@@ -565,7 +565,17 @@ namespace GMap.NET.WindowsPresentation
         /// <summary>
         ///     map boundaries
         /// </summary>
-        public RectLatLng? BoundsOfMap = null;
+        private RectLatLng? _boundsOfMap = null;
+        
+        public RectLatLng? BoundsOfMap
+        {
+            get { return _boundsOfMap; }
+            set 
+            { 
+                _boundsOfMap = value;
+                _core.BoundsOfMap = value;
+            }
+        }
 
         /// <summary>
         ///     occurs when mouse selection is changed
@@ -1528,11 +1538,6 @@ namespace GMap.NET.WindowsPresentation
                     drawingContext.PushTransform(MapTranslateTransform);
                     {
                         DrawMap(drawingContext);
-
-#if DEBUG
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(-20, 0), new Point(20, 0));
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(0, -20), new Point(0, 20));
-#endif
                     }
                     drawingContext.Pop();
                     drawingContext.Pop();
@@ -1542,10 +1547,6 @@ namespace GMap.NET.WindowsPresentation
                     drawingContext.PushTransform(MapTranslateTransform);
                     {
                         DrawMap(drawingContext);
-#if DEBUG
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(-20, 0), new Point(20, 0));
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(0, -20), new Point(0, 20));
-#endif
                     }
                     drawingContext.Pop();
                 }
