@@ -3,8 +3,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.3.11218.70
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Maps", "Maps\Maps.csproj", "{E7FDAE3D-5245-6115-9E90-556D1165ED51}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.Core", "GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj", "{4E133D2D-07FD-C68B-2DBA-797A081445B2}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "GMap.NET", "GMap.NET", "{FC7D783C-052F-6D74-7626-11FB310BEB27}"
@@ -19,10 +17,6 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{E7FDAE3D-5245-6115-9E90-556D1165ED51}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{E7FDAE3D-5245-6115-9E90-556D1165ED51}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{E7FDAE3D-5245-6115-9E90-556D1165ED51}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{E7FDAE3D-5245-6115-9E90-556D1165ED51}.Release|Any CPU.Build.0 = Release|Any CPU
 		{4E133D2D-07FD-C68B-2DBA-797A081445B2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{4E133D2D-07FD-C68B-2DBA-797A081445B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4E133D2D-07FD-C68B-2DBA-797A081445B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -41,7 +35,6 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{4E133D2D-07FD-C68B-2DBA-797A081445B2} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
-		{14AB1765-93EB-BCA1-E615-59B82D62D562} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
 		{CC2DF5F4-5590-AF74-DE67-809B455102AA} = {FC7D783C-052F-6D74-7626-11FB310BEB27}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution

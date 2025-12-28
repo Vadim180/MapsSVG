@@ -1,3 +1,11 @@
+using GMap.NET;
+using GMap.NET.MapProviders;
+using GMap.NET.WindowsPresentation;
+
+using MapsWPF.CustomMarkers;
+using MapsWPF.Models;
+using MapsWPF.Services;
+
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -7,6 +15,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.NetworkInformation;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -16,13 +26,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Demo.WindowsForms;
-using GMap.NET;
-using GMap.NET.MapProviders;
-using GMap.NET.WindowsPresentation;
-using MapsWPF.CustomMarkers;
-using MapsWPF.Models;
-using MapsWPF.Services;
 
 namespace MapsWPF
 {
@@ -69,7 +72,7 @@ namespace MapsWPF
             _cacheStatsUpdateTimer.Tick += CacheStatsUpdateTimer_Tick;
 
             // set cache mode only if no internet
-            if (!Stuff.PingNetwork("google.com"))
+            if (!PingNetwork("google.com"))
             {
                 MainMap.Manager.Mode = AccessMode.CacheOnly;
                 MessageBox.Show("No internet connection available, going to CacheOnly mode.",
@@ -1450,6 +1453,30 @@ namespace MapsWPF
         {
             MainMap.Manager.Mode = (AccessMode)ComboBoxMode.SelectedItem;
         }
+        
+        public static bool PingNetwork(string hostNameOrAddress)
+        {
+            bool pingStatus;
+
+            using (var p = new Ping())
+            {
+                byte[] buffer = Encoding.ASCII.GetBytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                int timeout = 5000; // 5sg
+
+                try
+                {
+                    var reply = p.Send(hostNameOrAddress, timeout, buffer);
+                    pingStatus = reply.Status == IPStatus.Success;
+                }
+                catch (Exception)
+                {
+                    pingStatus = false;
+                }
+            }
+
+            return pingStatus;
+        }
+
     }
 
     public class MapValidationRule : ValidationRule

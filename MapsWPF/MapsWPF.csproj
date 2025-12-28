@@ -21,12 +21,6 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<Compile Include="..\Demo.WindowsForms\Source\DemoStuff.cs">
-			<Link>DemoStuff.cs</Link>
-		</Compile>
-	</ItemGroup>
-
-	<ItemGroup>
 		<ProjectReference Include="..\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj" />
 		<ProjectReference Include="..\GMap.NET\GMap.NET.WindowsPresentation\GMap.NET.WindowsPresentation.csproj" />
 	</ItemGroup>
