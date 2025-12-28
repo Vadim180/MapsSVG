@@ -125,7 +125,8 @@ namespace MapsWPF
                 fd,
                 _tf,
                 12,
-                Brushes.Red);
+                Brushes.Red,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
             // Правий нижній кут карти з відступом 10 пікселів
             drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 10));
@@ -280,8 +281,9 @@ namespace MapsWPF
                 // Build rows (label / value) so we can align values in a column
                 var rows = new System.Collections.Generic.List<(string Label, string Value)>();
                 rows.Add(("Lat/Lng:", $"{lat:F6}, {lng:F6}"));
-                if (!string.IsNullOrEmpty(utm)) rows.Add(("UTM:", utm));
+                // Show MGRS above UTM for better readability in overlay
                 if (!string.IsNullOrEmpty(mgrs)) rows.Add(("MGRS:", mgrs));
+                if (!string.IsNullOrEmpty(utm)) rows.Add(("UTM:", utm));
                 rows.Add(("Кут:", AttackAngle.ToString("F1", CultureInfo.InvariantCulture) + "°"));
 
                 if (TargetDistance >= 0)
@@ -303,8 +305,9 @@ namespace MapsWPF
 
                 foreach (var row in rows)
                 {
-                    var lft = new FormattedText(row.Label, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush);
-                    var vft = new FormattedText(row.Value, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush);
+                    var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                    var lft = new FormattedText(row.Label, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush, pixelsPerDip);
+                    var vft = new FormattedText(row.Value, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush, pixelsPerDip);
                     labelFts.Add(lft);
                     valueFts.Add(vft);
                     double rh = System.Math.Max(lft.Height, vft.Height);

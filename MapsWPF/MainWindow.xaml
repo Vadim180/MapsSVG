@@ -12,14 +12,18 @@
 
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="250" />
+            <ColumnDefinition Width="5" />
+            <ColumnDefinition Width="250" x:Name="RightColumn" />
         </Grid.ColumnDefinitions>
 
         <!--MAP-->
-        <src:Map x:Name="MainMap" Zoom="7" MaxZoom="24" MinZoom="1" Grid.Column="0" Margin="0,0,5,0" />
+        <src:Map x:Name="MainMap" Zoom="7" MaxZoom="24" MinZoom="1" Grid.Column="0" Margin="0,0,0,0" />
+
+        <!-- SPLITTER -->
+        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ShowsPreview="True" ResizeBehavior="PreviousAndNext" DragCompleted="ColumnSplitter_DragCompleted"/>
 
         <!--SETTINGS-->
-        <Grid Grid.Column="1" Margin="0,0,5,0">
+        <Grid Grid.Column="2" Margin="0,0,5,0" x:Name="RightSettingsGrid">
 
             <Grid.RowDefinitions>
                 <RowDefinition Height="auto" />
@@ -36,46 +40,82 @@
 
             <!--COORDINATES-->
             <Expander Grid.Row="0" Header="Coordinates" Name="ExpanderCoordinates" IsExpanded="True">
-                <Grid>
+                <Grid Margin="2" Grid.IsSharedSizeScope="True">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels"/>
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
+                    <!--Lat and Lng in one row-->
+                    <Grid Grid.Row="0" Grid.ColumnSpan="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels"/>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels"/>
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
 
-                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelLatLng" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="2"  VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
-                                Lat=0.00000000, Lng=0.00000000
-                            </Label>
+                        <!-- Lat -->
+                        <Label Grid.Column="0" Content="Lat:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                        <Label Grid.Column="1" Name="LabelLatValue" Content="0.0" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
-                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelMGRS" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
-                                MGRS:
-                            </Label>
+                        <!-- Lng -->
+                        <Label Grid.Column="2" Content="Lng:" Foreground="Gray" Margin="10,0,0,0" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                        <Label Grid.Column="3" Name="LabelLngValue" Content="0.0" Margin="10,0,0,0" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
-                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelUTM" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
-                                UTM:
-                            </Label>
+                    </Grid>
 
-                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelZoom" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="3" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0">
-                                Zoom:
-                            </Label>
+                    <!-- MGRS -->
+                    <Label Grid.Row="2" Grid.Column="0" Content="MGRS:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="2" Grid.Column="1" Name="LabelMGRSValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
-                            <Label Height="Auto" Padding="5,0,5,0" Name="LabelDistance" HorizontalAlignment="Left" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" Margin="2,0,0,0" Foreground="Blue" FontWeight="Bold">
-                                Distance: 0 m
-                            </Label>
+                    <!-- UTM -->
+                    <Label Grid.Row="3" Grid.Column="0" Content="UTM:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="3" Grid.Column="1" Name="LabelUTMValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
+                    <!-- Zoom -->
+                    <Label Grid.Row="4" Grid.Column="0" Content="Zoom:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="4" Grid.Column="1" Name="LabelZoomValue" Content="0" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
-                        </Grid>
+                    <!-- Distance -->
+                    <Label Grid.Row="5" Grid.Column="0" Content="Dist:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Grid Grid.Row="5" Grid.Column="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Label Grid.Column="0" Name="LabelDistanceValue" Content="0 m" Foreground="Blue" FontWeight="Bold" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
+
+                        <Label Grid.Column="1" Name="LabelAngleValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" Foreground="Red" FontWeight="Bold" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Кут атаки" HorizontalAlignment="Right"/>
+                    </Grid>
+                </Grid>
                     </Expander>
 
+            <!--TARGET-->
+            <Expander Grid.Row="1" Header="Target" Name="ExpanderTarget" IsExpanded="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Label Grid.Row="0" Name="LabelTargetLocation" Margin="0" Content="" Foreground="DarkOrange" />
+                    <Label Grid.Row="1" Name="LabelTargetAddress" Margin="0" Content="" Foreground="Gray" FontSize="11" />
+                    <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
+                </Grid>
+            </Expander>
+
             <!--GMAP-->
-            <Expander Grid.Row="1" Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
+            <Expander Grid.Row="2" Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -128,7 +168,7 @@
             </Expander>
 
             <!--CACHE-->
-            <Expander Grid.Row="2" Header="Cache" Name="ExpanderCache" IsExpanded="True">
+            <Expander Grid.Row="3" Header="Cache" Name="ExpanderCache" IsExpanded="True">
                 <Grid>
 
                     <Grid.ColumnDefinitions>
@@ -174,7 +214,7 @@
                     </Expander>
 
             <!--GO-->
-            <Expander Grid.Row="3" Header="Go" Name="ExpanderGo" IsExpanded="True">
+            <Expander Grid.Row="4" Header="Go" Name="ExpanderGo" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -192,24 +232,13 @@
 
                     <!-- LATITUDE -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="0" Height="24" Name="TextBoxLat"  VerticalContentAlignment="Center" />
-                    <!-- LABEL + BUTTON -->
-                    <StackPanel Margin="0,0,5,0" Grid.Row="0" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Label Name="Label2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Content="Lat=" />
-                        <Button Name="ButtonInsertCoords" Click="buttonInsertCoords_Click" Width="24" Height="24" Margin="4,0,0,0" ToolTip="Вставити поточні координати">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE707;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Button>
-                    </StackPanel>
+                    <!-- LABEL -->
+                    <Label Margin="0,0,5,0" Grid.Row="0" Grid.Column="2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label2" Content="Lat" />
 
                     <!-- LONGITUDE -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="1" Name="TextBoxLng" Height="24" HorizontalContentAlignment="Left" VerticalContentAlignment="Center"/>
-                    <!-- LABEL + BUTTON -->
-                    <StackPanel Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Label Name="Label3" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Content="Lng" />
-                        <!-- Provided for symmetry; reuses same button functionality -->
-                        <Button Name="ButtonInsertCoordsRight" Click="buttonInsertCoords_Click" Width="24" Height="24" Margin="4,0,0,0" ToolTip="Вставити поточні координати">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE707;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Button>
-                    </StackPanel>
+                    <!-- LABEL -->
+                    <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label3" Content="Lng" />
 
                     <!-- GEO -->
                     <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">
@@ -239,32 +268,6 @@
 
                 </Grid>
             </Expander>
-
-            <!--MARKERS REMOVED-->
-            <!--
-            <GroupBox Grid.Row="4" Header="Markers" Name="Markers">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <Button Margin="5,5,5,0" Grid.Column="0" Grid.Row="0" Name="Button8" Height="24" Click="button8_Click">Add Marker</Button>
-                    <Button Margin="5,5,5,0" Grid.Column="1" Grid.Row="0" Name="Button10" Height="24" Click="button10_Click">
-                        Clear All
-                    </Button>
-                    <CheckBox Margin="5,5,5,5" Grid.Column="0" Grid.Row="1" Name="CheckBoxPlace" Height="16" IsChecked="True">
-                        place info
-                    </CheckBox>
-
-                </Grid>
-            </GroupBox>
-            -->
 
             <!--RAY-->
             <Expander Grid.Row="5" Header="Ray" Name="ExpanderRay" IsExpanded="True">
@@ -326,22 +329,10 @@
                 </Grid>
             </Expander>
 
-            <!--TARGET-->
-            <Expander Grid.Row="6" Header="Target" Name="ExpanderTarget" IsExpanded="True">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Label Grid.Row="0" Name="LabelTargetLocation" Margin="5" Content="Населений пункт: -" />
-                    <Label Grid.Row="1" Name="LabelTargetAddress" Margin="5,0,5,5" Content="Адреса: -" Foreground="Gray" FontSize="11" />
-                    <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
-                </Grid>
-            </Expander>
+
             
             <!--MAP LIMITS-->
-            <Expander Grid.Row="7" Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
+            <Expander Grid.Row="6" Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -350,9 +341,11 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <CheckBox Grid.Row="0" Name="CheckBoxLimitMap" Content="Enable Limits" Margin="5" Checked="CheckBoxLimitMap_Checked" Unchecked="CheckBoxLimitMap_Unchecked"/>
+                    <CheckBox Grid.Row="0" Name="CheckBoxLimitMap" Content="Enable Map Limits" Margin="5" Checked="CheckBoxLimitMap_Checked" Unchecked="CheckBoxLimitMap_Unchecked"/>
                     
                     <StackPanel Grid.Row="1" Orientation="Vertical" Margin="5,0,5,5">
                          <Label Content="Top Left (Lat, Lng):" Padding="0"/>
@@ -362,6 +355,24 @@
                     <StackPanel Grid.Row="2" Orientation="Vertical" Margin="5,0,5,5">
                          <Label Content="Bottom Right (Lat, Lng):" Padding="0"/>
                          <TextBox Name="TextBoxLimitBottomRight" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxLimitBottomRight_TextChanged"/>
+                    </StackPanel>
+
+                    <Separator Grid.Row="3" Margin="5" />
+
+                    <StackPanel Grid.Row="4" Orientation="Vertical" Margin="5,0,5,5">
+                        <CheckBox Name="CheckBoxZoomLimits" Content="Enable Zoom Limits" Margin="0,0,0,5" Checked="CheckBoxZoomLimits_Checked" Unchecked="CheckBoxZoomLimits_Unchecked"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Label Grid.Column="0" Content="Min:" Padding="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Name="TextBoxMinZoom" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxMinZoom_TextChanged"/>
+                            <Label Grid.Column="2" Content="Max:" Padding="5,0,5,0" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="3" Name="TextBoxMaxZoom" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxMaxZoom_TextChanged"/>
+                        </Grid>
                     </StackPanel>
                 </Grid>
             </Expander>
@@ -377,9 +388,24 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <ProgressBar Margin="5,5,5,5" Grid.Row="0" Name="ProgressBar1" Height="10" IsIndeterminate="True"  />
-                    <Label Margin="0,0,5,0" Height="24" Name="LabelCacheStats" Grid.Row="1" VerticalAlignment="Center" FontSize="10" Foreground="Gray">
-                        Cache: RAM: 0 SQLite: 0 Net: 0
-                    </Label>
+                    <Grid Grid.Row="1" Margin="2,0,2,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        
+                        <Label Grid.Row="0" Grid.Column="0" Name="LabelStatsRam" Content="RAM: 0" FontSize="10" Foreground="DarkGreen" Padding="0,0,5,0" ToolTip="Tiles loaded from RAM"/>
+                        <Label Grid.Row="0" Grid.Column="1" Name="LabelStatsDb" Content="DB: 0" FontSize="10" Foreground="DarkOrange" Padding="0,0,5,0" ToolTip="Tiles loaded from SQLite"/>
+                        <Label Grid.Row="0" Grid.Column="2" Name="LabelStatsNet" Content="Net: 0" FontSize="10" Foreground="DarkRed" Padding="0,0,5,0" ToolTip="Tiles loaded from Network"/>
+                        
+                        <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Name="LabelStatsDbSize" Content="DB Size: 0.0 MB" FontSize="10" Foreground="Gray" Padding="0" ToolTip="Current SQLite DB Size"/>
+                    </Grid>
                 </Grid>
             </GroupBox>
         

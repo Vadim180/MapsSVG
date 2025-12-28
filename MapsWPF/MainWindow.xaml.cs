@@ -1,11 +1,3 @@
-using GMap.NET;
-using GMap.NET.MapProviders;
-using GMap.NET.WindowsPresentation;
-
-using MapsWPF.CustomMarkers;
-using MapsWPF.Models;
-using MapsWPF.Services;
-
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -26,6 +18,12 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using GMap.NET;
+using GMap.NET.MapProviders;
+using GMap.NET.WindowsPresentation;
+using MapsWPF.CustomMarkers;
+using MapsWPF.Models;
+using MapsWPF.Services;
 
 namespace MapsWPF
 {
@@ -49,6 +47,11 @@ namespace MapsWPF
         private int _lastSqliteCache = -1;
         private int _lastNetwork = -1;
 
+        // Tile load counters
+        private int _tilesLoadedFromRam = 0;
+        private int _tilesLoadedFromDisk = 0;
+        private int _tilesLoadedFromNet = 0;
+
 
         private static readonly HttpClient _httpClient = new HttpClient();
 
@@ -71,8 +74,17 @@ namespace MapsWPF
             _cacheStatsUpdateTimer.Interval = TimeSpan.FromMilliseconds(500);
             _cacheStatsUpdateTimer.Tick += CacheStatsUpdateTimer_Tick;
 
-            // set cache mode only if no internet
-            if (!PingNetwork("google.com"))
+            // Load startup settings
+            _settingsManager = new SettingsManager();
+
+            // Apply saved AccessMode (persisted as string) and respect offline mode
+            var savedModeStr = _settingsManager.StartSettings.AccessMode ?? "ServerAndCache";
+            if (!Enum.TryParse<AccessMode>(savedModeStr, true, out var savedMode))
+            {
+                savedMode = MainMap.Manager.Mode;
+            }
+            // If there's no internet available, force CacheOnly
+            if (!PingNetwork("google.com") && savedMode != AccessMode.CacheOnly)
             {
                 MainMap.Manager.Mode = AccessMode.CacheOnly;
                 MessageBox.Show("No internet connection available, going to CacheOnly mode.",
@@ -80,9 +92,13 @@ namespace MapsWPF
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
+            else
+            {
+                MainMap.Manager.Mode = savedMode;
+            }
 
-            // Load startup settings
-            _settingsManager = new SettingsManager();
+            // Reset counters so stats reflect fresh state after applying mode
+            ResetCacheCounters();
 
             // Restore Window State
             if (_settingsManager.StartSettings.WindowWidth.HasValue && _settingsManager.StartSettings.WindowHeight.HasValue)
@@ -133,8 +149,20 @@ namespace MapsWPF
             if (_settingsManager.StartSettings.LimitBottomRightLat.HasValue && _settingsManager.StartSettings.LimitBottomRightLng.HasValue)
                 TextBoxLimitBottomRight.Text = $"{_settingsManager.StartSettings.LimitBottomRightLat.Value.ToString(CultureInfo.InvariantCulture)}, {_settingsManager.StartSettings.LimitBottomRightLng.Value.ToString(CultureInfo.InvariantCulture)}";
 
+            // Map Zoom Limits
+            CheckBoxZoomLimits.IsChecked = _settingsManager.StartSettings.IsZoomLimitsEnabled;
+            TextBoxMinZoom.Text = _settingsManager.StartSettings.MinZoom.ToString();
+            TextBoxMaxZoom.Text = _settingsManager.StartSettings.MaxZoom.ToString();
+
+            // Apply loaded Zoom limits
+            ApplyZoomLimits();
+
             // Initialize map bounds from settings
             UpdateBoundsOfMap();
+
+            // Force update labels
+
+            MainMap_OnCurrentPositionChanged(MainMap.Position);
 
             MainMap.IgnoreMarkerOnMouseWheel = true;
             MainMap.TouchEnabled = false;
@@ -174,7 +202,7 @@ namespace MapsWPF
                     if (_coordinateConverter != null && _coordinateConverter.TryLatLngToUTM(pt.Lat, pt.Lng, out System.Drawing.PointF utm, out int utmZone, out char bandLetter))
                     {
                         var utmStr = _coordinateConverter.FormatUTM(utm, utmZone, bandLetter);
-                        var mgrsStr = _coordinateConverter.FormatShortMGRSFromUTM(utm);
+                        var mgrsStr = _coordinateConverter.FormatShortMGRSFromUTM(utm, utmZone);
                         return (utmStr, mgrsStr);
                     }
                 }
@@ -216,6 +244,17 @@ namespace MapsWPF
 
             CheckBoxCurrentMarker.IsChecked = true;
             CheckBoxDragMap.IsChecked = MainMap.CanDragMap;
+
+            // Apply saved right panel width (pixels) if present
+            try
+            {
+                if (_settingsManager?.StartSettings != null)
+                {
+                    var w = _settingsManager.StartSettings.RightPanelWidth;
+                    if (w > 50) RightColumn.Width = new GridLength(w, GridUnitType.Pixel);
+                }
+            }
+            catch { }
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -250,8 +289,22 @@ namespace MapsWPF
             }
             _settingsManager.StartSettings.WindowState = (int)this.WindowState;
 
+            // Zoom Limits
+            _settingsManager.StartSettings.IsZoomLimitsEnabled = CheckBoxZoomLimits.IsChecked == true;
+            if (int.TryParse(TextBoxMinZoom.Text, out int minZ) && minZ >= 1 && minZ <= 24) _settingsManager.StartSettings.MinZoom = minZ;
+            if (int.TryParse(TextBoxMaxZoom.Text, out int maxZ) && maxZ >= 1 && maxZ <= 24) _settingsManager.StartSettings.MaxZoom = maxZ;
+
             // Map Limits settings are updated in their respective event handlers/setters, 
             // but saving calls SaveStartSettings for all.
+            _settingsManager.StartSettings.AccessMode = MainMap.Manager.Mode.ToString();
+
+            // Save right panel width
+            try
+            {
+                _settingsManager.StartSettings.RightPanelWidth = RightColumn.ActualWidth;
+            }
+            catch { }
+
             _settingsManager.SaveStartSettings();
         }
 
@@ -267,12 +320,44 @@ namespace MapsWPF
 
             UpdateMapAttackZone();
 
+            // Initialize angle label
+            try
+            {
+                if (_settingsManager.AttackSettings.IsSet)
+                {
+                    LabelAngleValue.Content = _settingsManager.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                }
+                else
+                {
+                    LabelAngleValue.Content = "-";
+                }
+            }
+            catch { }
 
             _settingsManager.AttackSettings.PropertyChanged += AttackSettings_PropertyChanged;
         }
 
         private void AttackSettings_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            // Update angle label when attack settings change
+            try
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+                {
+                    if (_settingsManager?.AttackSettings != null && _settingsManager.AttackSettings.IsSet)
+                    {
+                        LabelAngleValue.Content = _settingsManager.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                    }
+                    else
+                    {
+                        LabelAngleValue.Content = "-";
+                    }
+
+                    // Also refresh distance in case Lat/Lng changed
+                    UpdateDistanceDisplay();
+                }));
+            }
+            catch { }
         }
 
         void MainMap_MouseEnter(object sender, MouseEventArgs e)
@@ -308,6 +393,15 @@ namespace MapsWPF
 
 
             TextBoxGeo.Text = _settingsManager.StartSettings.GoGeo;
+
+            // Apply saved limits
+            ValidateAndApplyZoomLimits(); /* or ApplyZoomLimits? Check method name. I added ValidateAndApplyZoomLimits in Step 160. */
+            /* Wait, Step 160 added UpdateZoomLimits? or ApplyZoomLimits? */
+            /* I'll check the file content first? No, I'll trust my memory or use ValidateAndApplyZoomLimits which calls ApplyZoomLimits. */
+
+            // Initialize labels
+
+            MainMap_OnCurrentPositionChanged(MainMap.Position);
 
             RestoreTargetPoint();
 
@@ -381,12 +475,12 @@ namespace MapsWPF
                     MainMap.Markers.Remove(currentMarker);
                     currentMarker = null;
                     MainMap.TargetDistance = -1;
-                    LabelDistance.Content = "Distance: -";
+                    LabelDistanceValue.Content = "Distance: -";
 
                     // Task 1: Clear fields on delete
 
-                    LabelTargetLocation.Content = "Населений пункт: -";
-                    LabelTargetAddress.Content = "Адреса: -";
+                    LabelTargetLocation.Content = "-";
+                    LabelTargetAddress.Content = "-";
                     _settingsManager.StartSettings.LastTargetLocationName = null;
                     _settingsManager.StartSettings.LastTargetAddress = null;
 
@@ -467,7 +561,21 @@ namespace MapsWPF
                 var distM = distKm * 1000.0;
 
 
-                LabelDistance.Content = $"Distance: {distM:F0} m";
+                LabelDistanceValue.Content = $"{distM:F0} m";
+                // Update angle label alongside distance
+                try
+                {
+                    if (_settingsManager.AttackSettings.IsSet)
+                    {
+                        LabelAngleValue.Content = _settingsManager.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                    }
+                    else
+                    {
+                        LabelAngleValue.Content = "-";
+                    }
+                }
+                catch { }
+
                 MainMap.TargetDistance = distM;
                 MainMap.InvalidateVisual();
             }
@@ -481,8 +589,8 @@ namespace MapsWPF
                 Math.Abs(_settingsManager.StartSettings.CachedTargetLng.Value - pos.Lng) < 0.000001 &&
                 !string.IsNullOrEmpty(_settingsManager.StartSettings.LastTargetLocationName))
             {
-                LabelTargetLocation.Content = $"Населений пункт: {_settingsManager.StartSettings.LastTargetLocationName}";
-                LabelTargetAddress.Content = $"Адреса: {_settingsManager.StartSettings.LastTargetAddress}";
+                LabelTargetLocation.Content = $"{_settingsManager.StartSettings.LastTargetLocationName}";
+                LabelTargetAddress.Content = $"{_settingsManager.StartSettings.LastTargetAddress}";
                 return;
             }
 
@@ -684,6 +792,11 @@ namespace MapsWPF
         void MainMap_OnTileLoadComplete(long elapsedMilliseconds)
         {
             MainMap.ElapsedMilliseconds = elapsedMilliseconds;
+
+            // Previously we used an elapsed-based heuristic to guess tile source (RAM/DB/Net).
+            // That was inaccurate (slow disk or GC could be misclassified as network).
+            // Now rely on GMaps counters (updated periodically by GetCacheStats) to show accurate data.
+
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
                 ProgressBar1.Visibility = Visibility.Hidden;
@@ -695,7 +808,82 @@ namespace MapsWPF
 
         private void CacheStatsUpdateTimer_Tick(object sender, EventArgs e)
         {
-            _cacheStatsUpdateTimer.Stop();
+            try
+            {
+                var stats = GetCacheStats();
+                // Assumes new labels exist: LabelStatsRam, LabelStatsDb, LabelStatsNet, LabelStatsDbSize
+                if (LabelStatsRam != null)
+                {
+                    LabelStatsRam.Content = $"RAM: {stats.FromRam}";
+                    LabelStatsDb.Content = $"DB: {stats.FromSQLite}";
+                    LabelStatsNet.Content = $"Net: {stats.FromNetwork}";
+                    LabelStatsDbSize.Content = $"Size: {stats.FileSizeMb:F1} MB";
+                }
+            }
+            catch { }
+        }
+
+        private MapsWPF.CacheStats GetCacheStats()
+        {
+            long memSize = 0;
+            try
+            {
+                // Try to get actual MemoryCache size from the manager instance
+                if (GMaps.Instance.MemoryCache != null)
+                    memSize = (long)GMaps.Instance.MemoryCache.Size;
+            }
+            catch { }
+
+            double dbMb = 0;
+            string dbPath = "";
+            try
+            {
+                // Check both MainMap.Manager (which is GMaps.Instance) and explicit cast
+                var primary = GMaps.Instance.PrimaryCache as GMap.NET.CacheProviders.SQLitePureImageCache;
+                if (primary == null)
+
+                    primary = GMaps.Instance.SecondaryCache as GMap.NET.CacheProviders.SQLitePureImageCache;
+
+                if (primary != null)
+                {
+                    dbPath = primary.CacheLocation;
+                    // If path is a directory, find the largest .gmdb file (likely the main cache)
+                    if (System.IO.Directory.Exists(dbPath))
+                    {
+                        try
+
+                        {
+                            var files = System.IO.Directory.GetFiles(dbPath, "*.gmdb", System.IO.SearchOption.AllDirectories);
+                            if (files.Length > 0)
+                            {
+                                // Assume largest file is the main DB
+                                dbPath = files.OrderByDescending(f => new System.IO.FileInfo(f).Length).First();
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (System.IO.File.Exists(dbPath))
+                        dbMb = new System.IO.FileInfo(dbPath).Length / 1024.0 / 1024.0;
+                }
+            }
+            catch { }
+
+            return new MapsWPF.CacheStats
+            {
+                DbPath = dbPath,
+                FileSizeMb = dbMb,
+                LastModified = System.IO.File.Exists(dbPath) ? System.IO.File.GetLastWriteTime(dbPath) : DateTime.MinValue,
+                TileCount = 0, // GMap doesn't expose tile count in DB cheaply
+                // Use accurate counters from core instead of heuristic timing
+                FromRam = GMaps.Instance.TilesFromMemoryCache,
+                FromSQLite = GMaps.Instance.TilesFromSQLiteCache,
+                FromNetwork = GMaps.Instance.TilesFromNetwork,
+                Mode = GMaps.Instance.Mode.ToString(),
+                UseMemoryCache = GMaps.Instance.UseMemoryCache,
+                CacheOnIdleRead = GMaps.Instance.CacheOnIdleRead,
+                BoostCacheEngine = GMaps.Instance.BoostCacheEngine
+            }; 
         }
 
         private void MainMap_OnMapDrag()
@@ -752,27 +940,29 @@ namespace MapsWPF
         {
             CheckMapLimits(point);
 
-            LabelLatLng.Content = "Lat: " + point.Lat.ToString("F8", CultureInfo.InvariantCulture) + ", Lng: " + point.Lng.ToString("F8", CultureInfo.InvariantCulture);
+            LabelLatValue.Content = point.Lat.ToString("F8", CultureInfo.InvariantCulture);
+            LabelLngValue.Content = point.Lng.ToString("F8", CultureInfo.InvariantCulture);
 
             if (_coordinateConverter.TryLatLngToUTM(point.Lat, point.Lng, out System.Drawing.PointF utm, out int utmZone, out char bandLetter))
             {
-                LabelUTM.Content = _coordinateConverter.FormatUTM(utm, utmZone, bandLetter);
-                LabelMGRS.Content = "MGRS: " + _coordinateConverter.FormatShortMGRSFromUTM(utm);
+                // Use a consistent formatter (invariant culture) with E/N labels
+                LabelUTMValue.Content = _coordinateConverter.FormatUTM(utm, utmZone, bandLetter);
+                LabelMGRSValue.Content = _coordinateConverter.FormatShortMGRSFromUTM(utm, utmZone);
             }
             else
             {
-                LabelUTM.Content = "UTM: Помилка конвертації";
-                LabelMGRS.Content = "MGRS: Помилка конвертації";
+                LabelUTMValue.Content = "-";
+                LabelMGRSValue.Content = "-";
             }
 
-            LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+            LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
         }
 
         void MainMap_OnMapZoomChanged()
         {
             Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
             {
-                LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+                LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
             }));
         }
 
@@ -780,7 +970,7 @@ namespace MapsWPF
         {
             Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
             {
-                LabelZoom.Content = "Zoom: " + MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+                LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
             }));
         }
 
@@ -1210,25 +1400,7 @@ namespace MapsWPF
             if (sender is Label lbl)
             {
                 string text = lbl.Content?.ToString() ?? string.Empty;
-                string toCopy = text;
-                if (lbl.Name == "LabelLatLng")
-                {
-                    var matches = Regex.Matches(text, "-?\\d+[\\.,]?\\d*");
-                    if (matches.Count >= 2)
-                    {
-                        var a = matches[0].Value.Replace(',', '.');
-                        var b = matches[1].Value.Replace(',', '.');
-                        toCopy = a + ", " + b;
-                    }
-                }
-                else if (lbl.Name == "LabelZoom") return;
-                else
-                {
-                    int idx = text.IndexOf(':');
-                    if (idx >= 0) toCopy = text.Substring(idx + 1).Trim();
-                }
-
-                try { Clipboard.SetText(toCopy); } catch { }
+                try { Clipboard.SetText(text); } catch { }
             }
         }
 
@@ -1398,24 +1570,13 @@ namespace MapsWPF
             MessageBox.Show("Use Prefetch for basic cache population.");
         }
 
-        private void buttonInsertCoords_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var pos = MainMap.Position;
-                TextBoxLat.Text = pos.Lat.ToString(CultureInfo.InvariantCulture);
-                TextBoxLng.Text = pos.Lng.ToString(CultureInfo.InvariantCulture);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Insert coords failed: " + ex.Message);
-            }
-        }
+
 
         private void buttonCacheDiag_Click(object sender, RoutedEventArgs e)
         {
             var w = new CacheStatsWindow();
             w.Owner = this;
+            w.Stats = GetCacheStats();
             w.Show();
         }
 
@@ -1432,11 +1593,13 @@ namespace MapsWPF
         private void CheckBoxShowCoordinates_Checked(object sender, RoutedEventArgs e)
         {
             MainMap.ShowCoordinates = true;
+            MainMap.InvalidateVisual();
         }
 
         private void CheckBoxShowCoordinates_Unchecked(object sender, RoutedEventArgs e)
         {
             MainMap.ShowCoordinates = false;
+            MainMap.InvalidateVisual();
         }
 
         private void checkBoxCacheRoute_Checked(object sender, RoutedEventArgs e)
@@ -1452,8 +1615,52 @@ namespace MapsWPF
         private void comboBoxMode_DropDownClosed(object sender, EventArgs e)
         {
             MainMap.Manager.Mode = (AccessMode)ComboBoxMode.SelectedItem;
+            // Reset counters so UI reflects counts _after_ mode change
+            ResetCacheCounters();
+
+            if (_settingsManager != null)
+            {
+                _settingsManager.StartSettings.AccessMode = MainMap.Manager.Mode.ToString();
+                _settingsManager.SaveStartSettings();
+            }
+
+            // Refresh immediate UI
+            try { CacheStatsUpdateTimer_Tick(null, EventArgs.Empty); } catch { }
         }
-        
+
+        private void ColumnSplitter_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+        {
+            try
+            {
+                // Store current right panel column width
+                var width = RightColumn.ActualWidth;
+                if (_settingsManager != null && width > 0)
+                {
+                    _settingsManager.StartSettings.RightPanelWidth = width;
+                    _settingsManager.SaveStartSettings();
+                }
+            }
+            catch { }
+        }
+
+        private void ResetCacheCounters()
+        {
+            try
+            {
+                // Reset core counters
+                GMaps.Instance.TilesFromMemoryCache = 0;
+                GMaps.Instance.TilesFromSQLiteCache = 0;
+                GMaps.Instance.TilesFromNetwork = 0;
+
+                // Reset local heuristic counters (in case they were used elsewhere)
+                _tilesLoadedFromRam = 0;
+                _tilesLoadedFromDisk = 0;
+                _tilesLoadedFromNet = 0;
+            }
+            catch { }
+        }
+
+
         public static bool PingNetwork(string hostNameOrAddress)
         {
             bool pingStatus;
@@ -1475,6 +1682,87 @@ namespace MapsWPF
             }
 
             return pingStatus;
+        }
+
+        private void CheckBoxZoomLimits_Checked(object sender, RoutedEventArgs e)
+        {
+            _settingsManager.StartSettings.IsZoomLimitsEnabled = true;
+            ApplyZoomLimits();
+        }
+
+        private void CheckBoxZoomLimits_Unchecked(object sender, RoutedEventArgs e)
+        {
+            _settingsManager.StartSettings.IsZoomLimitsEnabled = false;
+            ApplyZoomLimits();
+        }
+
+        private void TextBoxMinZoom_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            ValidateAndApplyZoomLimits();
+        }
+
+        private void TextBoxMaxZoom_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            ValidateAndApplyZoomLimits();
+        }
+
+        private void ValidateAndApplyZoomLimits()
+        {
+            if (!IsLoaded) return;
+
+            bool minOk = int.TryParse(TextBoxMinZoom.Text, out int minZ);
+            bool maxOk = int.TryParse(TextBoxMaxZoom.Text, out int maxZ);
+
+            bool minValid = minOk && minZ >= 1 && minZ <= 24;
+            bool maxValid = maxOk && maxZ >= 1 && maxZ <= 24;
+
+            if (minValid)
+            {
+                TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Gray;
+            }
+            else
+            {
+                TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+            }
+
+            if (maxValid)
+            {
+                TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Gray;
+            }
+            else
+            {
+                TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+            }
+
+            if (minValid && maxValid)
+            {
+                if (minZ <= maxZ)
+                {
+                    _settingsManager.StartSettings.MinZoom = minZ;
+                    _settingsManager.StartSettings.MaxZoom = maxZ;
+                    ApplyZoomLimits();
+                }
+                else
+                {
+                    TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+                    TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+                }
+            }
+        }
+
+        private void ApplyZoomLimits()
+        {
+            if (_settingsManager.StartSettings.IsZoomLimitsEnabled)
+            {
+                MainMap.MinZoom = _settingsManager.StartSettings.MinZoom;
+                MainMap.MaxZoom = _settingsManager.StartSettings.MaxZoom;
+            }
+            else
+            {
+                // Reset to default GMap.NET limits
+                MainMap.MinZoom = 1;
+                MainMap.MaxZoom = 24;
+            }
         }
 
     }

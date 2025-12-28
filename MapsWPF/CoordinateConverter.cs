@@ -1,9 +1,8 @@
-using CoordinateSharp;
-using Accord.Math;
-
-using System.Drawing;
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
+using System.Drawing;
+using Accord.Math;
+using CoordinateSharp;
 
 namespace MapsWPF
 {
@@ -104,25 +103,22 @@ namespace MapsWPF
             return matrix.PseudoInverse().Dot(vector);
         }
 
-        public string FormatShortMGRSFromUTM(PointF utm)
+        public string FormatShortMGRSFromUTM(PointF utm, int inputUtmZone)
         {
             try
             {
                 string hemisphere = utm.Y > 0 ? "N" : "S";
 
-                var tempUtm = new UniversalTransverseMercator(hemisphere, 37, utm.X, utm.Y);
+                // Use the determined zone instead of guessing
+                var tempUtm = new UniversalTransverseMercator(hemisphere, inputUtmZone, utm.X, utm.Y);
                 var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+                // Note: We already have the zone, so we don't strictly need to recalculate it from Longitude 
+                // unless we suspect the PointF is on a boundary. trusting inputUtmZone for MGRS generation is safer for consistency.
 
-                double latitude = coord.Latitude.DecimalDegree;
-                double longitude = coord.Longitude.DecimalDegree;
+                // However, MGRS library might handle zone boundaries itself. 
+                // Let's just forward to MGRS string generation using this valid coordinate.
 
-                int utmZone = (int)Math.Floor((longitude + 180) / 6) + 1;
-
-                char bandLetter = GetUTMBandLetter(latitude);
-
-                var utmWithCorrectZone = new UniversalTransverseMercator(hemisphere, utmZone, utm.X, utm.Y);
-                var correctedCoord = UniversalTransverseMercator.ConvertUTMtoLatLong(utmWithCorrectZone);
-                string fullMgrsString = correctedCoord.MGRS.ToString();
+                string fullMgrsString = coord.MGRS.ToString();
 
                 var parts = fullMgrsString.Split(' ');
                 if (parts.Length >= 4 && parts[2].Length >= 2 && parts[3].Length >= 2)
@@ -130,7 +126,9 @@ namespace MapsWPF
                     string square = parts[1];
                     string shortEast = parts[2].Substring(0, 2);
                     string shortNorth = parts[3].Substring(0, 2);
-                    return $"{utmZone}{bandLetter} {square} {shortEast} {shortNorth}";
+                    // Use the computed zone from MGRS or our input? MGRS string includes zone.
+                    // The MGRS string parts[0] is the Zone+Band.
+                    return $"{parts[0]} {square} {shortEast} {shortNorth}";
                 }
 
                 return fullMgrsString;

@@ -1,9 +1,9 @@
 using System;
-using System.IO;
-using Newtonsoft.Json;
-using System.Drawing;
 using System.ComponentModel;
+using System.Drawing;
+using System.IO;
 using System.Runtime.CompilerServices;
+using Newtonsoft.Json;
 
 namespace MapsWPF.Models
 {
@@ -12,13 +12,16 @@ namespace MapsWPF.Models
         public double Lat { get; set; } = 50.4501;
         public double Lng { get; set; } = 30.52001953125;
         public int Zoom { get; set; } = 11;
-        
+
         // Map Provider
         public string MapProviderName { get; set; } = "GoogleHybridMap";
-        
+
+        // Access Mode
+        public string AccessMode { get; set; } = "ServerAndCache";
+
         // Go GroupBox Saved State
         public string GoGeo { get; set; } = "Kyiv";
-        
+
         // Target Point (Red Marker) - Nullable if not set
         public double? TargetLat { get; set; }
         public double? TargetLng { get; set; }
@@ -49,12 +52,20 @@ namespace MapsWPF.Models
         public double? LimitBottomRightLat { get; set; }
         public double? LimitBottomRightLng { get; set; }
 
+        // Zoom Limits
+        public bool IsZoomLimitsEnabled { get; set; } = false;
+        public int MinZoom { get; set; } = 1;
+        public int MaxZoom { get; set; } = 24;
+
         // Window State
         public double? WindowTop { get; set; }
         public double? WindowLeft { get; set; }
         public double? WindowWidth { get; set; }
         public double? WindowHeight { get; set; }
         public int WindowState { get; set; } = 0; // 0=Normal, 1=Minimized, 2=Maximized
+
+        // Right panel width (pixels)
+        public double RightPanelWidth { get; set; } = 250.0; // default width for the right settings panel
     }
 
     public class AttackSettings : INotifyPropertyChanged
@@ -81,7 +92,7 @@ namespace MapsWPF.Models
             get => _lng;
             set { if (_lng != value) { _lng = value; OnPropertyChanged(); } }
         }
-        
+
         public bool IsSet
         {
             get => _isSet;

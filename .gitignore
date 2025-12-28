@@ -384,11 +384,4 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 
-# Fody - auto-generated XML schema
-FodyWeavers.xsd
-/Maps/Map1.svg
-/Maps/MapTest.svg
-/Maps/тест2.svg
-/Views/Map1.svg
-
 /TileDBv5/en/Data.gmdb
