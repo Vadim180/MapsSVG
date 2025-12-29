@@ -149,6 +149,28 @@ namespace MapsWPF
             if (_settingsManager.StartSettings.LimitBottomRightLat.HasValue && _settingsManager.StartSettings.LimitBottomRightLng.HasValue)
                 TextBoxLimitBottomRight.Text = $"{_settingsManager.StartSettings.LimitBottomRightLat.Value.ToString(CultureInfo.InvariantCulture)}, {_settingsManager.StartSettings.LimitBottomRightLng.Value.ToString(CultureInfo.InvariantCulture)}";
 
+            // Show UTM representation in inputs when possible (override lat/lng display)
+            // Prefer UTM display for Map Limits fields so user sees expected format on startup.
+            try
+            {
+                if (_settingsManager.StartSettings.LimitTopLeftLat.HasValue && _settingsManager.StartSettings.LimitTopLeftLng.HasValue)
+                {
+                    if (_coordinateConverter.TryLatLngToUTM(_settingsManager.StartSettings.LimitTopLeftLat.Value, _settingsManager.StartSettings.LimitTopLeftLng.Value, out System.Drawing.PointF utmTL, out int zoneTL, out char bandTL))
+                    {
+                        TextBoxLimitTopLeft.Text = _coordinateConverter.FormatUTM(utmTL, zoneTL, bandTL);
+                    }
+                }
+
+                if (_settingsManager.StartSettings.LimitBottomRightLat.HasValue && _settingsManager.StartSettings.LimitBottomRightLng.HasValue)
+                {
+                    if (_coordinateConverter.TryLatLngToUTM(_settingsManager.StartSettings.LimitBottomRightLat.Value, _settingsManager.StartSettings.LimitBottomRightLng.Value, out System.Drawing.PointF utmBR, out int zoneBR, out char bandBR))
+                    {
+                        TextBoxLimitBottomRight.Text = _coordinateConverter.FormatUTM(utmBR, zoneBR, bandBR);
+                    }
+                }
+            }
+            catch { }
+
             // Map Zoom Limits
             CheckBoxZoomLimits.IsChecked = _settingsManager.StartSettings.IsZoomLimitsEnabled;
             TextBoxMinZoom.Text = _settingsManager.StartSettings.MinZoom.ToString();
@@ -159,6 +181,12 @@ namespace MapsWPF
 
             // Initialize map bounds from settings
             UpdateBoundsOfMap();
+
+            // If Map Limits are enabled at startup, make sure current position is inside the bounds
+            if (_settingsManager.StartSettings.IsMapLimitsEnabled)
+            {
+                EnsurePositionInsideBoundsOnEnable();
+            }
 
             // Force update labels
 
@@ -786,7 +814,13 @@ namespace MapsWPF
 
         void MainMap_OnTileLoadStart()
         {
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => ProgressBar1.Visibility = Visibility.Visible));
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                // Show progress bar and hide inline stats while loading
+                ProgressBar1.Visibility = Visibility.Visible;
+                if (LoadingStatsGrid != null) LoadingStatsGrid.Visibility = Visibility.Collapsed;
+                GroupBox3.Header = "Loading...";
+            }));
         }
 
         void MainMap_OnTileLoadComplete(long elapsedMilliseconds)
@@ -799,7 +833,10 @@ namespace MapsWPF
 
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
+                // Hide progress and show stats
                 ProgressBar1.Visibility = Visibility.Hidden;
+                if (LoadingStatsGrid != null) LoadingStatsGrid.Visibility = Visibility.Visible;
+
                 GroupBox3.Header = "Loading: " + MainMap.ElapsedMilliseconds + "ms";
                 if (!_cacheStatsUpdateTimer.IsEnabled) _cacheStatsUpdateTimer.Start();
                 else { _cacheStatsUpdateTimer.Stop(); _cacheStatsUpdateTimer.Start(); }
@@ -815,9 +852,16 @@ namespace MapsWPF
                 if (LabelStatsRam != null)
                 {
                     LabelStatsRam.Content = $"RAM: {stats.FromRam}";
-                    LabelStatsDb.Content = $"DB: {stats.FromSQLite}";
+
+                    // Build a small inline block for DB: count and (size) — DB count in DarkOrange, size in gray.
+                    var tb = new System.Windows.Controls.TextBlock();
+                    tb.FontSize = 10;
+                    tb.Inlines.Add(new System.Windows.Documents.Run($"DB: {stats.FromSQLite}") { Foreground = System.Windows.Media.Brushes.DarkOrange });
+                    tb.Inlines.Add(new System.Windows.Documents.Run($" ({stats.FileSizeMb:F1} MB)") { Foreground = System.Windows.Media.Brushes.Gray });
+                    tb.ToolTip = "Tiles loaded from SQLite (count and DB file size)";
+                    LabelStatsDb.Content = tb;
+
                     LabelStatsNet.Content = $"Net: {stats.FromNetwork}";
-                    LabelStatsDbSize.Content = $"Size: {stats.FileSizeMb:F1} MB";
                 }
             }
             catch { }
@@ -934,6 +978,42 @@ namespace MapsWPF
                     MainMap.Position = new PointLatLng(clampedLat, clampedLng);
                 }
             }
+        }
+
+        // When Map Limits are turned on, ensure the current position is moved INSIDE
+        // the allowed rectangle (slightly inside the boundary to avoid exact lock).
+        private void EnsurePositionInsideBoundsOnEnable()
+        {
+            if (!_settingsManager.StartSettings.IsMapLimitsEnabled || MainMap.BoundsOfMap == null)
+                return;
+
+            var bounds = MainMap.BoundsOfMap.Value;
+            var point = MainMap.Position;
+
+            if (bounds.Contains(point)) return;
+
+            // Basic clamping
+            var clampedLat = Math.Max(bounds.Bottom, Math.Min(bounds.Top, point.Lat));
+            var clampedLng = Math.Max(bounds.Left, Math.Min(bounds.Right, point.Lng));
+
+            // Epsilon: small offset inside bounds — scale with bounds size but with a reasonable minimum
+            double epsLat = Math.Max(1e-5, bounds.HeightLat * 0.001); // ~0.00001 degrees or fraction of height
+            double epsLng = Math.Max(1e-5, bounds.WidthLng * 0.001);
+
+            double targetLat = clampedLat;
+            double targetLng = clampedLng;
+
+            if (clampedLat == bounds.Top) targetLat = bounds.Top - epsLat;
+            else if (clampedLat == bounds.Bottom) targetLat = bounds.Bottom + epsLat;
+
+            if (clampedLng == bounds.Left) targetLng = bounds.Left + epsLng;
+            else if (clampedLng == bounds.Right) targetLng = bounds.Right - epsLng;
+
+            // Final safety: ensure target is inside bounds
+            targetLat = Math.Max(bounds.Bottom, Math.Min(bounds.Top, targetLat));
+            targetLng = Math.Max(bounds.Left, Math.Min(bounds.Right, targetLng));
+
+            MainMap.Position = new PointLatLng(targetLat, targetLng);
         }
 
         void MainMap_OnCurrentPositionChanged(PointLatLng point)
@@ -1453,7 +1533,10 @@ namespace MapsWPF
         {
             _settingsManager.StartSettings.IsMapLimitsEnabled = true;
             UpdateBoundsOfMap();
-            CheckMapLimits(MainMap.Position);
+            // When enabling Map Limits, if the current position is outside the bounds,
+            // move the map into the nearest allowed point and slightly inside the boundary
+            // to avoid exact-on-boundary locking.
+            EnsurePositionInsideBoundsOnEnable();
         }
 
         private void CheckBoxLimitMap_Unchecked(object sender, RoutedEventArgs e)
@@ -1462,26 +1545,95 @@ namespace MapsWPF
             UpdateBoundsOfMap();
         }
 
-        // Robust coordinate parser
+        // Robust coordinate parser — supports Lat/Lng fallback and explicit UTM parsing.
         private bool TryParseLatLng(string text, out double lat, out double lng)
+        {
+            // Keep backwards compatibility: first try UTM if explicitly provided; otherwise parse lat/lng
+            return TryParseLatLng(text, out lat, out lng, utmOnly: false);
+        }
+
+        // If utmOnly==true, we accept only UTM inputs (explicit zone/band or 'UTM' token).
+        private bool TryParseLatLng(string text, out double lat, out double lng, bool utmOnly)
         {
             lat = 0; lng = 0;
             if (string.IsNullOrWhiteSpace(text)) return false;
 
             try
             {
-                // Find all numbers (supports dot or comma decimal)
-                var matches = Regex.Matches(text, @"-?\d+(?:[.,]\d+)?");
-                if (matches.Count >= 2)
-                {
-                    // Normalize decimal separator to dot
-                    string sLat = matches[0].Value.Replace(',', '.');
-                    string sLng = matches[1].Value.Replace(',', '.');
+                var input = text.Trim();
+                var upper = input.ToUpperInvariant();
 
-                    if (double.TryParse(sLat, NumberStyles.Any, CultureInfo.InvariantCulture, out lat) &&
-                        double.TryParse(sLng, NumberStyles.Any, CultureInfo.InvariantCulture, out lng))
+                // Detect UTM with zone token like '36U' or '36'
+                var zoneMatch = Regex.Match(upper, @"\b(?<zone>\d{1,2})(?<band>[C-HJ-NP-X])\b");
+                if (!zoneMatch.Success)
+                    zoneMatch = Regex.Match(upper, @"\b(?<zone>\d{1,2})\b");
+
+                // Find all numbers (supports dot or comma decimal)
+                var matches = Regex.Matches(input, @"-?\d+(?:[.,]\d+)?");
+
+                // If we have a UTM zone and at least two numbers, try to parse as UTM (Easting, Northing)
+                if (zoneMatch.Success && matches.Count >= 2)
+                {
+                    bool hasBand = !string.IsNullOrEmpty(zoneMatch.Groups["band"].Value);
+                    bool hasUtmWord = Regex.IsMatch(upper, "\\bUTM\\b");
+
+                    string sE = null;
+                    string sN = null;
+
+                    // Prefer explicit 'E' and 'N' markers if present (e.g. "380707.88 E 5586994.00 N")
+                    var eMatch = Regex.Match(input, @"(?<e>-?\d+(?:[.,]\d+)?)\s*[Ee]\b");
+                    var nMatch = Regex.Match(input, @"(?<n>-?\d+(?:[.,]\d+)?)\s*[Nn]\b");
+                    if (eMatch.Success && nMatch.Success)
                     {
-                        return true;
+                        sE = eMatch.Groups["e"].Value.Replace(',', '.');
+                        sN = nMatch.Groups["n"].Value.Replace(',', '.');
+                    }
+                    else
+                    {
+                        // Fallback: account for the zone number appearing in the numeric matches list
+                        // e.g. matches -> ["36","380707.88","5586994.00"]
+                        int startIdx = 0;
+                        if (matches.Count >= 3 && matches[0].Value == zoneMatch.Groups["zone"].Value)
+                        {
+                            startIdx = 1; // skip the zone number
+                        }
+
+                        sE = matches[startIdx].Value.Replace(',', '.');
+                        sN = matches[startIdx + 1].Value.Replace(',', '.');
+                    }
+
+                    if (float.TryParse(sE, NumberStyles.Any, CultureInfo.InvariantCulture, out float easting) &&
+                        float.TryParse(sN, NumberStyles.Any, CultureInfo.InvariantCulture, out float northing))
+                    {
+                        // Only treat values as UTM if user explicitly provided a zone/band or the word 'UTM'.
+                        if (hasBand || hasUtmWord)
+                        {
+                            if (int.TryParse(zoneMatch.Groups["zone"].Value, out int zone))
+                            {
+                                var utm = new System.Drawing.PointF(easting, northing);
+                                if (_coordinateConverter.TryUTMToLatLng(utm, zone, out double plat, out double plng))
+                                {
+                                    lat = plat; lng = plng;
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!utmOnly)
+                {
+                    // Fallback: attempt lat,lng using first two numbers
+                    if (matches.Count >= 2)
+                    {
+                        string sLat = matches[0].Value.Replace(',', '.');
+                        string sLng = matches[1].Value.Replace(',', '.');
+
+                        if (double.TryParse(sLat, NumberStyles.Any, CultureInfo.InvariantCulture, out lat) &&
+                            double.TryParse(sLng, NumberStyles.Any, CultureInfo.InvariantCulture, out lng))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
@@ -1491,31 +1643,37 @@ namespace MapsWPF
 
         private void TextBoxLimitTopLeft_TextChanged(object sender, TextChangedEventArgs e)
         {
-            if (TryParseLatLng(TextBoxLimitTopLeft.Text, out double lat, out double lng))
+            // For Map Limits we accept ONLY explicit UTM inputs (zone/band or 'UTM' token)
+            if (TryParseLatLng(TextBoxLimitTopLeft.Text, out double lat, out double lng, utmOnly: true))
             {
                 _settingsManager.StartSettings.LimitTopLeftLat = lat;
                 _settingsManager.StartSettings.LimitTopLeftLng = lng;
                 UpdateBoundsOfMap();
                 TextBoxLimitTopLeft.BorderBrush = System.Windows.Media.Brushes.Green;
+                TextBoxLimitTopLeft.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
             }
             else
             {
                 TextBoxLimitTopLeft.BorderBrush = System.Windows.Media.Brushes.Red;
+                TextBoxLimitTopLeft.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
             }
         }
 
         private void TextBoxLimitBottomRight_TextChanged(object sender, TextChangedEventArgs e)
         {
-            if (TryParseLatLng(TextBoxLimitBottomRight.Text, out double lat, out double lng))
+            // For Map Limits we accept ONLY explicit UTM inputs (zone/band or 'UTM' token)
+            if (TryParseLatLng(TextBoxLimitBottomRight.Text, out double lat, out double lng, utmOnly: true))
             {
                 _settingsManager.StartSettings.LimitBottomRightLat = lat;
                 _settingsManager.StartSettings.LimitBottomRightLng = lng;
                 UpdateBoundsOfMap();
                 TextBoxLimitBottomRight.BorderBrush = System.Windows.Media.Brushes.Green;
+                TextBoxLimitBottomRight.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
             }
             else
             {
                 TextBoxLimitBottomRight.BorderBrush = System.Windows.Media.Brushes.Red;
+                TextBoxLimitBottomRight.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
             }
         }
 
@@ -1756,6 +1914,17 @@ namespace MapsWPF
             {
                 MainMap.MinZoom = _settingsManager.StartSettings.MinZoom;
                 MainMap.MaxZoom = _settingsManager.StartSettings.MaxZoom;
+
+                // If current zoom is outside new limits, move it to the nearest limit
+                double currentZoom = MainMap.Zoom;
+                if (currentZoom < MainMap.MinZoom)
+                {
+                    MainMap.Zoom = MainMap.MinZoom;
+                }
+                else if (currentZoom > MainMap.MaxZoom)
+                {
+                    MainMap.Zoom = MainMap.MaxZoom;
+                }
             }
             else
             {

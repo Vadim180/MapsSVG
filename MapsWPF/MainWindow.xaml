@@ -348,12 +348,12 @@
                     <CheckBox Grid.Row="0" Name="CheckBoxLimitMap" Content="Enable Map Limits" Margin="5" Checked="CheckBoxLimitMap_Checked" Unchecked="CheckBoxLimitMap_Unchecked"/>
                     
                     <StackPanel Grid.Row="1" Orientation="Vertical" Margin="5,0,5,5">
-                         <Label Content="Top Left (Lat, Lng):" Padding="0"/>
+                         <Label Content="Top Left (UTM):" Padding="0"/>
                          <TextBox Name="TextBoxLimitTopLeft" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxLimitTopLeft_TextChanged"/>
                     </StackPanel>
 
                     <StackPanel Grid.Row="2" Orientation="Vertical" Margin="5,0,5,5">
-                         <Label Content="Bottom Right (Lat, Lng):" Padding="0"/>
+                         <Label Content="Bottom Right (UTM):" Padding="0"/>
                          <TextBox Name="TextBoxLimitBottomRight" Height="24" VerticalContentAlignment="Center" TextChanged="TextBoxLimitBottomRight_TextChanged"/>
                     </StackPanel>
 
@@ -385,10 +385,9 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <ProgressBar Margin="5,5,5,5" Grid.Row="0" Name="ProgressBar1" Height="10" IsIndeterminate="True"  />
-                    <Grid Grid.Row="1" Margin="2,0,2,0">
+                    <Grid Grid.Row="1" Margin="2,0,2,0" Name="LoadingStatsGrid">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -397,14 +396,11 @@
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         
                         <Label Grid.Row="0" Grid.Column="0" Name="LabelStatsRam" Content="RAM: 0" FontSize="10" Foreground="DarkGreen" Padding="0,0,5,0" ToolTip="Tiles loaded from RAM"/>
                         <Label Grid.Row="0" Grid.Column="1" Name="LabelStatsDb" Content="DB: 0" FontSize="10" Foreground="DarkOrange" Padding="0,0,5,0" ToolTip="Tiles loaded from SQLite"/>
                         <Label Grid.Row="0" Grid.Column="2" Name="LabelStatsNet" Content="Net: 0" FontSize="10" Foreground="DarkRed" Padding="0,0,5,0" ToolTip="Tiles loaded from Network"/>
-                        
-                        <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Name="LabelStatsDbSize" Content="DB Size: 0.0 MB" FontSize="10" Foreground="Gray" Padding="0" ToolTip="Current SQLite DB Size"/>
                     </Grid>
                 </Grid>
             </GroupBox>

@@ -174,6 +174,31 @@ namespace MapsWPF
             }
         }
 
+        /// <summary>
+        /// Попытка перетворити UTM з явно вказаною зоною
+        /// </summary>
+        public bool TryUTMToLatLng(PointF utm, int inputUtmZone, out double latitude, out double longitude)
+        {
+            latitude = double.NaN;
+            longitude = double.NaN;
+
+            try
+            {
+                string hemisphere = utm.Y > 0 ? "N" : "S";
+
+                var tempUtm = new UniversalTransverseMercator(hemisphere, inputUtmZone, utm.X, utm.Y);
+                var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+
+                latitude = coord.Latitude.DecimalDegree;
+                longitude = coord.Longitude.DecimalDegree;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private char GetUTMBandLetter(double latitude)
         {
             string bands = "CDEFGHJKLMNPQRSTUVWX";
