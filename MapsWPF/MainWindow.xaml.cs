@@ -131,14 +131,25 @@ namespace MapsWPF
             MainMap.ShowTileGridLines = _settingsManager.StartSettings.ShowGrid;
             MainMap.ShowCoordinates = _settingsManager.StartSettings.ShowCoordinates;
 
-            // Load Expander states
+            // Load panel/tab state: keep coordinates expander behavior and map old 'expanded' flags to the selected tab
             ExpanderCoordinates.IsExpanded = _settingsManager.StartSettings.IsCoordinatesExpanded;
-            ExpanderGmap.IsExpanded = _settingsManager.StartSettings.IsGmapExpanded;
-            ExpanderCache.IsExpanded = _settingsManager.StartSettings.IsCacheExpanded;
-            ExpanderGo.IsExpanded = _settingsManager.StartSettings.IsGoExpanded;
-            ExpanderRay.IsExpanded = _settingsManager.StartSettings.IsRayExpanded;
-            ExpanderTarget.IsExpanded = _settingsManager.StartSettings.IsTargetExpanded;
-            ExpanderMapLimits.IsExpanded = _settingsManager.StartSettings.IsMapLimitsExpanded;
+
+            // Choose which tab should be selected on startup if any of the old 'expanded' flags were set.
+            int selectedTab = 0; // default to first tab (Target)
+            if (_settingsManager.StartSettings.IsTargetExpanded) selectedTab = 0;
+            else if (_settingsManager.StartSettings.IsGmapExpanded) selectedTab = 1;
+            else if (_settingsManager.StartSettings.IsCacheExpanded) selectedTab = 2;
+            else if (_settingsManager.StartSettings.IsGoExpanded) selectedTab = 3;
+            else if (_settingsManager.StartSettings.IsRayExpanded) selectedTab = 4;
+            else if (_settingsManager.StartSettings.IsMapLimitsExpanded) selectedTab = 5;
+
+            // Prefer explicit saved SelectedRightTabIndex when present (backward-compatible)
+            if (_settingsManager.StartSettings.SelectedRightTabIndex.HasValue)
+            {
+                selectedTab = _settingsManager.StartSettings.SelectedRightTabIndex.Value;
+            }
+
+            try { RightTabControl.SelectedIndex = selectedTab; } catch { }
 
             // Load Map Limits UI
             CheckBoxLimitMap.IsChecked = _settingsManager.StartSettings.IsMapLimitsEnabled;
@@ -298,14 +309,20 @@ namespace MapsWPF
             _settingsManager.StartSettings.ShowGrid = CheckBoxDebug.IsChecked == true;
             _settingsManager.StartSettings.ShowCoordinates = CheckBoxShowCoordinates.IsChecked == true;
 
-            // Save Expander states
+            // Save panel/tab state: coordinates expander + which tab is selected
             _settingsManager.StartSettings.IsCoordinatesExpanded = ExpanderCoordinates.IsExpanded;
-            _settingsManager.StartSettings.IsGmapExpanded = ExpanderGmap.IsExpanded;
-            _settingsManager.StartSettings.IsCacheExpanded = ExpanderCache.IsExpanded;
-            _settingsManager.StartSettings.IsGoExpanded = ExpanderGo.IsExpanded;
-            _settingsManager.StartSettings.IsRayExpanded = ExpanderRay.IsExpanded;
-            _settingsManager.StartSettings.IsTargetExpanded = ExpanderTarget.IsExpanded;
-            _settingsManager.StartSettings.IsMapLimitsExpanded = ExpanderMapLimits.IsExpanded;
+            int sel = 0;
+            try { sel = RightTabControl.SelectedIndex; } catch { }
+
+            // Persist explicit selected index (preferred) for future loads
+            _settingsManager.StartSettings.SelectedRightTabIndex = sel;
+
+            _settingsManager.StartSettings.IsTargetExpanded = sel == 0;
+            _settingsManager.StartSettings.IsGmapExpanded = sel == 1;
+            _settingsManager.StartSettings.IsCacheExpanded = sel == 2;
+            _settingsManager.StartSettings.IsGoExpanded = sel == 3;
+            _settingsManager.StartSettings.IsRayExpanded = sel == 4;
+            _settingsManager.StartSettings.IsMapLimitsExpanded = sel == 5;
 
             // Save Window State
             if (this.WindowState == System.Windows.WindowState.Normal)

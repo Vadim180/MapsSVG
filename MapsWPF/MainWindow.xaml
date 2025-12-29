@@ -26,16 +26,9 @@
         <Grid Grid.Column="2" Margin="0,0,5,0" x:Name="RightSettingsGrid">
 
             <Grid.RowDefinitions>
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="auto" />
+                <RowDefinition Height="Auto" /> <!-- Coordinates (fixed) -->
+                <RowDefinition Height="*" />    <!-- Tabs area (fills remaining space) -->
+                <RowDefinition Height="Auto" /> <!-- Loading / footer -->
             </Grid.RowDefinitions>
 
             <!--COORDINATES-->
@@ -100,22 +93,25 @@
                 </Grid>
                     </Expander>
 
-            <!--TARGET-->
-            <Expander Grid.Row="1" Header="Target" Name="ExpanderTarget" IsExpanded="True">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Label Grid.Row="0" Name="LabelTargetLocation" Margin="0" Content="" Foreground="DarkOrange" />
-                    <Label Grid.Row="1" Name="LabelTargetAddress" Margin="0" Content="" Foreground="Gray" FontSize="11" />
-                    <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
-                </Grid>
-            </Expander>
+            <TabControl Grid.Row="1" Name="RightTabControl" Margin="0">
+                <!--TARGET-->
+            <TabItem Header="Settings" Name="TabSettings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Expander Header="Target" Name="ExpanderTarget" IsExpanded="True">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Label Grid.Row="0" Name="LabelTargetLocation" Margin="0" Content="" Foreground="DarkOrange" />
+                                <Label Grid.Row="1" Name="LabelTargetAddress" Margin="0" Content="" Foreground="Gray" FontSize="11" />
+                                <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
+                            </Grid>
+                        </Expander>
 
-            <!--GMAP-->
-            <Expander Grid.Row="2" Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
+            <Expander Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -145,30 +141,19 @@
 
                     <!-- Checkboxes -->
                     <StackPanel Grid.Column="0" Grid.Row="2" Margin="5,5,0,5" Orientation="Horizontal">
-                        <CheckBox Name="CheckBoxDragMap" IsChecked="True" Height="16"  Checked="checkBoxDragMap_Checked" Unchecked="checkBoxDragMap_Unchecked">
-                            Drag
-                        </CheckBox>
-                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxCurrentMarker" Height="16" IsChecked="True" Checked="checkBoxCurrentMarker_Checked" Unchecked="checkBoxCurrentMarker_Unchecked">
-                            Marker
-                        </CheckBox>
-                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxDebug" Height="16" Checked="checkBox1_Checked" Unchecked="checkBox1_Unchecked">
-                            Grid
-                        </CheckBox>
-                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxShowCoordinates" Height="16" Checked="CheckBoxShowCoordinates_Checked" Unchecked="CheckBoxShowCoordinates_Unchecked">
-                            Coord
-                        </CheckBox>
+                        <CheckBox Name="CheckBoxDragMap" IsChecked="True" Height="16"  Checked="checkBoxDragMap_Checked" Unchecked="checkBoxDragMap_Unchecked">Drag</CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxCurrentMarker" Height="16" IsChecked="True" Checked="checkBoxCurrentMarker_Checked" Unchecked="checkBoxCurrentMarker_Unchecked">Marker</CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxDebug" Height="16" Checked="checkBox1_Checked" Unchecked="checkBox1_Unchecked">Grid</CheckBox>
+                        <CheckBox  Margin="5,0,0,0" Name="CheckBoxShowCoordinates" Height="16" Checked="CheckBoxShowCoordinates_Checked" Unchecked="CheckBoxShowCoordinates_Unchecked">Coord</CheckBox>
                     </StackPanel>
 
                     <!-- Buttons -->
-                    <Button Margin="5,0,5,5" Grid.Column="0" Grid.Row="3" Height="24"  Name="Button7" Click="button7_Click"  >
-                        Save Picture
-                    </Button>
+                    <Button Margin="5,0,5,5" Grid.Column="0" Grid.Row="3" Height="24"  Name="Button7" Click="button7_Click"  >Save Picture</Button>
 
                 </Grid>
             </Expander>
 
-            <!--CACHE-->
-            <Expander Grid.Row="3" Header="Cache" Name="ExpanderCache" IsExpanded="True">
+            <Expander Header="Cache" Name="ExpanderCache" IsExpanded="True">
                 <Grid>
 
                     <Grid.ColumnDefinitions>
@@ -213,8 +198,7 @@
                         </Grid>
                     </Expander>
 
-            <!--GO-->
-            <Expander Grid.Row="4" Header="Go" Name="ExpanderGo" IsExpanded="True">
+            <Expander Header="Go" Name="ExpanderGo" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -241,36 +225,23 @@
                     <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label3" Content="Lng" />
 
                     <!-- GEO -->
-                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">
-                        Kyiv
-                    </TextBox>
+                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">Kyiv</TextBox>
                     <!-- LABEL -->
-                    <Label Margin="0,0,5,0" Grid.Row="2" Grid.Column="2"  HorizontalAlignment="Center" Name="Label4" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
-                        Geo
-                    </Label>
+                    <Label Margin="0,0,5,0" Grid.Row="2" Grid.Column="2"  HorizontalAlignment="Center" Name="Label4" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">Geo</Label>
                     
                     <!-- BUTTONS -->
-                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="3"  Height="24" Name="Button2" Click="button2_Click">
-                        Go
-                    </Button>
+                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="3"  Height="24" Name="Button2" Click="button2_Click">Go</Button>
 
-                    <Button Margin="0,3,5,5"  Grid.Column="1" Grid.Row="3" Height="24" Name="ButtonSearch" Click="buttonSearch_Click">
-                        Search
-                    </Button>
+                    <Button Margin="0,3,5,5"  Grid.Column="1" Grid.Row="3" Height="24" Name="ButtonSearch" Click="buttonSearch_Click">Search</Button>
                     
-                    <Button Margin="0,3,5,5" Grid.Column="2" Grid.Row="3"  Height="24" Name="Button1" Click="button1_Click">
-                        🔄
-                    </Button>
+                    <Button Margin="0,3,5,5" Grid.Column="2" Grid.Row="3"  Height="24" Name="Button1" Click="button1_Click">🔄</Button>
 
-                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="3" Name="Button13" Height="24" VerticalAlignment="Bottom" Click="button13_Click">
-                        Zoom Center
-                    </Button>
+                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="3" Name="Button13" Height="24" VerticalAlignment="Bottom" Click="button13_Click">Zoom Center</Button>
 
                 </Grid>
             </Expander>
 
-            <!--RAY-->
-            <Expander Grid.Row="5" Header="Ray" Name="ExpanderRay" IsExpanded="True">
+            <Expander Header="Ray" Name="ExpanderRay" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -332,7 +303,7 @@
 
             
             <!--MAP LIMITS-->
-            <Expander Grid.Row="6" Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
+            <Expander Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -376,12 +347,20 @@
                     </StackPanel>
                 </Grid>
             </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-            <!--SPACER-->
-            <Grid Grid.Row="8"/>
-        
+            <TabItem Header="Звіти" Name="TabReports">
+                <Grid>
+                    <TextBlock Margin="10" Foreground="Gray">Reports will go here.</TextBlock>
+                </Grid>
+            </TabItem>
+
+            </TabControl>
+
             <!--LOADING-->
-            <GroupBox Grid.Row="9" Margin="0,0,0,5" Header="Loading" Name="GroupBox3">
+            <GroupBox Grid.Row="2" Margin="0,0,0,5" Header="Loading" Name="GroupBox3">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />

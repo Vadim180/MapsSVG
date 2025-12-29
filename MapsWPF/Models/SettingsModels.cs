@@ -45,6 +45,9 @@ namespace MapsWPF.Models
         public bool IsTargetExpanded { get; set; } = true;
         public bool IsMapLimitsExpanded { get; set; } = true;
 
+        // Selected tab index in the right panel (nullable for backward compatibility)
+        public int? SelectedRightTabIndex { get; set; }
+
         // Map Limits
         public bool IsMapLimitsEnabled { get; set; } = false;
         public double? LimitTopLeftLat { get; set; }
