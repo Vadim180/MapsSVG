@@ -27,16 +27,34 @@ using MapsWPF.Services;
 
 namespace MapsWPF
 {
-    public partial class MainWindow : Window
+    public partial class MainWindow : Window, Controllers.IReportContext
     {
         // marker
         GMapMarker currentMarker;
 
         // zones list
-        List<GMapMarker> Circles = [];
+        List<GMapMarker> Circles = new List<GMapMarker>();
 
         // coordinate converter
         private CoordinateConverter _coordinateConverter = new();
+
+        // Reports: template service and controller
+        private Services.TemplateService? _templateService;
+        private Controllers.ReportController? _reportController;
+
+        // Map service abstraction
+        private Services.IMapService? _mapService;
+
+        // Clipboard and notification services
+        private Services.IClipboardService? _clipboardService;
+        private Services.INotificationService? _notificationService;
+        private DispatcherTimer? _notificationTimer;
+
+        // Last known UTM zone/band from TryGetUTM conversion
+        private int _lastUtmZone = 0;
+        private char _lastUtmBand = ' ';
+
+        
 
         // Geocoding cancellation token
         private CancellationTokenSource _geocodingCts;
@@ -181,7 +199,6 @@ namespace MapsWPF
                 }
             }
             catch { }
-
             // Map Zoom Limits
             CheckBoxZoomLimits.IsChecked = _settingsManager.StartSettings.IsZoomLimitsEnabled;
             TextBoxMinZoom.Text = _settingsManager.StartSettings.MinZoom.ToString();
@@ -275,6 +292,51 @@ namespace MapsWPF
             ComboBoxMode.ItemsSource = Enum.GetValues(typeof(AccessMode));
             ComboBoxMode.SelectedItem = MainMap.Manager.Mode;
 
+            // Initialize report template service and controller
+            try
+            {
+                _templateService = new Services.TemplateService();
+                _templateService.LoadAllData();
+                var startupMsg = $"TemplateService loaded: Templates={_templateService.Templates?.Count ?? 0}, Targets={_templateService.Targets?.Count ?? 0}, Positions={_templateService.Position_Point?.Count ?? 0}, DroneByPosition={_templateService.DroneByPosition?.Count ?? 0}, Units={_templateService.UnitsHistory?.Count ?? 0}, LaunchAreas={_templateService.LaunchAreasHistory?.Count ?? 0}, SettingsFolder={_templateService.SettingsFolderPath}";
+                Console.WriteLine(startupMsg);
+                try { Directory.CreateDirectory(_templateService.SettingsFolderPath); File.AppendAllText(Path.Combine(_templateService.SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " " + startupMsg + Environment.NewLine); } catch { }
+
+                // Initialize map service
+                _mapService = new Services.MapService(_coordinateConverter);
+
+                // Initialize clipboard and notification services
+                _clipboardService = new Services.ClipboardService();
+                _notificationService = new Services.NotificationService();
+                _notificationService.NotificationRaised += NotificationRaisedHandler;
+
+                // Populate report-related UI elements (moved to TemplateEditorViewModel bindings)
+
+
+
+                _reportController = new Controllers.ReportController(this);
+
+                // Initialize ViewModel for reports and set DataContext
+                var reportVm = new ViewModels.ReportViewModel(_reportController, _clipboardService, _notificationService);
+                this.DataContext = reportVm;
+
+                // Initialize TemplateEditorViewModel and bind it to the template editor group
+                var templateVm = new ViewModels.TemplateEditorViewModel(_templateService, _notificationService,
+                    lines => _reportController != null ? _reportController.GenerateTextFromTemplate(lines) : string.Empty,
+                    generated => { SetReportText(generated); CopyToClipboardWithNotification(generated); _notificationService?.Notify("Згенеровано звіт", NotificationType.Info); });
+                try { TemplateEditorGroup.DataContext = templateVm; } catch { }
+
+                // Templates and histories handled by TemplateEditorViewModel, but keep Refresh for backward compat
+                try
+                {
+                    RefreshTemplatesAndHistories();
+
+                }
+                catch { }            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Reports initialization failed: {ex.Message}");
+            }
+
             CheckBoxCacheRoute.IsChecked = MainMap.Manager.UseRouteCache;
             CheckBoxGeoCache.IsChecked = MainMap.Manager.UseGeocoderCache;
 
@@ -295,6 +357,37 @@ namespace MapsWPF
             }
             catch { }
         }
+
+        private void PlaceholderTag_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            try
+            {
+                if (sender is FrameworkElement fe && fe.DataContext is string tag)
+                {
+                    InsertTextIntoTemplateEditor(tag);
+                }
+            }
+            catch { }
+        }
+
+        private void InsertTextIntoTemplateEditor(string text)
+        {
+            try
+            {
+                TextBoxTemplateEditor.Focus();
+                int selStart = TextBoxTemplateEditor.SelectionStart;
+                int selLen = TextBoxTemplateEditor.SelectionLength;
+                var current = TextBoxTemplateEditor.Text ?? string.Empty;
+                TextBoxTemplateEditor.Text = current.Substring(0, selStart) + text + current.Substring(selStart + selLen);
+                TextBoxTemplateEditor.SelectionStart = selStart + text.Length;
+                TextBoxTemplateEditor.SelectionLength = 0;
+                var be = TextBoxTemplateEditor.GetBindingExpression(System.Windows.Controls.TextBox.TextProperty);
+                be?.UpdateSource();
+            }
+            catch { }
+        }
+
+
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
         {
@@ -371,6 +464,52 @@ namespace MapsWPF
                 if (_settingsManager.AttackSettings.IsSet)
                 {
                     LabelAngleValue.Content = _settingsManager.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+
+                    // Also update azimuth display relative to current target marker
+                    try
+                    {
+                        if (currentMarker != null)
+                        {
+                            var ap = new PointLatLng(_settingsManager.AttackSettings.Lat, _settingsManager.AttackSettings.Lng);
+                            // compute azimuth similar to ReportController.CalculateAzimuth, but using lat/lng approximate
+                            // compute azimuth using conventional 0 = North (use lng as East, lat as North)
+                            var dx = currentMarker.Position.Lng - ap.Lng; // Easting difference (degrees)
+                            var dy = currentMarker.Position.Lat - ap.Lat; // Northing difference (degrees)
+                            var angleRad = Math.Atan2(dx, dy);
+                            var angleDeg = (angleRad * (180.0 / Math.PI) + 360.0) % 360.0;
+                            SetAzimuthDisplay(Math.Round(angleDeg).ToString(CultureInfo.InvariantCulture) + "°");
+
+                            // Also update Range textbox to show distance in meters
+                            try
+                            {
+                                var distKm = MainMap.MapProvider.Projection.GetDistance(ap, currentMarker.Position);
+                                var distM = distKm * 1000.0;
+                                TextBoxRange.Text = Math.Round(distM).ToString(CultureInfo.InvariantCulture);
+                            }
+                            catch { }
+
+                            // Set LaunchArea to nearest locality of attack point if available
+                            try
+                            {
+                                var near = FindNearestLocality(ap);
+                                if (!string.IsNullOrEmpty(near) && ComboBoxLaunchArea != null)
+                                {
+                                    ComboBoxLaunchArea.Text = near;
+                                    // keep in history
+                                    if (!_templateService.LaunchAreasHistory.Contains(near))
+                                        _templateService.LaunchAreasHistory.Insert(0, near);
+                                }
+                            }
+                            catch { }
+                        }
+                        else
+                        {
+                            // If attack settings not set, clear range
+                            try { TextBoxRange.Text = string.Empty; } catch { }
+                        }
+
+                    }
+                    catch { }
                 }
                 else
                 {
@@ -593,6 +732,7 @@ namespace MapsWPF
 
 
                 UpdateTargetLocationInfo(pos);
+                UpdateDistanceDisplay();
             }
         }
 
@@ -605,14 +745,23 @@ namespace MapsWPF
                 var distKm = MainMap.MapProvider.Projection.GetDistance(apLatLng, currentMarker.Position);
                 var distM = distKm * 1000.0;
 
+                // Update Range textbox (meters)
+                try { TextBoxRange.Text = Math.Round(distM).ToString(CultureInfo.InvariantCulture); } catch { }
 
                 LabelDistanceValue.Content = $"{distM:F0} m";
-                // Update angle label alongside distance
+                // Update angle label alongside distance and compute azimuth to target
                 try
                 {
                     if (_settingsManager.AttackSettings.IsSet)
                     {
                         LabelAngleValue.Content = _settingsManager.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+
+                        // compute azimuth using conventional 0 = North (lng as East, lat as North)
+                        var dx = currentMarker.Position.Lng - apLatLng.Lng; // East difference (degrees)
+                        var dy = currentMarker.Position.Lat - apLatLng.Lat; // North difference (degrees)
+                        var angleRad = Math.Atan2(dx, dy);
+                        var angleDeg = (angleRad * (180.0 / Math.PI) + 360.0) % 360.0;
+                        try { SetAzimuthDisplay(Math.Round(angleDeg).ToString(CultureInfo.InvariantCulture) + "°"); } catch { }
                     }
                     else
                     {
@@ -623,6 +772,11 @@ namespace MapsWPF
 
                 MainMap.TargetDistance = distM;
                 MainMap.InvalidateVisual();
+            }
+            else
+            {
+                // Clear range if no attack point or target
+                try { TextBoxRange.Text = string.Empty; } catch { }
             }
         }
 
@@ -1236,6 +1390,11 @@ namespace MapsWPF
 
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            // When a text input (TextBox or editable ComboBox) has keyboard focus, let the key press go to that control
+            var focused = Keyboard.FocusedElement;
+            if (focused is System.Windows.Controls.TextBox) return;
+            if (focused is System.Windows.Controls.ComboBox cb && cb.IsEditable && cb.IsKeyboardFocusWithin) return;
+
             if (e.Key == Key.Q) { MainMap.Bearing++; e.Handled = true; }
             else if (e.Key == Key.E) { MainMap.Bearing--; e.Handled = true; }
             else if (e.Key == Key.Left && MainMap.IsFocused && !Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
@@ -1497,7 +1656,14 @@ namespace MapsWPF
             if (sender is Label lbl)
             {
                 string text = lbl.Content?.ToString() ?? string.Empty;
-                try { Clipboard.SetText(text); } catch { }
+                try
+                {
+                    if (_clipboardService != null && _clipboardService.TrySetText(text))
+                    {
+                        _notificationService?.Notify("Скопійовано");
+                    }
+                }
+                catch { }
             }
         }
 
@@ -1950,6 +2116,400 @@ namespace MapsWPF
                 MainMap.MaxZoom = 24;
             }
         }
+
+        // ----------------- Reports UI handlers -----------------
+        private void ShowNotification(string message)
+        {
+            try
+            {
+                if (_notificationService != null) _notificationService.Notify(message);
+                else
+                {
+                    Dispatcher.Invoke(() => { LabelReportStatus.Content = message; });
+
+                    var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                    t.Tick += (s, e) => { Dispatcher.Invoke(() => LabelReportStatus.Content = ""); t.Stop(); };
+                    t.Start();
+                }
+            }
+            catch { }
+        }
+
+        private void NotificationRaisedHandler(string message, Services.NotificationType type)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    LabelReportStatus.Content = message;
+
+                    if (_notificationTimer == null)
+                    {
+                        _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                        _notificationTimer.Tick += (s, e) => { LabelReportStatus.Content = ""; _notificationTimer.Stop(); };
+                    }
+                    _notificationTimer.Stop();
+                    _notificationTimer.Start();
+                });
+            }
+            catch { }
+        }
+
+        private void ButtonStartOfWork_Click(object sender, RoutedEventArgs e)
+        {
+            if (_reportController != null)
+            {
+                try { _reportController.Start_of_Work_Click(sender, EventArgs.Empty); }
+                catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
+            }
+            else
+            {
+                _notificationService?.Notify("Контролер звітів не ініціалізовано", NotificationType.Warning);
+            }
+        }
+
+        private void ButtonEndOfWork_Click(object sender, RoutedEventArgs e)
+        {
+            if (_reportController != null)
+            {
+                try { _reportController.End_of_Work_Click(sender, EventArgs.Empty); }
+                catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
+            }
+            else
+            {
+                _notificationService?.Notify("Контролер звітів не ініціалізовано", NotificationType.Warning);
+            }
+        }
+
+        private void ButtonCombatWork_Click(object sender, RoutedEventArgs e)
+        {
+            if (_reportController != null)
+            {
+                try { _reportController.Combat_Work_Click(sender, EventArgs.Empty); }
+                catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
+            }
+            else
+            {
+                _notificationService?.Notify("Контролер звітів не ініціалізовано", NotificationType.Warning);
+
+            }
+        }
+
+
+
+
+
+        // Minimal IReportContext implementation to start migration
+        public string GetSelectedPosition() => ComboBoxPosition?.Text ?? string.Empty;
+        public string GetSelectedPilot() => ComboBoxPilot?.Text ?? string.Empty;
+        public string GetSelectedDrone() => ComboBoxDroneBy?.Text ?? string.Empty;
+        public IEnumerable<string> GetLocalCities() => _templateService?.LocalCiti ?? new List<string>();
+        public string GetShootingTarget() => ComboBoxTargetType?.Text ?? string.Empty;
+        public string GetHeightText() => TextBoxHeight?.Text ?? string.Empty;
+        public int GetSelectedRange()
+        {
+            try
+            {
+                if (int.TryParse(TextBoxRange?.Text ?? string.Empty, System.Globalization.NumberStyles.Integer, CultureInfo.InvariantCulture, out int r))
+                    return r;
+            }
+            catch { }
+            return 0;
+        }
+
+        public bool TryGetUTM(out System.Drawing.PointF utm)
+        {
+            utm = System.Drawing.PointF.Empty;
+            try
+            {
+                if (currentMarker != null)
+                {
+                    if (_mapService != null)
+                    {
+                        if (_mapService.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var result, out var zone, out var band))
+                        {
+                            utm = result;
+                            _lastUtmZone = zone;
+                            _lastUtmBand = band;
+                            return true;
+                        }
+                    }
+
+                    // fallback to direct converter
+                    if (_coordinateConverter.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var fallback, out var fzone, out var fband))
+                    {
+                        utm = fallback;
+                        _lastUtmZone = fzone;
+                        _lastUtmBand = fband;
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public string FormatShortMGRSFromUTM(System.Drawing.PointF utm)
+        {
+            if (_lastUtmZone != 0)
+            {
+                if (_mapService != null) return _mapService.FormatShortMGRSFromUTM(utm, _lastUtmZone);
+                return _coordinateConverter.FormatShortMGRSFromUTM(utm, _lastUtmZone);
+            }
+            return "-";
+        }
+
+        public string FindClosestLocality(System.Drawing.PointF utm)
+        {
+            // Reuse existing reverse geocoding based on lat/lng
+            if (_coordinateConverter.TryUTMToLatLng(utm, out double lat, out double lng))
+            {
+                var latlng = new GMap.NET.PointLatLng(lat, lng);
+                return FindNearestLocality(latlng);
+            }
+            return "Невідомо";
+        }
+
+        public bool TryGetClickedLatLng(out PointLatLng latlng)
+        {
+            latlng = PointLatLng.Empty;
+            if (currentMarker != null)
+            {
+                latlng = currentMarker.Position;
+                return true;
+            }
+            return false;
+        }
+
+        public string FormatShortMGRSFromLatLng(PointLatLng latlng)
+        {
+            if (_coordinateConverter.TryLatLngToUTM(latlng.Lat, latlng.Lng, out var utm, out var zone, out var band))
+            {
+                return _coordinateConverter.FormatShortMGRSFromUTM(utm, zone);
+            }
+            return "-";
+        }
+
+        public string FindClosestLocalityFromLatLng(PointLatLng latlng)
+        {
+            return FindNearestLocality(latlng);
+        }
+
+        public int GetCourseValue()
+        {
+            try
+            {
+                if (float.TryParse(TextBoxCourse?.Text ?? string.Empty, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out float f))
+                    return (int)Math.Round(f);
+            }
+            catch { }
+            return 0;
+        }
+        public string GetTargetType() => ComboBoxTargetType?.Text ?? "-";
+
+        private string FindNearestLocality(PointLatLng latlng)
+        {
+            // Return last cached locality if available, otherwise placeholder
+            if (!string.IsNullOrEmpty(_settingsManager?.StartSettings?.LastTargetLocationName))
+                return _settingsManager.StartSettings.LastTargetLocationName;
+            return "Невідомо";
+        }
+
+        private DateTime _reportStartTime = DateTime.MinValue;
+        public string GetAndSetTime()
+        {
+            _reportStartTime = DateTime.Now;
+            return _reportStartTime.ToString("HH.mm");
+        }
+
+        public string GetCurrentTimeString() => _reportStartTime == DateTime.MinValue ? string.Empty : _reportStartTime.ToString("HH.mm");
+
+        public TemplateService GetShablon() => _templateService ?? (_templateService = new TemplateService());
+
+        public bool IsTargetDestroyed() => CheckBoxTargetDestroyed.IsChecked == true;
+        public bool IsTargetBoardLost() => CheckBoxTargetBoard.IsChecked == true;
+
+        public void SetReportText(string text)
+        {
+            try
+            {
+                // If DataContext is ReportViewModel, update its ReportText property so bindings reflect the change
+                if (this.DataContext is ViewModels.ReportViewModel vm)
+                {
+                    vm.ReportText = text ?? string.Empty;
+                }
+                else
+                {
+                    Dispatcher.Invoke(() => TextBoxReportOutput.Text = text);
+                }
+            }
+            catch { }
+        }
+
+        public void CopyToClipboardWithNotification(string text)
+        {
+            try
+            {
+                if (_clipboardService != null && _clipboardService.TrySetText(text))
+                    _notificationService?.Notify("Звіт скопійований у буфер");
+                else
+                    _notificationService?.Notify("Не вдалося скопіювати в буфер", NotificationType.Warning);
+            }
+            catch { _notificationService?.Notify("Не вдалося скопіювати в буфер", NotificationType.Warning); }
+        }
+
+
+
+
+
+        public System.Drawing.PointF? GetClickedPoint()
+        {
+            if (currentMarker != null)
+            {
+                if (_mapService != null)
+                {
+                    if (_mapService.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var utm, out var zone, out var band))
+                    {
+                        _lastUtmZone = zone;
+                        _lastUtmBand = band;
+                        return utm;
+                    }
+                }
+
+                if (_coordinateConverter.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var fallbackUtm, out var fzone, out var fband))
+                {
+                    _lastUtmZone = fzone;
+                    _lastUtmBand = fband;
+                    return fallbackUtm;
+                }
+            }
+            return null;
+        }
+
+        public System.Drawing.PointF GetAttackPoint()
+        {
+            try
+            {
+                if (_settingsManager.AttackSettings.IsSet)
+                {
+                    if (_mapService != null)
+                    {
+                        if (_mapService.TryLatLngToUTM(_settingsManager.AttackSettings.Lat, _settingsManager.AttackSettings.Lng, out var utm, out var zone, out var band))
+                        {
+                            _lastUtmZone = zone;
+                            _lastUtmBand = band;
+                            return utm;
+                        }
+                    }
+
+                    if (_coordinateConverter.TryLatLngToUTM(_settingsManager.AttackSettings.Lat, _settingsManager.AttackSettings.Lng, out var fallbackUtm, out var fzone, out var fband))
+                    {
+                        _lastUtmZone = fzone;
+                        _lastUtmBand = fband;
+                        return fallbackUtm;
+                    }
+                }
+            }
+            catch { }
+            return System.Drawing.PointF.Empty;
+        }
+
+        public string GetLabelScaleText()
+        {
+            return LabelAngleValue?.Content?.ToString() ?? "-";
+        }
+
+        public void SetAzimuthDisplay(string text)
+        {
+            try { Dispatcher.Invoke(() => { if (TextBoxAzimuth != null) TextBoxAzimuth.Text = text; }); } catch { }
+        }
+
+        public string GetAzimuthText()
+        {
+            try { return TextBoxAzimuth?.Text ?? string.Empty; } catch { return string.Empty; }
+        }
+
+        private List<string> GetTemplateLinesByName(string name)
+        {
+            if (_templateService == null) return new List<string>();
+            switch ((name ?? string.Empty).ToLowerInvariant())
+            {
+                case "startwork":
+                case "start":
+                    return _templateService.StartWorkShablon ?? new List<string>();
+                case "endwork":
+                case "end":
+                    return _templateService.EndWorkShablon ?? new List<string>();
+                default:
+                    return _templateService.GetTemplateByName(name ?? "Report") ?? new List<string>();
+            }
+        }
+
+
+
+        // Генерація тепер обробляється у TemplateEditorViewModel.GenerateCommand (без code-behind)
+
+        private void RefreshTemplatesAndHistories()
+        {
+            try
+            {
+                var names = (_templateService?.Templates != null && _templateService.Templates.Count > 0) ? _templateService.Templates.Keys.OrderBy(k => k).ToList() : new List<string> { "Report", "StartWork", "EndWork" }; // use named templates from JSON if available
+
+
+                Dispatcher.Invoke(() =>
+                {
+                    try
+                    {
+                        // ComboBoxTemplateSelect.ItemsSource is bound in XAML to TemplateEditorViewModel.TemplateNames
+                        if (ComboBoxTemplateSelect.SelectedItem == null) ComboBoxTemplateSelect.SelectedItem = "Report";
+
+                        // ComboBoxUnitName is bound to TemplateEditorViewModel.UnitsHistory and TemplateEditorViewModel.CustomUnit (keep binding in XAML)
+
+                        // ComboBoxLaunchArea is bound to TemplateEditorViewModel.LaunchAreasHistory and TemplateEditorViewModel.LaunchArea (keep binding in XAML)
+
+                        // ComboBoxTargetType is bound to TemplateEditorViewModel.Targets and SelectedTarget (keep binding in XAML)
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        }
+
+
+
+
+
+
+
+
+        private void CommitTargetFromCombo()
+        {
+            // intentionally empty: targets are added on Generate per user request
+        }
+
+
+
+
+
+        // ButtonLoadDefault_Click removed – handled by TemplateEditorViewModel.LoadDefaultCommand        }
+
+
+        // ButtonSetUnitName_Click removed
+        /*
+            try
+            {
+                if (_templateService != null)
+                {
+                    // removed unitName retrieval
+                    // removed unit save logic
+                }
+                else
+                {
+                    _notificationService?.Notify("TemplateService не ініціалізовано", NotificationType.Warning);
+                }
+            }
+            catch (Exception ex) { _notificationService?.Notify($"Помилка: {ex.Message}", NotificationType.Error); }
+        */
 
     }
 

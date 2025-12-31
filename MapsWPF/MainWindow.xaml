@@ -126,7 +126,8 @@
                     </Grid.RowDefinitions>
 
                     <!-- Map Provider -->
-                    <ComboBox Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="0" FontSize="12" Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMapType" Height="24">
+                    <ComboBox Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="0" FontSize="12" 
+                        Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMapType" Height="24">
                         <ComboBox.SelectedItem>
                             <Binding Path="MapProvider" ElementName="MainMap">
                                 <Binding.ValidationRules>
@@ -352,8 +353,146 @@
             </TabItem>
 
             <TabItem Header="Звіти" Name="TabReports">
-                <Grid>
-                    <TextBlock Margin="10" Foreground="Gray">Reports will go here.</TextBlock>
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="260" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left: Inputs and actions -->
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="6" Orientation="Vertical">
+                            <TextBlock FontWeight="Bold" Margin="0,0,0,6">Параметри звіту</TextBlock>
+
+                            <Label Content="Position"/>
+                            <ComboBox Name="ComboBoxPosition" Height="24" ItemsSource="{Binding DataContext.PositionNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedPosition, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
+
+                            <Label Content="Pilot" Margin="0,6,0,0"/>
+                            <ComboBox Name="ComboBoxPilot" Height="24" ItemsSource="{Binding DataContext.Pilots, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedPilot, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
+
+                            <Label Content="Drone By" Margin="0,6,0,0"/>
+                            <ComboBox Name="ComboBoxDroneBy" Height="24" ItemsSource="{Binding DataContext.Drones, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedDrone, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
+
+                            <Label Content="Target" Margin="0,6,0,0"/>
+                            <ComboBox Name="ComboBoxTargetType" Height="24" Margin="0,0,6,0" IsEditable="True" HorizontalAlignment="Stretch" ItemsSource="{Binding DataContext.Targets, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.SelectedTarget, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <Label Content="Height" Margin="0,6,0,0"/>
+                            <TextBox Name="TextBoxHeight" Height="24" Text="{Binding DataContext.LastHeight, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <CheckBox Name="CheckBoxTargetDestroyed" Content="Target destroyed"/>
+                                <CheckBox Name="CheckBoxTargetBoard" Content="Target on board" Margin="12,0,0,0"/>
+                            </StackPanel>
+
+                            <Label Content="Azimuth" Margin="0,6,0,0"/>
+                            <TextBox Name="TextBoxAzimuth" Height="24" Text="-" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Foreground="DarkRed" FontWeight="Bold"/>
+
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Grid.Column="0" Name="ComboBoxTemplateSelect" Height="24" Margin="0,0,6,0" ItemsSource="{Binding DataContext.TemplateNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedTemplate, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
+                                <Button Grid.Column="1" Name="ButtonGenerate" Height="28" Width="120" Command="{Binding DataContext.GenerateCommand, ElementName=TemplateEditorGroup}">Генерувати</Button>
+                            </Grid>
+
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="15*" />
+                                    <ColumnDefinition Width="35*" />
+                                    <ColumnDefinition Width="15*" />
+                                    <ColumnDefinition Width="35*" />
+                                </Grid.ColumnDefinitions>
+                                <Label Grid.Column="0" Content="Range:" Padding="0,0,4,0" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" Name="TextBoxRange" Height="24" VerticalContentAlignment="Center" HorizontalAlignment="Stretch" />
+                                <Label Grid.Column="2" Content="Course:" Padding="8,0,4,0" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                <TextBox Grid.Column="3" Name="TextBoxCourse" Height="24" VerticalContentAlignment="Center" HorizontalAlignment="Stretch" />
+                            </Grid>
+
+                            <Label Content="Launch Area" Margin="0,6,0,0"/>
+                            <ComboBox Name="ComboBoxLaunchArea" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.LaunchAreasHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.LaunchArea, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
+
+                            <Label Content="Unit Name" Margin="0,6,0,0"/>
+                            <ComboBox Name="ComboBoxUnitName" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.UnitsHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.CustomUnit, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
+
+
+
+                            <Label Name="LabelReportStatus" Content="" Foreground="DarkGreen" Margin="0,8,0,0" />
+
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" />
+
+                    <!-- Right: Report output and template editor -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="2*" />
+                        </Grid.RowDefinitions>
+
+                        <GroupBox Grid.Row="0" Header="Звіт" Margin="4">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBox Grid.Row="0" Name="TextBoxReportOutput" Margin="6" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" Text="{Binding ReportText, Mode=TwoWay}" />
+
+
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="2" Header="Редактор шаблонів" Margin="4" x:Name="TemplateEditorGroup">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <!-- Placeholders ribbon (compact, horizontally scrollable) -->
+                                <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Height="40">
+                                    <ItemsControl ItemsSource="{Binding Placeholders}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Tag="{Binding}" Background="#F3F4F6" CornerRadius="8" Margin="3" Padding="6,2" MinWidth="48" Height="26" VerticalAlignment="Center" MouseLeftButtonUp="PlaceholderTag_Click" ToolTip="{Binding}" Cursor="Hand">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="#F3F4F6" />
+                                                            <Setter Property="BorderBrush" Value="#D1D5DB" />
+                                                            <Setter Property="BorderThickness" Value="1" />
+                                                            <Style.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter Property="Background" Value="#E6EEF8" />
+                                                                    <Setter Property="BorderBrush" Value="#9FB8E0" />
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+
+                                <TextBox Grid.Row="1" Name="TextBoxTemplateEditor" Margin="6" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Text="{Binding TemplateText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="6">
+                                    <Button Height="26" Width="100" Command="{Binding SaveCommand}">Зберегти</Button>
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                    </Grid>
                 </Grid>
             </TabItem>
 

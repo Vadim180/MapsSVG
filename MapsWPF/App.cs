@@ -9,14 +9,22 @@ namespace MapsWPF
         [STAThread()]
         static void Main()
         {
-            // Create the application.
-            var app = new Application();
+            try
+            {
+                // Create the application.
+                var app = new Application();
 
-            // Create the main window.
-            var win = new MainWindow();
+                // Create the main window.
+                var win = new MainWindow();
 
-            // Launch the application and show the main window.
-            app.Run(win);
+                // Launch the application and show the main window.
+                app.Run(win);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Startup exception: {ex}");
+                Environment.Exit(1);
+            }
         }
     }
 
