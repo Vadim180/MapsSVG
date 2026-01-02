@@ -1,7 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Windows.Input;
-using MapsWPF.Controllers;
+using MapsWPF.Services.Reporting;
 using MapsWPF.Services;
 
 namespace MapsWPF.ViewModels

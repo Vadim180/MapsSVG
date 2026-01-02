@@ -26,7 +26,7 @@ using MapsWPF.Services;
 
 namespace MapsWPF
 {
-    public partial class MainWindow : Window, Controllers.IReportContext
+    public partial class MainWindow : Window, Services.ISelectionProvider, Services.IReportOutput
     {
         // marker
         GMapMarker currentMarker;
@@ -39,7 +39,7 @@ namespace MapsWPF
 
         // Reports: template service and controller
         private Services.TemplateService? _templateService;
-        private Controllers.ReportController? _reportController;
+        private Services.Reporting.ReportController? _reportController;
 
         // Map service (concrete)
         private Services.MapService? _mapService;
@@ -312,7 +312,7 @@ namespace MapsWPF
 
 
 
-                _reportController = new Controllers.ReportController(this);
+                _reportController = new Services.Reporting.ReportController(_templateService, _mapService, _notificationService, _clipboardService, this, this);
 
                 // Initialize ViewModel for reports and set DataContext
                 var reportVm = new ViewModels.ReportViewModel(_reportController, _clipboardService, _notificationService);
