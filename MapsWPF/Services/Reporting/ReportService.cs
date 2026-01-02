@@ -6,7 +6,7 @@ using GMap.NET;
 
 namespace MapsWPF.Services.Reporting
 {
-    public class ReportController
+    public class ReportService
     {
         private readonly TemplateService _templates;
         private readonly MapService _mapService;

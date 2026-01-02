@@ -39,7 +39,7 @@ namespace MapsWPF
 
         // Reports: template service and controller
         private Services.TemplateService? _templateService;
-        private Services.Reporting.ReportController? _reportController;
+        private Services.Reporting.ReportService? _reportService;
 
         // Map service (concrete)
         private Services.MapService? _mapService;
@@ -312,17 +312,11 @@ namespace MapsWPF
 
 
 
-                _reportController = new Services.Reporting.ReportController(_templateService, _mapService, _notificationService, _clipboardService, this, this);
+                // ReportService will be initialized after MainWindow construction via InitializeReportService(reportService); // previously created here
 
-                // Initialize ViewModel for reports and set DataContext
-                var reportVm = new ViewModels.ReportViewModel(_reportController, _clipboardService, _notificationService);
-                this.DataContext = reportVm;
+                // ReportViewModel and TemplateEditorViewModel will be initialized when ReportService is supplied (see InitializeReportService)
 
-                // Initialize TemplateEditorViewModel and bind it to the template editor group
-                var templateVm = new ViewModels.TemplateEditorViewModel(_templateService, _notificationService,
-                    lines => _reportController != null ? _reportController.GenerateTextFromTemplate(lines) : string.Empty,
-                    generated => { SetReportText(generated); CopyToClipboardWithNotification(generated); _notificationService?.Notify("Згенеровано звіт", NotificationType.Info); });
-                try { TemplateEditorGroup.DataContext = templateVm; } catch { }
+                // TemplateEditorViewModel will be initialized by InitializeReportService once ReportService is provided
 
                 // Templates and histories handled by TemplateEditorViewModel, but keep Refresh for backward compat
                 try
@@ -2134,9 +2128,9 @@ namespace MapsWPF
 
         private void ButtonStartOfWork_Click(object sender, RoutedEventArgs e)
         {
-            if (_reportController != null)
+            if (_reportService != null)
             {
-                try { _reportController.Start_of_Work_Click(sender, EventArgs.Empty); }
+                try { _reportService.Start_of_Work_Click(sender, EventArgs.Empty); }
                 catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
             }
             else
@@ -2147,9 +2141,9 @@ namespace MapsWPF
 
         private void ButtonEndOfWork_Click(object sender, RoutedEventArgs e)
         {
-            if (_reportController != null)
+            if (_reportService != null)
             {
-                try { _reportController.End_of_Work_Click(sender, EventArgs.Empty); }
+                try { _reportService.End_of_Work_Click(sender, EventArgs.Empty); }
                 catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
             }
             else
@@ -2160,9 +2154,9 @@ namespace MapsWPF
 
         private void ButtonCombatWork_Click(object sender, RoutedEventArgs e)
         {
-            if (_reportController != null)
+            if (_reportService != null)
             {
-                try { _reportController.Combat_Work_Click(sender, EventArgs.Empty); }
+                try { _reportService.Combat_Work_Click(sender, EventArgs.Empty); }
                 catch (Exception ex) { _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error); }
             }
             else
