@@ -11,7 +11,7 @@ namespace MapsWPF.ViewModels
     public class TemplateEditorViewModel : INotifyPropertyChanged
     {
         private readonly TemplateService _templateService;
-        private readonly INotificationService? _notificationService;
+        private readonly NotificationService? _notificationService;
 
         private string _templateText = string.Empty;
         private string _selectedTemplate = string.Empty;
@@ -19,7 +19,7 @@ namespace MapsWPF.ViewModels
         private string _launchArea = string.Empty;
         private bool _templatesInitialized = false;
 
-        public TemplateEditorViewModel(TemplateService templateService, INotificationService? notificationService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
+        public TemplateEditorViewModel(TemplateService templateService, NotificationService? notificationService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
         {
             _templateService = templateService ?? throw new ArgumentNullException(nameof(templateService));
             _notificationService = notificationService;

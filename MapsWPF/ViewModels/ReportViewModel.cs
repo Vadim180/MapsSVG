@@ -9,11 +9,11 @@ namespace MapsWPF.ViewModels
     public class ReportViewModel : INotifyPropertyChanged
     {
         private readonly ReportController _controller;
-        private readonly IClipboardService? _clipboard;
-        private readonly INotificationService? _notification;
+        private readonly ClipboardService? _clipboard;
+        private readonly NotificationService? _notification;
         private string _reportText = string.Empty;
 
-        public ReportViewModel(ReportController controller, IClipboardService? clipboard, INotificationService? notification)
+        public ReportViewModel(ReportController controller, ClipboardService? clipboard, NotificationService? notification)
         {
             _controller = controller ?? throw new ArgumentNullException(nameof(controller));
             _clipboard = clipboard;

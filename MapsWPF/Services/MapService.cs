@@ -3,7 +3,7 @@ using GMap.NET;
 
 namespace MapsWPF.Services
 {
-    public class MapService : IMapService
+    public class MapService
     {
         private readonly CoordinateConverter _converter;
 

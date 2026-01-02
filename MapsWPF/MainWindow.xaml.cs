@@ -41,12 +41,12 @@ namespace MapsWPF
         private Services.TemplateService? _templateService;
         private Controllers.ReportController? _reportController;
 
-        // Map service abstraction
-        private Services.IMapService? _mapService;
+        // Map service (concrete)
+        private Services.MapService? _mapService;
 
-        // Clipboard and notification services
-        private Services.IClipboardService? _clipboardService;
-        private Services.INotificationService? _notificationService;
+        // Clipboard and notification services (concrete)
+        private Services.ClipboardService? _clipboardService;
+        private Services.NotificationService? _notificationService;
         private DispatcherTimer? _notificationTimer;
 
         // Last known UTM zone/band from TryGetUTM conversion
@@ -669,16 +669,6 @@ namespace MapsWPF
             }
         }
 
-        void AddDemoZone(double areaRadius, PointLatLng center, List<PointAndInfo> objects)
-        {
-            // Demo zone logic preserved but unused in default path
-        }
-
-        void UpdateCircle(Circle c)
-        {
-            // Circle update logic preserved
-
-        }
 
         void MainMap_OnMapTypeChanged(GMapProvider type)
         {

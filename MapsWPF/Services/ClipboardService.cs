@@ -4,7 +4,7 @@ using System.Windows.Threading;
 
 namespace MapsWPF.Services
 {
-    public class ClipboardService : IClipboardService
+    public class ClipboardService
     {
         public bool TrySetText(string text)
         {

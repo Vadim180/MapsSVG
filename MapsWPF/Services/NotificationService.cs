@@ -2,7 +2,7 @@ using System;
 
 namespace MapsWPF.Services
 {
-    public class NotificationService : INotificationService
+    public class NotificationService
     {
         public event Action<string, NotificationType>? NotificationRaised;
 
