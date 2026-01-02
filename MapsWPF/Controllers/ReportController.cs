@@ -24,7 +24,6 @@ namespace MapsWPF.Controllers
         string FormatShortMGRSFromLatLng(PointLatLng latlng);
         string FindClosestLocalityFromLatLng(PointLatLng latlng);
 
-        int GetCourseValue();
         string GetTargetType();
         string GetAndSetTime();
         string GetCurrentTimeString();
@@ -83,7 +82,6 @@ namespace MapsWPF.Controllers
                 return string.Empty;
             }
 
-            string courseStr = _ctx.GetCourseValue().ToString();
             string selectedTarget = _ctx.GetTargetType();
             string timeString_ = string.IsNullOrEmpty(_ctx.GetCurrentTimeString()) ? "" : _ctx.GetCurrentTimeString().Replace(':', '.');
 
@@ -105,7 +103,6 @@ namespace MapsWPF.Controllers
                 ["{MGRS_Short}"] = mgrsShort,
                 ["{CurrentCoordMGRS}"] = mgrsShort,
                 ["{CurrentCoordUTM}"] = utm != null ? $"{utm.X:F1}/{utm.Y:F1}" : string.Empty,
-                ["{course}"] = courseStr,
                 ["{nearestLocality}"] = nearestLocality,
                 ["{TargetType}"] = selectedTarget,
                 ["{UnitName}"] = _ctx.GetShablon().CustomUnit,

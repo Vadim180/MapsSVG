@@ -21,7 +21,6 @@ using System.Windows.Threading;
 using GMap.NET;
 using GMap.NET.MapProviders;
 using GMap.NET.WindowsPresentation;
-using MapsWPF.CustomMarkers;
 using MapsWPF.Models;
 using MapsWPF.Services;
 
@@ -488,19 +487,7 @@ namespace MapsWPF
                             }
                             catch { }
 
-                            // Set LaunchArea to nearest locality of attack point if available
-                            try
-                            {
-                                var near = FindNearestLocality(ap);
-                                if (!string.IsNullOrEmpty(near) && ComboBoxLaunchArea != null)
-                                {
-                                    ComboBoxLaunchArea.Text = near;
-                                    // keep in history
-                                    if (!_templateService.LaunchAreasHistory.Contains(near))
-                                        _templateService.LaunchAreasHistory.Insert(0, near);
-                                }
-                            }
-                            catch { }
+                            // Auto-detection of LaunchArea removed; keep manual selection loaded from JSON only.
                         }
                         else
                         {
@@ -2295,16 +2282,6 @@ namespace MapsWPF
             return FindNearestLocality(latlng);
         }
 
-        public int GetCourseValue()
-        {
-            try
-            {
-                if (float.TryParse(TextBoxCourse?.Text ?? string.Empty, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out float f))
-                    return (int)Math.Round(f);
-            }
-            catch { }
-            return 0;
-        }
         public string GetTargetType() => ComboBoxTargetType?.Text ?? "-";
 
         private string FindNearestLocality(PointLatLng latlng)
@@ -2421,12 +2398,12 @@ namespace MapsWPF
 
         public void SetAzimuthDisplay(string text)
         {
-            try { Dispatcher.Invoke(() => { if (TextBoxAzimuth != null) TextBoxAzimuth.Text = text; }); } catch { }
+            try { Dispatcher.Invoke(() => { if (LabelAzimuthValue != null) LabelAzimuthValue.Content = text; try { MainMap.AzimuthText = text; MainMap.InvalidateVisual(); } catch {} }); } catch { }
         }
 
         public string GetAzimuthText()
         {
-            try { return TextBoxAzimuth?.Text ?? string.Empty; } catch { return string.Empty; }
+            try { return LabelAzimuthValue?.Content?.ToString() ?? string.Empty; } catch { return string.Empty; }
         }
 
         private List<string> GetTemplateLinesByName(string name)

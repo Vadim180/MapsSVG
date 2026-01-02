@@ -14,9 +14,10 @@ namespace MapsWPF.ViewModels
         private readonly INotificationService? _notificationService;
 
         private string _templateText = string.Empty;
-        private string _selectedTemplate = "Report";
+        private string _selectedTemplate = string.Empty;
         private string _customUnit = string.Empty;
         private string _launchArea = string.Empty;
+        private bool _templatesInitialized = false;
 
         public TemplateEditorViewModel(TemplateService templateService, INotificationService? notificationService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
         {
@@ -32,15 +33,16 @@ namespace MapsWPF.ViewModels
             SetUnitNameCommand = new RelayCommand(_ => ExecuteSetUnitName());
             GenerateCommand = new RelayCommand(_ => ExecuteGenerate());
 
+            // Initialize Rotate from persisted service value
+            RotateAfterGenerate = _templateService.RotateAfterGenerate;
+
             // Placeholders for UI
             Placeholders = new[] {
                 "{height}", "{Frequencies}", "{Purpose}", "{Direction}", "{LaunchArea}", "{UnitName}", "{MGRS_Short}", "{CurrentCoordMGRS}", "{CurrentCoordUTM}", "{azimyth}", "{range}", "{Time}", "{Position}", "{Pilot}", "{DroneBy}", "{ShootingTarget}", "{TargetType}", "{TargetStatus}", "{Expenses}", "{AdditionalInfo}"
             };
 
-            // Initialize from service
+            // Initialize from service (RefreshLists will set initial SelectedTemplate to first template loaded)
             RefreshLists();
-            SelectedTemplate = "Report";
-            TemplateText = string.Join(Environment.NewLine, _templateService.GetTemplateByName(SelectedTemplate) ?? new System.Collections.Generic.List<string>());
             CustomUnit = _templateService.CustomUnit;
             LaunchArea = _templateService.LaunchArea;
             // Load persisted last values (do not override user-selected defaults unless present)
@@ -186,6 +188,21 @@ namespace MapsWPF.ViewModels
             }
         }
 
+        private bool _rotateAfterGenerate = false;
+        public bool RotateAfterGenerate
+        {
+            get => _rotateAfterGenerate;
+            set
+            {
+                if (_rotateAfterGenerate != value)
+                {
+                    _rotateAfterGenerate = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RotateAfterGenerate)));
+                    try { _templateService.RotateAfterGenerate = _rotateAfterGenerate; _templateService.SaveLastChoices(); } catch { }
+                }
+            }
+        }
+
         private void ExecuteSave()
         {
             try
@@ -289,21 +306,12 @@ namespace MapsWPF.ViewModels
                 var prevTemplate = SelectedTemplate;
                 var prevUnit = CustomUnit;
 
-                // If user entered a target text manually, add it to targets list and persist
+                // If user entered a target text manually, DO NOT persist it automatically to targets.json.
+                // New targets remain transient for generation; persist targets only by editing targets.json manually.
                 var currentTarget = SelectedTarget?.Trim();
-                if (!string.IsNullOrEmpty(currentTarget) && _templateService != null)
+                if (!string.IsNullOrEmpty(currentTarget))
                 {
-                    if (_templateService.Targets == null) _templateService.Targets = new System.Collections.Generic.List<string>();
-                    if (!_templateService.Targets.Contains(currentTarget))
-                    {
-                        _templateService.Targets.Add(currentTarget);
-                        _templateService.SaveTargetsToSettingsFolder();
-                        var addTargetMsg = $"ExecuteGenerate: Added target '{currentTarget}' and saved to { _templateService.SettingsFolderPath }";
-                        Console.WriteLine(addTargetMsg);
-                        try { System.IO.Directory.CreateDirectory(_templateService.SettingsFolderPath); System.IO.File.AppendAllText(System.IO.Path.Combine(_templateService.SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " " + addTargetMsg + Environment.NewLine); } catch { }
-                        RefreshLists();
-                        SelectedTarget = currentTarget;
-                    }
+                    // Keep SelectedTarget as-is for generation; do not modify _templateService.Targets or write to disk.
                 }
 
                 // If LaunchArea was edited manually, persist it so it appears in history and JSON
@@ -370,6 +378,16 @@ namespace MapsWPF.ViewModels
                 if (!string.IsNullOrWhiteSpace(prevTemplate) && TemplateNames.Contains(prevTemplate)) SelectedTemplate = prevTemplate;
                 else if (TemplateNames.Count > 0 && string.IsNullOrWhiteSpace(SelectedTemplate)) SelectedTemplate = TemplateNames.First();
 
+                // If Rotate is enabled, select the next template in the list (wrap-around)
+                if (RotateAfterGenerate && TemplateNames.Count > 0)
+                {
+                    var cur = SelectedTemplate;
+                    int idx = TemplateNames.IndexOf(cur);
+                    if (idx < 0) idx = 0;
+                    int next = (idx + 1) % TemplateNames.Count;
+                    SelectedTemplate = TemplateNames[next];
+                }
+
                 if (!string.IsNullOrWhiteSpace(prevUnit))
                 {
                     CustomUnit = prevUnit;
@@ -395,9 +413,15 @@ namespace MapsWPF.ViewModels
                 {
                     // templates
                     TemplateNames.Clear();
-                    var names = (_templateService?.Templates != null && _templateService.Templates.Count > 0) ? _templateService.Templates.Keys.OrderBy(k => k).ToList() : new List<string> { "Report", "StartWork", "EndWork" };
+                    var names = (_templateService?.Templates != null && _templateService.Templates.Count > 0) ? _templateService.Templates.Keys.ToList() : new List<string> { "Report", "StartWork", "EndWork" };
                     foreach (var n in names) TemplateNames.Add(n);
 
+                    // On first refresh (initial load), make the first template the selected one (as loaded from JSON)
+                    if (!_templatesInitialized && TemplateNames.Count > 0)
+                    {
+                        SelectedTemplate = TemplateNames.First();
+                        _templatesInitialized = true;
+                    }
                     // targets, units, launch areas, positions
                     Targets.Clear();
                     if (_templateService.Targets != null) foreach (var t in _templateService.Targets) Targets.Add(t);

@@ -257,6 +257,8 @@ namespace MapsWPF
             return new PointLatLng(lat2 * 180d / System.Math.PI, lon2 * 180d / System.Math.PI);
         }
 
+        public string AzimuthText { get; set; } = string.Empty;
+
         private void DrawCoordinatesOverlay(DrawingContext dc)
         {
             try
@@ -284,12 +286,16 @@ namespace MapsWPF
                 // Show MGRS above UTM for better readability in overlay
                 if (!string.IsNullOrEmpty(mgrs)) rows.Add(("MGRS:", mgrs));
                 if (!string.IsNullOrEmpty(utm)) rows.Add(("UTM:", utm));
-                rows.Add(("Кут:", AttackAngle.ToString("F1", CultureInfo.InvariantCulture) + "°"));
+                // Put distance, azimuth and attack angle on one row (left-aligned label)
+                string az = !string.IsNullOrEmpty(AzimuthText) ? AzimuthText : "-";
+                string angle = AttackAngle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                string dist = TargetDistance >= 0 ? $"{TargetDistance:F0} m" : "-";
 
-                if (TargetDistance >= 0)
-                {
-                    rows.Add(("Відстань:", $"{TargetDistance:F0} m"));
-                }
+                string combinedValue = dist;
+                if (!string.IsNullOrEmpty(AzimuthText)) combinedValue += $"   Азимут: {az}";
+                combinedValue += $"   Кут: {angle}";
+
+                rows.Add(("Відстань:", combinedValue));
 
                 double padding = 10.0;
                 double labelSpacing = 8.0;

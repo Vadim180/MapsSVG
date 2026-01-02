@@ -38,6 +38,7 @@ namespace MapsWPF.Services
         public string LastSelectedPilot { get; set; }
         public string LastSelectedDrone { get; set; }
         public string LastSelectedTarget { get; set; }
+        public bool RotateAfterGenerate { get; set; } = false;
 
         public TemplateService()
         {
@@ -156,13 +157,30 @@ namespace MapsWPF.Services
                     var json = File.ReadAllText(templatesPath);
                     if (!string.IsNullOrWhiteSpace(json))
                     {
-                        // Support either dictionary<string, string[]> of named templates or legacy object with Start/End/Report fields
+                        // Try parsing as JObject to preserve property order as defined in JSON file
                         try
                         {
-                            var map = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(json);
-                            if (map != null && map.Count > 0)
+                            var jobj = JObject.Parse(json);
+                            if (jobj != null && jobj.Properties().Any())
                             {
-                                Templates = new Dictionary<string, List<string>>(map, StringComparer.OrdinalIgnoreCase);
+                                var tmpMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                                foreach (var prop in jobj.Properties())
+                                {
+                                    var name = prop.Name;
+                                    var val = prop.Value;
+                                    List<string> lines = new List<string>();
+                                    if (val is JArray arr)
+                                    {
+                                        foreach (var it in arr) lines.Add(it.ToString());
+                                    }
+                                    else if (val != null)
+                                    {
+                                        var s = val.ToString();
+                                        lines = s.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s2 => s2.Trim()).Where(s2 => !string.IsNullOrEmpty(s2)).ToList();
+                                    }
+                                    tmpMap[name] = lines;
+                                }
+                                Templates = new Dictionary<string, List<string>>(tmpMap, StringComparer.OrdinalIgnoreCase);
                                 // keep legacy properties in sync for backward compat if needed
                                 if (Templates.ContainsKey("StartWork")) StartWorkShablon = Templates["StartWork"];
                                 if (Templates.ContainsKey("EndWork")) EndWorkShablon = Templates["EndWork"];
@@ -172,6 +190,7 @@ namespace MapsWPF.Services
                         }
                         catch { }
 
+                        // Fallback to older dynamic parsing if needed
                         if (!loaded)
                         {
                             dynamic d = JsonConvert.DeserializeObject(json);
@@ -435,6 +454,7 @@ namespace MapsWPF.Services
                                     if (last.LastSelectedPilot != null) LastSelectedPilot = last.LastSelectedPilot.ToString();
                                     if (last.LastSelectedDrone != null) LastSelectedDrone = last.LastSelectedDrone.ToString();
                                     if (last.LastSelectedTarget != null) LastSelectedTarget = last.LastSelectedTarget.ToString();
+                                    if (last.RotateAfterGenerate != null) RotateAfterGenerate = Convert.ToBoolean(last.RotateAfterGenerate);
                                 }
                             }
                             catch { }
@@ -587,7 +607,8 @@ namespace MapsWPF.Services
                     LastSelectedPosition = LastSelectedPosition,
                     LastSelectedPilot = LastSelectedPilot,
                     LastSelectedDrone = LastSelectedDrone,
-                    LastSelectedTarget = LastSelectedTarget
+                    LastSelectedTarget = LastSelectedTarget,
+                    RotateAfterGenerate = RotateAfterGenerate
                 };
                 File.WriteAllText(lastPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
             }

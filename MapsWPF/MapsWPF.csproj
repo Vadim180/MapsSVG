@@ -31,11 +31,6 @@
 		<PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<Resource Include="CustomMarkers\bigMarkerGreen.png" />
-
-		<Resource Include="CustomMarkers\red-dot.png" />
-	</ItemGroup>
 
 	<ItemGroup>
 		<None Include="C:\Users\Lion\.nuget\packages\accord\3.8.2-alpha\build\Accord.dll.config">

@@ -18,11 +18,6 @@
     "{TargetStatus}"
   ],
   "ReportWorkShablon": [
-    "{Time} БпЛА-П №1 “{Position}” {UnitName} 14 омбр,",
-    "{nearestLocality} кв. ({MGRS_Short})",
-    "виявлено БпЛА “{TargetType}” (А - {azimyth}, Д - {range}, В - {height}).",
-    "Застосовано FPV дрон-перехоплювач мультироторного типу “{DroneBy}”, денний.",
-    "Ціль {TargetStatus}.",
-    "{Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрдн."
+    "{Time} БпЛА-П №1 “{Position}” {UnitName} 14 омбр, {nearestLocality} кв. ({MGRS_Short}) виявлено БпЛА “{TargetType}” (А - {azimyth}, Д - {range}, В - {height}). Застосовано FPV дрон-перехоплювач мультироторного типу “{DroneBy}”, денний. Ціль {TargetStatus}. {Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрдн."
   ]
 }
