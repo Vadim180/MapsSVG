@@ -39,7 +39,8 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <Folder Include="MDs\" />
+	  <Folder Include="Data\MDs\" />
+	  <Folder Include="Data\Templates\" />
 	</ItemGroup>
 
 </Project>
