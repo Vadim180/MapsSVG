@@ -23,6 +23,9 @@ namespace MapsWPF
 
         public float AttackAngle { get; set; } = 0f;
 
+        // Computed display angle for servo overlay (angle to show next to "СЕРВА")
+        public float ServoAngleDisplay { get; set; } = float.NaN;
+
         // Dimensions in METERS now, not pixels
         public double AttackRayLengthMeters { get; set; } = 5000;
         public double AttackSectorRadiusMeters { get; set; } = 5000;
@@ -54,6 +57,11 @@ namespace MapsWPF
                                                             weight: FontWeights.Normal,
                                                             style: FontStyles.Normal,
                                                             stretch: FontStretches.Medium);
+
+        private static readonly Typeface textTypeFaceServo = new(fontFamily: new System.Windows.Media.FontFamily("FontStretches.Normal"),
+                                                    weight: FontWeights.Bold,
+                                                    style: FontStyles.Normal,
+                                                    stretch: FontStretches.Medium);
 
         static Map()
         {
@@ -118,6 +126,7 @@ namespace MapsWPF
 
             _stopwatch.Stop();
 
+            // Draw elapsed time in milliseconds (debug)
             var text = new FormattedText(
                 _stopwatch.ElapsedMilliseconds +
                 "ms",
@@ -129,7 +138,7 @@ namespace MapsWPF
                 VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
             // Правий нижній кут карти з відступом 10 пікселів
-            drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 10));
+            drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 20));
         }
 
         private void DrawAttackZone(DrawingContext dc)
@@ -258,6 +267,7 @@ namespace MapsWPF
         }
 
         public string AzimuthText { get; set; } = string.Empty;
+        public PointLatLng? MousePositionLatLng { get; set; } = null;
 
         private void DrawCoordinatesOverlay(DrawingContext dc)
         {
@@ -269,6 +279,8 @@ namespace MapsWPF
                 string lineLatLng = $"Lat/Lng: {lat:F6}, {lng:F6}";
                 string utm = null;
                 string mgrs = null;
+                string mgrsCursor = null;
+
                 if (CoordinateFormatter != null)
                 {
                     try
@@ -276,6 +288,12 @@ namespace MapsWPF
                         var extra = CoordinateFormatter(new PointLatLng(lat, lng));
                         utm = extra.UTM;
                         mgrs = extra.MGRS;
+
+                        if (MousePositionLatLng.HasValue)
+                        {
+                            var extraCursor = CoordinateFormatter(MousePositionLatLng.Value);
+                            mgrsCursor = extraCursor.MGRS;
+                        }
                     }
                     catch { }
                 }
@@ -285,17 +303,16 @@ namespace MapsWPF
                 rows.Add(("Lat/Lng:", $"{lat:F6}, {lng:F6}"));
                 // Show MGRS above UTM for better readability in overlay
                 if (!string.IsNullOrEmpty(mgrs)) rows.Add(("MGRS:", mgrs));
+                if (!string.IsNullOrEmpty(mgrsCursor)) rows.Add(("MGRS (Cursor):", mgrsCursor));
                 if (!string.IsNullOrEmpty(utm)) rows.Add(("UTM:", utm));
-                // Put distance, azimuth and attack angle on one row (left-aligned label)
+                // Put distance (in km) on its own row, then azimuth and angle on separate rows
                 string az = !string.IsNullOrEmpty(AzimuthText) ? AzimuthText : "-";
                 string angle = AttackAngle.ToString("F1", CultureInfo.InvariantCulture) + "°";
-                string dist = TargetDistance >= 0 ? $"{TargetDistance:F0} m" : "-";
+                string dist = TargetDistance >= 0 ? $"{(TargetDistance / 1000.0):F1} km" : "-";
 
-                string combinedValue = dist;
-                if (!string.IsNullOrEmpty(AzimuthText)) combinedValue += $"   Азимут: {az}";
-                combinedValue += $"   Кут: {angle}";
-
-                rows.Add(("Відстань:", combinedValue));
+                rows.Add(("Відстань:", dist));
+                rows.Add(("Азимут:", az));
+                rows.Add(("Кут:", angle));
 
                 double padding = 10.0;
                 double labelSpacing = 8.0;
@@ -344,6 +361,51 @@ namespace MapsWPF
                     dc.DrawText(labelFts[i], new Point(xLabel, y));
                     dc.DrawText(valueFts[i], new Point(xValue, y));
                     y += rowHeights[i];
+                }
+
+                // Draw a small secondary overlay below the main one, aligned to the right,
+                // roughly half the width and half the height of the main overlay.
+                double spacing = 5.0;
+                double smallRectWidth = Math.Max(60.0, rectWidth / 2.2);
+                double smallRectHeight = Math.Max(30.0, rectHeight / 3.5);
+                double smallRectX = ActualWidth - smallRectWidth - margin;
+                double smallRectY = rectY + rectHeight + spacing;
+
+                // Ensure small overlay fits inside the control
+                if (smallRectY + smallRectHeight + margin > ActualHeight)
+                {
+                    smallRectY = Math.Max(margin, ActualHeight - smallRectHeight - margin);
+                }
+
+                dc.DrawRectangle(_overlayBackground, _overlayBorder, new Rect(smallRectX, smallRectY, smallRectWidth, smallRectHeight));
+
+                var dpiPixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+                // Draw label "СЕРВА" fixed at a consistent X inside the small overlay,
+                // and draw numeric angle to the right so changing digit width doesn't shift the label.
+                var labelText = new FormattedText("СЕРВА", CultureInfo.InvariantCulture, fd, textTypeFaceServo, 18, _overlayTextBrush, dpiPixelsPerDip);
+                double paddingServo = 18.0;
+                double spacingServo = 8.0;
+
+                double labelX = smallRectX + paddingServo;
+                double labelY = smallRectY + (smallRectHeight - labelText.Height) / 2.0;
+                dc.DrawText(labelText, new Point(labelX, labelY));
+
+                if (!float.IsNaN(ServoAngleDisplay))
+                {
+                    string angleStr = $"{ServoAngleDisplay:F1}°";
+                    var angleText = new FormattedText(angleStr, CultureInfo.InvariantCulture, fd, textTypeFaceServo, 18, _overlayTextBrush, dpiPixelsPerDip);
+                    double angleX = labelX + labelText.Width + spacingServo;
+
+                    // Prevent angle from overflowing the small overlay's right edge; if it would, shift it left but keep label fixed
+                    double maxRight = smallRectX + smallRectWidth - paddingServo;
+                    if (angleX + angleText.Width > maxRight)
+                    {
+                        angleX = Math.Max(labelX + labelText.Width + spacingServo, maxRight - angleText.Width);
+                    }
+
+                    double angleY = smallRectY + (smallRectHeight - angleText.Height) / 2.0;
+                    dc.DrawText(angleText, new Point(angleX, angleY));
                 }
             }
             catch { }

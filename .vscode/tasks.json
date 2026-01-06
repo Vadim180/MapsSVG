@@ -7,7 +7,7 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/Demo.WindowsPresentation/Demo.WindowsPresentation.csproj",
+                "${workspaceFolder}/MapsWPF/MapsWPF.csproj",
                 "-c",
                 "Debug"
             ],

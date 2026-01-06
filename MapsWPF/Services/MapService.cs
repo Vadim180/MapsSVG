@@ -1,6 +1,8 @@
 using System.Drawing;
 using GMap.NET;
 
+using MapsWPF.Utils;
+
 namespace MapsWPF.Services
 {
     public class MapService
@@ -22,9 +24,9 @@ namespace MapsWPF.Services
             return _converter.TryUTMToLatLng(utm, out lat, out lng);
         }
 
-        public string FormatShortMGRSFromUTM(PointF utm, int utmZone)
+        public string FormatShortMGRSFromUTM(PointF utm, int utmZone, char bandLetter)
         {
-            return _converter.FormatShortMGRSFromUTM(utm, utmZone);
+            return _converter.FormatShortMGRSFromUTM(utm, utmZone, bandLetter);
         }
 
         public string FormatUTM(PointF utm, int utmZone, char band)

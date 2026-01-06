@@ -5,7 +5,7 @@ using MapsWPF.Models;
 
 namespace MapsWPF.Services
 {
-    public class SettingsManager
+    public class SettingsService
     {
         private readonly string _coordinatesPath;
         private readonly string _attackPointPath;
@@ -15,7 +15,12 @@ namespace MapsWPF.Services
 
         public event Action OnAttackSettingsChanged;
 
-        public SettingsManager()
+        public string GetSettingsFolder()
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings");
+        }
+
+        public SettingsService()
         {
             var baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings");
             if (!Directory.Exists(baseDir))

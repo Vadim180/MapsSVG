@@ -35,7 +35,7 @@
             </Grid.RowDefinitions>
 
             <!--COORDINATES-->
-            <Expander Grid.Row="0" Header="Coordinates" Name="ExpanderCoordinates" IsExpanded="True">
+            <Expander Grid.Row="0" Header="Coordinates" Name="ExpanderCoordinates" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                 <Grid Margin="2" Grid.IsSharedSizeScope="True">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels"/>
@@ -74,16 +74,20 @@
                     <Label Grid.Row="2" Grid.Column="0" Content="MGRS:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
                     <Label Grid.Row="2" Grid.Column="1" Name="LabelMGRSValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
+                    <!-- MGRS (Cursor) -->
+                    <Label Grid.Row="3" Grid.Column="0" Content="MGRS (Cursor):" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="3" Grid.Column="1" Name="LabelMgrsCursorValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
+
                     <!-- UTM -->
-                    <Label Grid.Row="3" Grid.Column="0" Content="UTM:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
-                    <Label Grid.Row="3" Grid.Column="1" Name="LabelUTMValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
+                    <Label Grid.Row="4" Grid.Column="0" Content="UTM:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="4" Grid.Column="1" Name="LabelUTMValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
                     <!-- Zoom -->
-                    <Label Grid.Row="4" Grid.Column="0" Content="Zoom:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
-                    <Label Grid.Row="4" Grid.Column="1" Name="LabelZoomValue" Content="0" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
+                    <Label Grid.Row="5" Grid.Column="0" Content="Zoom:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center"/>
+                    <Label Grid.Row="5" Grid.Column="1" Name="LabelZoomValue" Content="0" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy"/>
 
                     <!-- Dist, Azimuth and Angle in one row (left-aligned like Lat/Lng) -->
-                    <Grid Grid.Row="5" Grid.ColumnSpan="2">
+                    <Grid Grid.Row="6" Grid.ColumnSpan="2">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels" />
                             <ColumnDefinition Width="Auto" />
@@ -91,9 +95,11 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <Label Grid.Column="0" Content="Dist:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center" />
+                        <Label Grid.Column="0" Content="Відст.:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center" />
                         <Label Grid.Column="1" Name="LabelDistanceValue" Content="0 m" Foreground="Blue" FontWeight="Bold" Padding="0,2,0,2" VerticalAlignment="Center" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Click to copy" />
 
                         <Label Grid.Column="2" Content="Азимут:" Foreground="Gray" Padding="8,2,4,2" VerticalAlignment="Center" Margin="8,0,0,0" />
@@ -101,29 +107,53 @@
 
                         <Label Grid.Column="4" Content="Кут:" Foreground="Gray" Padding="8,2,0,2" VerticalAlignment="Center" Margin="8,0,0,0" />
                         <Label Grid.Column="5" Name="LabelAngleValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" Margin="8,0,0,0"  Foreground="Red" FontWeight="Bold" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Кут атаки" />
+
+                        <Label Grid.Column="6" Content="Серва:" Foreground="Gray" Padding="8,2,0,2" VerticalAlignment="Center" Margin="8,0,0,0" />
+                        <Label Grid.Column="7" Name="LabelServoValue" Content="-" Padding="0,2,0,2" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="#FF7A00" FontWeight="Bold" MouseLeftButtonUp="Label_MouseLeftButtonUp" ToolTip="Кут серви" />
                     </Grid>
+
+                    <!-- Target Info (Moved from ExpanderTarget) -->
+                    <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,2,0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="CoordLabels"/>
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Label Grid.Column="0" Content="Найб.НП.:" Foreground="Gray" Padding="0,2,2,2" VerticalAlignment="Center" Margin="0,2,0,0"/>
+
+                        <!-- Content Area: labels in Row 0, progressbar in Row 1 -->
+                        <Grid Grid.Column="1">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <!-- Labels row (hide when progressbar shown) -->
+                            <Grid Grid.Row="0" Name="PanelTargetInfo" Visibility="Visible">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Label Name="LabelTargetLocation" Grid.Column="0" Content="" Foreground="DarkOrange" Padding="0,0,0,0" VerticalAlignment="Center" />
+                                <Label Name="LabelTargetAddress"  Grid.Column="1" Content="" Foreground="Gray"       Padding="10,0,0,0" VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Progress bar occupies the second row and spans full width -->
+                            <ProgressBar Grid.Row="1" Name="ProgressBarTarget" Height="4" IsIndeterminate="True" Visibility="Collapsed" VerticalAlignment="Center" Margin="0,6,0,0"/>
+                        </Grid>
+                    </Grid>    
+
                 </Grid>
             </Expander>
 
-            <TabControl Grid.Row="1" Name="RightTabControl" Margin="0">
+            <TabControl Grid.Row="1" Name="RightTabControl" Margin="0" SelectionChanged="RightTabControl_SelectionChanged">
                 <!--TARGET-->
                 <TabItem Header="Settings" Name="TabSettings">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <Expander Header="Target" Name="ExpanderTarget" IsExpanded="True">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Label Grid.Row="0" Name="LabelTargetLocation" Margin="0" Content="" Foreground="DarkOrange" />
-                                    <Label Grid.Row="1" Name="LabelTargetAddress" Margin="0" Content="" Foreground="Gray" FontSize="11" />
-                                    <ProgressBar Grid.Row="2" Name="ProgressBarTarget" Height="4" Margin="5,0,5,5" IsIndeterminate="True" Visibility="Collapsed"/>
-                                </Grid>
-                            </Expander>
-
-                            <Expander Header="Gmap" Name="ExpanderGmap" IsExpanded="True">
+                            
+                            <Expander Header="Gmap" Name="ExpanderGmap" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -138,8 +168,7 @@
                                     </Grid.RowDefinitions>
 
                                     <!-- Map Provider -->
-                                    <ComboBox Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="0" FontSize="12" 
-                        Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMapType" Height="24">
+                                    <ComboBox Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="0" FontSize="12" Margin="5,5,5,0" VerticalContentAlignment="Center" Name="ComboBoxMapType" Height="24">
                                         <ComboBox.SelectedItem>
                                             <Binding Path="MapProvider" ElementName="MainMap">
                                                 <Binding.ValidationRules>
@@ -166,7 +195,7 @@
                                 </Grid>
                             </Expander>
 
-                            <Expander Header="Cache" Name="ExpanderCache" IsExpanded="True">
+                            <Expander Header="Cache" Name="ExpanderCache" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                                 <Grid>
 
                                     <Grid.ColumnDefinitions>
@@ -211,7 +240,7 @@
                                 </Grid>
                             </Expander>
 
-                            <Expander Header="Go" Name="ExpanderGo" IsExpanded="True">
+                            <Expander Header="Go" Name="ExpanderGo" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -228,33 +257,32 @@
                                     </Grid.RowDefinitions>
 
                                     <!-- LATITUDE -->
-                                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="0" Height="24" Name="TextBoxLat"  VerticalContentAlignment="Center" />
+                                    <TextBox Margin="5,5,5,0" Grid.ColumnSpan="2" Grid.Row="0" Height="24" Name="TextBoxLat"  VerticalContentAlignment="Center" />
                                     <!-- LABEL -->
                                     <Label Margin="0,0,5,0" Grid.Row="0" Grid.Column="2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label2" Content="Lat" />
 
                                     <!-- LONGITUDE -->
-                                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="1" Name="TextBoxLng" Height="24" HorizontalContentAlignment="Left" VerticalContentAlignment="Center"/>
+                                    <TextBox Margin="5,5,5,0" Grid.ColumnSpan="2" Grid.Row="1" Name="TextBoxLng" Height="24" HorizontalContentAlignment="Left" VerticalContentAlignment="Center"/>
                                     <!-- LABEL -->
-                                    <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label3" Content="Lng" />
+                                    <Label Margin="0,0,5,0" Grid.Row="1" Grid.Column="2" HorizontalAlignment="Left" HorizontalContentAlignment="Left" VerticalContentAlignment="Center" Padding="0" Name="Label3" Content="Lng" />
 
                                     <!-- GEO -->
-                                    <TextBox Margin="5,0,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">Kyiv</TextBox>
+                                    <TextBox Margin="5,5,5,0" Grid.ColumnSpan="2" Grid.Row="2" Height="24" Name="TextBoxGeo" VerticalContentAlignment="Center" KeyUp="textBoxGeo_KeyUp">Kyiv</TextBox>
                                     <!-- LABEL -->
-                                    <Label Margin="0,0,5,0" Grid.Row="2" Grid.Column="2"  HorizontalAlignment="Center" Name="Label4" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">Geo</Label>
+                                    <Label Margin="0,0,5,0" Grid.Row="2" Grid.Column="2"  HorizontalAlignment="Left" Name="Label4" HorizontalContentAlignment="Left" Padding="0"  VerticalContentAlignment="Center">Geo</Label>
 
                                     <!-- BUTTONS -->
-                                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="3"  Height="24" Name="Button2" Click="button2_Click">Go</Button>
+                                    <Button Margin="5,5,5,0" Grid.Column="0" Grid.Row="3"  Height="24" Name="Button2" Click="button2_Click">Go</Button>
 
-                                    <Button Margin="0,3,5,5"  Grid.Column="1" Grid.Row="3" Height="24" Name="ButtonSearch" Click="buttonSearch_Click">Search</Button>
+                                    <Button Margin="0,5,5,0"  Grid.Column="1" Grid.Row="3" Height="24" Name="ButtonSearch" Click="buttonSearch_Click">Search</Button>
 
-                                    <Button Margin="0,3,5,5" Grid.Column="2" Grid.Row="3"  Height="24" Name="Button1" Click="button1_Click">🔄</Button>
-
-                                    <Button Margin="5,3,5,5" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="3" Name="Button13" Height="24" VerticalAlignment="Bottom" Click="button13_Click">Zoom Center</Button>
+                                    <Button Margin="0,5,5,0" Grid.Column="2" Grid.Row="3"  Height="24" Name="Button1" Click="button1_Click">🔄</Button>
+                                    <Button Margin="5,5,5,5" Grid.Column="0" Grid.Row="4" Grid.ColumnSpan="3" Name="Button13" Height="24" VerticalAlignment="Bottom" Click="button13_Click">Zoom Center</Button>
 
                                 </Grid>
                             </Expander>
 
-                            <Expander Header="Ray" Name="ExpanderRay" IsExpanded="True">
+                            <Expander Header="Ray" Name="ExpanderRay" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
@@ -263,6 +291,7 @@
                                     </Grid.ColumnDefinitions>
 
                                     <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
@@ -305,10 +334,23 @@
                                     <!-- Rotate shift step (when Shift pressed) -->
                                     <Label Grid.Row="4" Grid.Column="0" Content="Кроку повороту (Shift):" Margin="5,5,5,5" />
                                     <TextBox Grid.Row="4" Grid.Column="1" Name="TextBoxRotateShiftStep"
-                             Height="24" Margin="5,5,5,5"
-                             VerticalContentAlignment="Center"
-                             TextChanged="TextBoxRotateShiftStep_TextChanged" />
+                                             Height="24" Margin="5,5,5,5"
+                                             VerticalContentAlignment="Center"
+                                             TextChanged="TextBoxRotateShiftStep_TextChanged" />
+                                    
                                     <TextBlock Grid.Row="4" Grid.Column="2" Text="°" VerticalAlignment="Center" Margin="0,5,5,5"/>
+
+                                    <!-- Servo input and set button -->
+
+                                    <Label Grid.Row="5" Grid.Column="0" Content="Серва (°):" Margin="5,0,5,0" VerticalAlignment="Center" />
+                                    <Grid Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Grid.Column="0" Name="TextBoxServoAngle" Height="24" Margin="5,0,5,0" VerticalContentAlignment="Center" />
+                                        <Button Grid.Column="1" Name="ButtonSetServo" Height="24" Margin="0,0,20,0" Padding="30,0" Click="ButtonSetServo_Click">Задати</Button>
+                                    </Grid>
 
                                 </Grid>
                             </Expander>
@@ -316,7 +358,7 @@
 
 
                             <!--MAP LIMITS-->
-                            <Expander Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True">
+                            <Expander Header="Map Limits" Name="ExpanderMapLimits" IsExpanded="True" Expanded="Expander_Toggled" Collapsed="Expander_Toggled">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -367,145 +409,156 @@
                 <TabItem Header="Звіти" Name="TabReports">
                     <Grid Margin="4">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="260" />
-                            <ColumnDefinition Width="8" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
                         <!-- Left: Inputs and actions -->
                         <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
-                            <StackPanel Margin="6" Orientation="Vertical">
-                                <TextBlock FontWeight="Bold" Margin="0,0,0,6">Параметри звіту</TextBlock>
 
-                                <Label Content="Position"/>
+                            <StackPanel Margin="0,0,5,0" Orientation="Vertical">
+
+                                <Label Content="Позиція"/>
                                 <ComboBox Name="ComboBoxPosition" Height="24" ItemsSource="{Binding DataContext.PositionNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedPosition, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
 
-                                <Label Content="Pilot" Margin="0,6,0,0"/>
+                                <Label Content="Пілот" Margin="0,0,0,0"/>
                                 <ComboBox Name="ComboBoxPilot" Height="24" ItemsSource="{Binding DataContext.Pilots, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedPilot, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
 
-                                <Label Content="Drone By" Margin="0,6,0,0"/>
+                                <Label Content="Дрон" Margin="0,0,0,0"/>
                                 <ComboBox Name="ComboBoxDroneBy" Height="24" ItemsSource="{Binding DataContext.Drones, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedDrone, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
 
-                                <Label Content="Target" Margin="0,6,0,0"/>
-                                <ComboBox Name="ComboBoxTargetType" Height="24" Margin="0,0,6,0" IsEditable="True" HorizontalAlignment="Stretch" ItemsSource="{Binding DataContext.Targets, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.SelectedTarget, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Label Content="Ціль" Margin="0,0,0,0"/>
+                                <ComboBox Name="ComboBoxTargetType" Height="24" Margin="0,0,0,0" IsEditable="True" HorizontalAlignment="Stretch" ItemsSource="{Binding DataContext.Targets, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.SelectedTarget, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <Label Content="Height" Margin="0,6,0,0"/>
+                                <Label Content="Висота" Margin="0,0,0,0"/>
                                 <TextBox Name="TextBoxHeight" Height="24" Text="{Binding DataContext.LastHeight, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                    <CheckBox Name="CheckBoxTargetDestroyed" Content="Target destroyed"/>
-                                    <CheckBox Name="CheckBoxTargetBoard" Content="Target on board" Margin="12,0,0,0"/>
+                                    <CheckBox Name="CheckBoxTargetDestroyed" Content="Ціль Знищено" IsChecked="{Binding DataContext.IsTargetDestroyed, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
+                                    <CheckBox Name="CheckBoxTargetBoard" Content="Повернуто" Margin="12,0,0,0" IsChecked="{Binding DataContext.IsTargetReturned, ElementName=TemplateEditorGroup, Mode=TwoWay}"/>
                                 </StackPanel>
 
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="30*" />
+                                        <ColumnDefinition Width="70*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Label Grid.Column="0" Content="Відстань:" Padding="0,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Name="TextBoxRange" Height="24" VerticalContentAlignment="Center" HorizontalAlignment="Stretch" Text="{Binding DataContext.Distance, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
 
+                                <Label Content="Район Зльоту" Margin="0,0,0,0"/>
+                                <ComboBox Name="ComboBoxLaunchArea" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.LaunchAreasHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.LaunchArea, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <Grid Margin="0,8,0,0">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
+                                <Label Content="Частоти" Margin="0,0,0,0"/>
+                                <TextBox Name="TextBoxFrequencies" Height="24" Text="{Binding DataContext.Frequencies, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                                <Label Content="Мета польоту" Margin="0,0,0,0"/>
+                                <TextBox Name="TextBoxPurpose" Height="24" Text="{Binding DataContext.Purpose, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                                <Label Content="Підрозділ" Margin="0,0,0,0"/>
+                                <ComboBox Name="ComboBoxUnitName" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.UnitsHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.CustomUnit, ElementName=TemplateEditorGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <CheckBox Grid.Row="0" Grid.ColumnSpan="2" Name="CheckBoxRotate" Content="Rotate" IsChecked="{Binding DataContext.RotateAfterGenerate, ElementName=TemplateEditorGroup, Mode=TwoWay}" Margin="0,0,0,4" />
-                                    <ComboBox Grid.Row="1" Grid.Column="0" Name="ComboBoxTemplateSelect" Height="24" Margin="0,0,6,0" ItemsSource="{Binding DataContext.TemplateNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedTemplate, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
-                                    <Button Grid.Row="1" Grid.Column="1" Name="ButtonGenerate" Height="28" Width="120" Command="{Binding DataContext.GenerateCommand, ElementName=TemplateEditorGroup}">Генерувати</Button>
+                                    <Label Content="Напрямок польоту" Margin="0,0,0,0" Grid.Column="0" />
+                                    <Button Grid.Column="1" Content="⟳" Width="20" Height="20" Margin="0,0,0,0" Padding="0,-2,0,0" ToolTip="Скинути виділення" Click="ButtonResetFlyDirections_Click" Background="Transparent" BorderThickness="0" FontSize="14" FontWeight="Bold"/>
                                 </Grid>
+                                <ListBox Name="ListBoxFlyDirections" SelectionMode="Multiple" ItemsSource="{Binding DataContext.FlyDirectionList, ElementName=TemplateEditorGroup}" Height="80">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Style.Resources>
+                                                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#0078D7"/>
+                                                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="White"/>
+                                            </Style.Resources>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                </ListBox>
 
-                                <Grid Margin="0,8,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="15*" />
-                                        <ColumnDefinition Width="85*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Label Grid.Column="0" Content="Range:" Padding="0,0,4,0" VerticalAlignment="Center"/>
-                                    <TextBox Grid.Column="1" Name="TextBoxRange" Height="24" VerticalContentAlignment="Center" HorizontalAlignment="Stretch" />
-                                </Grid>
+                                <StackPanel Margin="0,6,0,0" HorizontalAlignment="Stretch">
+                                    <CheckBox Name="CheckBoxRotate" Content="Ротація" IsChecked="{Binding DataContext.RotateAfterGenerate, ElementName=TemplateEditorGroup, Mode=TwoWay}" Margin="0,0,0,6" HorizontalAlignment="Stretch" />
+                                    <ComboBox Name="ComboBoxTemplateSelect" VerticalContentAlignment="Center" Height="30" ItemsSource="{Binding DataContext.TemplateNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedTemplate, ElementName=TemplateEditorGroup, Mode=TwoWay}" SelectionChanged="ComboBoxTemplateSelect_SelectionChanged" HorizontalAlignment="Stretch" />
+                                    <Button Name="ButtonGenerate" Height="32" FontSize="16" Margin="0,6,0,0" Command="{Binding DataContext.GenerateCommand, ElementName=TemplateEditorGroup}" HorizontalAlignment="Stretch">Генерувати</Button>
+                                </StackPanel>
 
-                                <Label Content="Launch Area" Margin="0,6,0,0"/>
-                                <ComboBox Name="ComboBoxLaunchArea" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.LaunchAreasHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.LaunchArea, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
-
-                                <Label Content="Unit Name" Margin="0,6,0,0"/>
-                                <ComboBox Name="ComboBoxUnitName" Height="24" IsEditable="True" ItemsSource="{Binding DataContext.UnitsHistory, ElementName=TemplateEditorGroup}" Text="{Binding DataContext.CustomUnit, ElementName=TemplateEditorGroup, Mode=TwoWay}" />
-
-
-
-                                <Label Name="LabelReportStatus" Content="" Foreground="DarkGreen" Margin="0,8,0,0" />
+                                <TextBox Name="TextBoxReportOutput" Margin="0,6,0,0" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" Text="{Binding ReportText, Mode=TwoWay}" Height="180"/>
 
                             </StackPanel>
                         </ScrollViewer>
 
-                        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" />
 
-                        <!-- Right: Report output and template editor -->
-                        <Grid Grid.Column="2">
+
+                        <!-- Right panel intentionally left empty after moving controls -->
+
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Налаштування звітів" Name="TabReportsSettings">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <!-- Розмітка: редактор займає верхню половину вкладки, нижня половина залишається пустою -->
+                        <Grid Margin="0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="*" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="2*" />
+                                <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
 
-                            <GroupBox Grid.Row="0" Header="Звіт" Margin="4">
-                                <Grid>
+                            <!-- Редактор шаблонів (верхня половина) -->
+                            <Grid Grid.Row="0" x:Name="TemplateEditorGroup">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <TextBox Grid.Row="0" Name="TextBoxReportOutput" Margin="6" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" Text="{Binding ReportText, Mode=TwoWay}" />
-
-
-                                </Grid>
-                            </GroupBox>
-
-                            <GroupBox Grid.Row="2" Header="Редактор шаблонів" Margin="4" x:Name="TemplateEditorGroup">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <!-- Placeholders ribbon (compact, horizontally scrollable) -->
-                                    <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Height="40">
-                                        <ItemsControl ItemsSource="{Binding Placeholders}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
+                                    <Grid Grid.Row="0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="7*" />
+                                            <ColumnDefinition Width="3*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Верхній ряд: редактор і список плейсхолдерів (однакової висоти) -->
+                                        <TextBox Grid.Row="0" Grid.Column="0" Name="TextBoxTemplateEditor" Margin="6" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Text="{Binding TemplateText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                        <ListBox Grid.Row="0" Grid.Column="1" Name="ListBoxPlaceholders" ItemsSource="{Binding Placeholders}" Margin="6" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                            <ListBox.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Tag="{Binding}" Background="#F3F4F6" CornerRadius="8" Margin="3" Padding="6,2" MinWidth="48" Height="26" VerticalAlignment="Center" MouseLeftButtonUp="PlaceholderTag_Click" ToolTip="{Binding}" Cursor="Hand">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Setter Property="Background" Value="#F3F4F6" />
-                                                                <Setter Property="BorderBrush" Value="#D1D5DB" />
-                                                                <Setter Property="BorderThickness" Value="1" />
-                                                                <Style.Triggers>
-                                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                                        <Setter Property="Background" Value="#E6EEF8" />
-                                                                        <Setter Property="BorderBrush" Value="#9FB8E0" />
-                                                                    </Trigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Border.Style>
-                                                        <TextBlock Text="{Binding}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                    </Border>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="{Binding}" Margin="4,2,8,2" MouseLeftButtonUp="PlaceholderTag_Click" Cursor="Hand" />
+                                                        <TextBlock Text="(поле шаблону)" Foreground="Gray" VerticalAlignment="Center" />
+                                                    </StackPanel>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
 
-                                    <TextBox Grid.Row="1" Name="TextBoxTemplateEditor" Margin="6" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Text="{Binding TemplateText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="6">
-                                        <Button Height="26" Width="100" Command="{Binding SaveCommand}">Зберегти</Button>
-                                    </StackPanel>
+                                        <!-- Нижній ряд: комбобокс під редактором та кнопка під плейсхолдерами -->
+                                        <ComboBox Grid.Row="1" Grid.Column="0" Name="ComboBoxTemplateSelectSettings" Height="26" ItemsSource="{Binding DataContext.TemplateNames, ElementName=TemplateEditorGroup}" SelectedItem="{Binding DataContext.SelectedTemplate, ElementName=TemplateEditorGroup, Mode=TwoWay}" SelectionChanged="ComboBoxTemplateSelectSettings_SelectionChanged" PreviewMouseLeftButtonDown="ComboBoxTemplateSelectSettings_PreviewMouseLeftButtonDown" DropDownOpened="ComboBoxTemplateSelectSettings_DropDownOpened" DropDownClosed="ComboBoxTemplateSelectSettings_DropDownClosed" HorizontalAlignment="Stretch" Margin="6,0,6,0" />
+                                        <Button Grid.Row="1" Grid.Column="1" Height="26" Command="{Binding SaveCommand}" HorizontalAlignment="Stretch" Margin="6">Зберегти</Button>
+                                    </Grid>
                                 </Grid>
-                            </GroupBox>
 
+                            <!-- Нижня половина вкладки наразі порожня -->
                         </Grid>
-                    </Grid>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="Статистика" Name="TabStatistics">
+                    <DataGrid ItemsSource="{Binding DataContext.Records, ElementName=TemplateEditorGroup}" AutoGenerateColumns="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Дата" Binding="{Binding Date, StringFormat=\{0:dd.MM HH:mm\}}" Width="Auto"/>
+                            <DataGridTextColumn Header="Позиція" Binding="{Binding Position}" Width="*"/>
+                            <DataGridTextColumn Header="Дрон" Binding="{Binding Drone}" Width="*"/>
+                            <DataGridTextColumn Header="Пілот" Binding="{Binding Pilot}" Width="*"/>
+                            <DataGridTextColumn Header="Відстань" Binding="{Binding Distance}" Width="Auto"/>
+                            <DataGridTextColumn Header="Шаблон" Binding="{Binding TemplateName}" Width="*"/>
+                            <DataGridCheckBoxColumn Header="Знищено" Binding="{Binding IsTargetDestroyed}" Width="Auto"/>
+                            <DataGridCheckBoxColumn Header="Повернуто" Binding="{Binding IsBoardReturned}" Width="Auto"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </TabItem>
 
             </TabControl>
@@ -531,13 +584,13 @@
                         <Label Grid.Row="0" Grid.Column="0" Name="LabelStatsRam" Content="RAM: 0" FontSize="10" Foreground="DarkGreen" Padding="0,0,5,0" ToolTip="Tiles loaded from RAM"/>
                         <Label Grid.Row="0" Grid.Column="1" Name="LabelStatsDb" Content="DB: 0" FontSize="10" Foreground="DarkOrange" Padding="0,0,5,0" ToolTip="Tiles loaded from SQLite"/>
                         <Label Grid.Row="0" Grid.Column="2" Name="LabelStatsNet" Content="Net: 0" FontSize="10" Foreground="DarkRed" Padding="0,0,5,0" ToolTip="Tiles loaded from Network"/>
+                        <!-- Status label for reports/notifications -->
+                        <Label Grid.Row="0" Grid.Column="3" Name="LabelReportStatus" Content="" FontSize="10" Foreground="White" Padding="5,0,0,0" VerticalAlignment="Center"/>
                     </Grid>
                 </Grid>
             </GroupBox>
 
         </Grid>
-
-
 
     </Grid>
 </Window>

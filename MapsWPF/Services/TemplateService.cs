@@ -10,10 +10,15 @@ namespace MapsWPF.Services
 {
     public class TemplateService
     {
+
         public Dictionary<string, List<string>> Position_Point { get; set; } = new Dictionary<string, List<string>>();
         public Dictionary<string, List<string>> DroneByPosition { get; set; } = new Dictionary<string, List<string>>();
 
-        public List<string> LocalCiti { get; set; } = new List<string>();
+        public List<string> LocalCiti { get; set; } = new List<string>
+        {
+            "Купянськ", "Подоли", "Соболівка", "Курилівка", "Осиново", "Петропавлівка", "Голубівка",
+            "Садове", "Благодатівка", "Московка", "Кіндрашівка", "Калинове", "Синьківка", "Радьківка",
+        };
         public List<string> StartWorkShablon { get; set; } = new List<string>();
         public List<string> EndWorkShablon { get; set; } = new List<string>();
         public List<string> ReportWorkShablon { get; set; } = new List<string>();
@@ -40,6 +45,15 @@ namespace MapsWPF.Services
         public string LastSelectedTarget { get; set; }
         public bool RotateAfterGenerate { get; set; } = false;
 
+        // Additional persisted report inputs
+        public string Frequencies { get; set; } = string.Empty;
+        public string Purpose { get; set; } = string.Empty;
+
+        // Defaults for report placeholders
+        public string DefaultTargetStatus { get; set; } = "Ціль знищено.";
+        public string DefaultExpenses { get; set; } = "Борт втрачено";
+        public List<string> FlyDirectionList { get; set; } = new List<string>();
+
         public TemplateService()
         {
             if (CustomReportWorkShablon == null) CustomReportWorkShablon = new List<string>();
@@ -49,63 +63,57 @@ namespace MapsWPF.Services
 
         public void InitializeData()
         {
-            Position_Point = new Dictionary<string, List<string>>
+            bool loaded = false;
+            try
             {
-                ["ФОРПОСТ"] = new List<string>{ "GREENDAY", "GREENDAY, Kasper" },
-                ["ДЕТРОЙТ"] = new List<string>{ "GREENDAY", "Kasper", "Volt" }
-            };
-
-            DroneByPosition = new Dictionary<string, List<string>>
+                var defaultPath = Path.Combine(AppContext.BaseDirectory, "Data", "Templates", "templates.json");
+                if (File.Exists(defaultPath))
+                {
+                    var json = File.ReadAllText(defaultPath);
+                    var data = JsonConvert.DeserializeObject<TemplateDataModel>(json);
+                    if (data != null)
+                    {
+                        Position_Point = data.Position_Point ?? new Dictionary<string, List<string>>();
+                        DroneByPosition = data.DroneByPosition ?? new Dictionary<string, List<string>>();
+                        LocalCiti = data.LocalCiti ?? new List<string>();
+                        StartWorkShablon = data.StartWorkShablon ?? new List<string>();
+                        EndWorkShablon = data.EndWorkShablon ?? new List<string>();
+                        ReportWorkShablon = data.ReportWorkShablon ?? new List<string>();
+                        Targets = data.Targets ?? new List<string>();
+                        CustomUnit = data.CustomUnit ?? "зрдн";
+                        LaunchArea = data.LaunchArea ?? "Купянськ";
+                        DefaultTargetStatus = data.DefaultTargetStatus ?? "Ціль знищено.";
+                        DefaultExpenses = data.DefaultExpenses ?? "Борт втрачено";
+                        loaded = true;
+                    }
+                }
+            }
+            catch (Exception ex)
             {
-                ["ФОРПОСТ"] = new List<string>{ "BARABASH MAX FLY", "BARABASH 10", "BLINK 8", "F7", "СПОРТИВНИЙ ПОВІТРЯНИЙ РОБОТ", "PILUM 10" },
-                ["ДЕТРОЙТ"] = new List<string>{ "Дикі шершні '10'", "Rusoriz '10'" }
-            };
+                Console.WriteLine($"Error loading default templates: {ex.Message}");
+            }
 
-            LocalCiti = new List<string>
+            if (!loaded)
             {
-                "Купянськ", "Подоли", "Соболівка", "Курилівка", "Осиново", "Петропавлівка", "Голубівка",
-                "Садове", "Благодатівка", "Московка", "Кіндрашівка", "Калинове", "Синьківка", "Радьківка",
-            };
+                // No hardcoded defaults: initialize empty structures and rely on Data/Templates sample files to populate settings when possible
+                Position_Point = new Dictionary<string, List<string>>();
+                DroneByPosition = new Dictionary<string, List<string>>();
 
-            StartWorkShablon = new List<string>
-            {
-                "Підрозділ: 14 омбр {UnitName}",
-                "Екіпаж: “{Position}”",
-                "Пілот: “{Pilot}”",
-                "Тип засобу: FPV “{DroneBy}”",
-                "Район зльоту: {LaunchArea}",
-                "Частоти: {Frequencies}",
-                "Висота: {height}",
-                "Час роботи: “{Time}”",
-                "Мета польоту: {Purpose}",
-                "Напрямок польоту: {Direction}",
-                "Ціль №: {ShootingTarget}"
-            };
+                LocalCiti = new List<string>();
 
-            EndWorkShablon = new List<string>
-            {
-                "Підрозділ: 14 омбр {UnitName}",
-                "Роботу закінчили: “{Time}”",
-                "{TargetStatus}"
-            };
+                StartWorkShablon = new List<string>();
+                EndWorkShablon = new List<string>();
+                ReportWorkShablon = new List<string>();
 
-            ReportWorkShablon = new List<string>
-            {
-                "{Time} БпЛА-П №1 “{Position}” {UnitName} 14 омбр,",
-                "{nearestLocality} кв. ({MGRS_Short})",
-                "виявлено БпЛА “{TargetType}” (А - {azimyth}, Д - {range}, В - {height}).",
-                "Застосовано FPV дрон-перехоплювач мультироторного типу “{DroneBy}”, денний.",
-                "Ціль {TargetStatus}.",
-                "{Expenses} {AdditionalInfo} виявлення і супроводження DELTA-ВЕЖА, Цілевказівка КП зрдн."
-            };
+                TargetTypeShablon = new List<string>();
 
-            TargetTypeShablon = new List<string>
-            {
-                "Молнія 2", "Зала", "Куб", "Орлан", "Ланцет", "Суперкам"
-            };
+                Targets = new List<string>();
 
-            // initialize Targets list from old TargetTypeShablon by default
-            Targets = new List<string>(TargetTypeShablon);
+                CustomUnit = "";
+                LaunchArea = "";
+                DefaultTargetStatus = "";
+                DefaultExpenses = "";
+            }
 
             // initialize templates map (template name -> lines)
             Templates = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
@@ -126,12 +134,25 @@ namespace MapsWPF.Services
 
         public void LoadAllData()
         {
+            Console.WriteLine($"TemplateService.LoadAllData: SettingsFolderPath={SettingsFolderPath}");
             // Migrate legacy files (droneby.json → positions.json wrapper) if present
             var folder = SettingsFolderPath;
+            // Fallback for local dev: if the expected settings folder does not exist in the app output, try the Build output folder
+            if (!Directory.Exists(folder))
+            {
+                var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "Build", "Debug", "net10.0-windows", "win-x64", "settings"));
+                if (Directory.Exists(candidate))
+                {
+                    Console.WriteLine($"TemplateService: Settings folder not found at {folder}, using fallback {candidate}");
+                    folder = candidate;
+                }
+            }
+
             if (Directory.Exists(folder))
             {
                 MigrateOldPositionFiles(folder);
             }
+
 
             // Try to load from settings folder next to exe first
             if (!TryLoadFromSettingsFolder())
@@ -141,6 +162,19 @@ namespace MapsWPF.Services
                 // Persist defaults to settings folder for easier user inspection and customization
                 TrySaveDefaultsToSettingsFolder();
             }
+            else
+            {
+                // Even if loaded, ensure new files (like fly_directions.json) are created if missing
+                TrySaveDefaultsToSettingsFolder();
+            }
+
+            // Ensure FlyDirectionList has defaults if empty
+            if (FlyDirectionList.Count == 0 && LocalCiti.Count > 0)
+            {
+                FlyDirectionList.AddRange(LocalCiti);
+            }
+
+
         }
 
         private bool TryLoadFromSettingsFolder()
@@ -256,11 +290,47 @@ namespace MapsWPF.Services
                 }
                 catch { }
 
+                // load fly_directions.json
+                var fdPath = Path.Combine(folder, "fly_directions.json");
+                try
+                {
+                    if (File.Exists(fdPath))
+                    {
+                        var fdJson = File.ReadAllText(fdPath);
+                        if (!string.IsNullOrWhiteSpace(fdJson))
+                        {
+                            var jo = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JToken>(fdJson);
+                            if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Array)
+                            {
+                                FlyDirectionList = jo.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                            }
+                            else if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Object && jo["FlyDirections"] != null)
+                            {
+                                var tkn = jo["FlyDirections"];
+                                if (tkn.Type == Newtonsoft.Json.Linq.JTokenType.Array) FlyDirectionList = tkn.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine($"Error reading fly_directions.json ({fdPath}): {ex.Message}"); }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(fdPath))
+                        {
+                            Console.WriteLine($"Loaded fly_directions.json from {fdPath} (entries={FlyDirectionList?.Count ?? 0})");
+                        }
+                        else Console.WriteLine($"fly_directions.json not present at {fdPath}");
+                    }
+                    catch { }
+                }
+
                 var positionsPath = Path.Combine(folder, "positions.json");
                 if (File.Exists(positionsPath))
                 {
                     var json = File.ReadAllText(positionsPath);
-                    try { System.IO.Directory.CreateDirectory(SettingsFolderPath); System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " Loading positions.json (len=" + (json?.Length ?? 0) + ")" + Environment.NewLine); } catch { }
+                    
                     if (!string.IsNullOrWhiteSpace(json))
                     {
                         // Support several forms:
@@ -277,12 +347,12 @@ namespace MapsWPF.Services
                                 Position_Point = jobjDict;
                                 loaded = true;
                                 parsed = true;
-                                try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions parsed as dictionary, count=" + Position_Point.Count + Environment.NewLine); } catch { }
+                                
                             }
                         }
                         catch (Exception ex)
                         {
-                            try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions dictionary parse failed: " + ex.Message + Environment.NewLine); } catch { }
+                            
                         }
 
                         if (!parsed)
@@ -298,21 +368,19 @@ namespace MapsWPF.Services
                                     try
                                     {
                                         var pp = j["Position_Point"].ToObject<Dictionary<string, List<string>>?>();
-                                        if (pp != null && pp.Count > 0) { Position_Point = pp; any = true; try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions parsed from wrapper Position_Point, count=" + Position_Point.Count + Environment.NewLine); } catch { } }
+                                        if (pp != null && pp.Count > 0) { Position_Point = pp; any = true; }
                                     }
-                                    catch { try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions wrapper parsing failed" + Environment.NewLine); } catch { } }
+                                    catch { }
                                 }
                                 // If top-level contains position keys (arrays), use them
                                 foreach (var prop in j.Properties())
                                 {
-                                    try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions property: " + prop.Name + " type=" + prop.Value.Type + Environment.NewLine); } catch { }
                                     if (prop.Name.Equals("DroneByPosition", StringComparison.OrdinalIgnoreCase)) continue;
                                     if (prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Array)
                                     {
                                         try
                                         {
                                             var arr = prop.Value.ToObject<List<string>>();
-                                            try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions property array count for " + prop.Name + " = " + (arr?.Count ?? 0) + Environment.NewLine); } catch { }
                                             if (arr != null && arr.Count > 0)
                                             {
                                                 Position_Point ??= new Dictionary<string, List<string>>();
@@ -320,11 +388,11 @@ namespace MapsWPF.Services
                                                 any = true;
                                             }
                                         }
-                                        catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions property parsing failed for " + prop.Name + ": " + ex.Message + Environment.NewLine); } catch { } }
+                                        catch (Exception ex) { }
                                     }
                                     else
                                     {
-                                        try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions property skipped (not array): " + prop.Name + Environment.NewLine); } catch { }
+                                        // non-array property - ignored
                                     }
                                 }
                                 // DroneByPosition may be present as a nested object or a top-level property
@@ -333,16 +401,16 @@ namespace MapsWPF.Services
                                     try
                                     {
                                         var dp = j["DroneByPosition"].ToObject<Dictionary<string, List<string>>?>();
-                                        if (dp != null && dp.Count > 0) { DroneByPosition = dp; any = true; try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " DroneByPosition parsed, count=" + DroneByPosition.Count + Environment.NewLine); } catch { } }
+                                        if (dp != null && dp.Count > 0) { DroneByPosition = dp; any = true; }
                                     }
-                                    catch { try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " DroneByPosition parsing failed" + Environment.NewLine); } catch { } }
+                                    catch { }
                                 }
                                 if (any) loaded = true;
-                                try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions any=" + any + " Position_Point.Count=" + (Position_Point?.Count ?? 0) + Environment.NewLine); } catch { }
+                                
                             }
                             catch (Exception ex)
                             {
-                                try { System.IO.File.AppendAllText(System.IO.Path.Combine(SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " positions top-level parse exception: " + ex + Environment.NewLine); } catch { }
+                                try { } catch { }
                             }
                         }
                     }
@@ -455,6 +523,21 @@ namespace MapsWPF.Services
                                     if (last.LastSelectedDrone != null) LastSelectedDrone = last.LastSelectedDrone.ToString();
                                     if (last.LastSelectedTarget != null) LastSelectedTarget = last.LastSelectedTarget.ToString();
                                     if (last.RotateAfterGenerate != null) RotateAfterGenerate = Convert.ToBoolean(last.RotateAfterGenerate);
+                                    if (last.Frequencies != null) Frequencies = last.Frequencies.ToString();
+                                    if (last.Purpose != null) Purpose = last.Purpose.ToString();
+                                    if (last.FlyDirectionList != null) {
+                                        try {
+                                            var lastList = ((IEnumerable<object>)last.FlyDirectionList).Select(o => o.ToString()).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+                                            // Merge behavior: prefer values from file (current FlyDirectionList) and append any items from lastchoices not already present
+                                            if (FlyDirectionList == null) FlyDirectionList = new List<string>();
+                                            foreach (var it in lastList)
+                                            {
+                                                if (!FlyDirectionList.Contains(it)) FlyDirectionList.Add(it);
+                                            }
+                                        } catch { }
+                                    }
+                                    if (last.DefaultTargetStatus != null) DefaultTargetStatus = last.DefaultTargetStatus.ToString();
+                                    if (last.DefaultExpenses != null) DefaultExpenses = last.DefaultExpenses.ToString();
                                 }
                             }
                             catch { }
@@ -480,36 +563,61 @@ namespace MapsWPF.Services
                 Directory.CreateDirectory(folder);
 
                 var templatesPath = Path.Combine(folder, "templates.json");
+                var defaultTemplatesPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "templates.json");
                 if (!File.Exists(templatesPath))
                 {
-                    var obj = new
+                    if (File.Exists(defaultTemplatesPath)) File.Copy(defaultTemplatesPath, templatesPath);
+                    else
                     {
-                        StartWorkShablon = StartWorkShablon,
-                        EndWorkShablon = EndWorkShablon,
-                        ReportWorkShablon = ReportWorkShablon
-                    };
-                    File.WriteAllText(templatesPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                        var obj = new { StartWorkShablon = StartWorkShablon, EndWorkShablon = EndWorkShablon, ReportWorkShablon = ReportWorkShablon };
+                        File.WriteAllText(templatesPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    }
                 }
 
                 var positionsPath = Path.Combine(folder, "positions.json");
+                var defaultPositionsPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "positions.json");
                 if (!File.Exists(positionsPath))
                 {
-                    var wrapper = new { Position_Point = Position_Point, DroneByPosition = DroneByPosition };
-                    File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapper, Formatting.Indented));
+                    if (File.Exists(defaultPositionsPath)) File.Copy(defaultPositionsPath, positionsPath);
+                    else
+                    {
+                        var wrapper = new { Position_Point = Position_Point, DroneByPosition = DroneByPosition };
+                        File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapper, Formatting.Indented));
+                    }
                 }
 
                 var unitsPath = Path.Combine(folder, "units.json");
+                var defaultUnitsPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "units.json");
                 if (!File.Exists(unitsPath))
                 {
-                    var obj = new { CustomUnit = CustomUnit, UnitsHistory = UnitsHistory };
-                    File.WriteAllText(unitsPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    if (File.Exists(defaultUnitsPath)) File.Copy(defaultUnitsPath, unitsPath);
+                    else
+                    {
+                        var obj = new { CustomUnit = CustomUnit, UnitsHistory = UnitsHistory };
+                        File.WriteAllText(unitsPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    }
                 }
 
                 var laPath = Path.Combine(folder, "launchareas.json");
+                var defaultLaPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "launchareas.json");
                 if (!File.Exists(laPath))
                 {
-                    var obj = new { LaunchArea = LaunchArea, LaunchAreasHistory = LaunchAreasHistory };
-                    File.WriteAllText(laPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    if (File.Exists(defaultLaPath)) File.Copy(defaultLaPath, laPath);
+                    else
+                    {
+                        var obj = new { LaunchArea = LaunchArea, LaunchAreasHistory = LaunchAreasHistory };
+                        File.WriteAllText(laPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    }
+                }
+
+                var fdPath = Path.Combine(folder, "fly_directions.json");
+                var defaultFdPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "fly_directions.json");
+                if (!File.Exists(fdPath))
+                {
+                    var list = FlyDirectionList != null && FlyDirectionList.Count > 0 ? FlyDirectionList : LocalCiti;
+                    if (list == null) list = new List<string>();
+                    var obj = new { FlyDirections = list };
+                    File.WriteAllText(fdPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
                 }
 
                 // create targets.json from TargetTypeShablon for backwards compatibility
@@ -608,7 +716,12 @@ namespace MapsWPF.Services
                     LastSelectedPilot = LastSelectedPilot,
                     LastSelectedDrone = LastSelectedDrone,
                     LastSelectedTarget = LastSelectedTarget,
-                    RotateAfterGenerate = RotateAfterGenerate
+                    RotateAfterGenerate = RotateAfterGenerate,
+                    Frequencies = Frequencies,
+                    Purpose = Purpose,
+                    FlyDirectionList = FlyDirectionList,
+                    DefaultTargetStatus = DefaultTargetStatus,
+                    DefaultExpenses = DefaultExpenses
                 };
                 File.WriteAllText(lastPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
             }
@@ -709,6 +822,21 @@ namespace MapsWPF.Services
                 Console.WriteLine($"Error migrating old position files: {ex.Message}");
             }
         }
+    }
+
+    public class TemplateDataModel
+    {
+        public Dictionary<string, List<string>> Position_Point { get; set; }
+        public Dictionary<string, List<string>> DroneByPosition { get; set; }
+        public List<string> LocalCiti { get; set; }
+        public List<string> StartWorkShablon { get; set; }
+        public List<string> EndWorkShablon { get; set; }
+        public List<string> ReportWorkShablon { get; set; }
+        public List<string> Targets { get; set; }
+        public string CustomUnit { get; set; }
+        public string LaunchArea { get; set; }
+        public string DefaultTargetStatus { get; set; }
+        public string DefaultExpenses { get; set; }
     }
 }
 

@@ -132,6 +132,14 @@ namespace MapsWPF.Models
             set { if (_rotateShiftStep != value) { _rotateShiftStep = value; OnPropertyChanged(); } }
         }
 
+        // Difference between servo physical angle and configured Attack Angle (servo - angle)
+        private double _servoAngleDelta = 0.0;
+        public double ServoAngleDelta
+        {
+            get => _servoAngleDelta;
+            set { if (_servoAngleDelta != value) { _servoAngleDelta = value; OnPropertyChanged(); } }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged([CallerMemberName] string propertyName = null)
         {

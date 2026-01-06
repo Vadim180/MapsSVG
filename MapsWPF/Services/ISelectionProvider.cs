@@ -26,5 +26,6 @@ namespace MapsWPF.Services
         PointF? GetClickedPoint();
         PointF GetAttackPoint();
         string GetAzimuthText();
+        IEnumerable<string> GetSelectedFlyDirections();
     }
 }

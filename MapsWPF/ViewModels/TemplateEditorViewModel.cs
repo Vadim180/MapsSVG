@@ -12,6 +12,7 @@ namespace MapsWPF.ViewModels
     {
         private readonly TemplateService _templateService;
         private readonly NotificationService? _notificationService;
+        private readonly StatisticsService? _statisticsService;
 
         private string _templateText = string.Empty;
         private string _selectedTemplate = string.Empty;
@@ -19,10 +20,11 @@ namespace MapsWPF.ViewModels
         private string _launchArea = string.Empty;
         private bool _templatesInitialized = false;
 
-        public TemplateEditorViewModel(TemplateService templateService, NotificationService? notificationService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
+        public TemplateEditorViewModel(TemplateService templateService, NotificationService? notificationService, StatisticsService? statisticsService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
         {
             _templateService = templateService ?? throw new ArgumentNullException(nameof(templateService));
             _notificationService = notificationService;
+            _statisticsService = statisticsService;
             _generateFunc = generateFunc;
             _onGenerated = onGenerated;
 
@@ -32,6 +34,7 @@ namespace MapsWPF.ViewModels
             SaveLaunchAreaCommand = new RelayCommand(_ => ExecuteSaveLaunchArea());
             SetUnitNameCommand = new RelayCommand(_ => ExecuteSetUnitName());
             GenerateCommand = new RelayCommand(_ => ExecuteGenerate());
+
 
             // Initialize Rotate from persisted service value
             RotateAfterGenerate = _templateService.RotateAfterGenerate;
@@ -45,8 +48,22 @@ namespace MapsWPF.ViewModels
             RefreshLists();
             CustomUnit = _templateService.CustomUnit;
             LaunchArea = _templateService.LaunchArea;
+
             // Load persisted last values (do not override user-selected defaults unless present)
             LastHeight = _templateService.LastHeight ?? string.Empty;
+            Frequencies = _templateService.Frequencies ?? string.Empty;
+            Purpose = _templateService.Purpose ?? string.Empty;
+            // Load fly directions if present
+            if (_templateService.FlyDirectionList != null && _templateService.FlyDirectionList.Count > 0)
+            {
+                FlyDirectionList.Clear();
+                foreach (var fd in _templateService.FlyDirectionList) FlyDirectionList.Add(fd);
+            }
+
+            // report defaults
+            DefaultTargetStatus = _templateService.DefaultTargetStatus ?? "Ціль знищено.";
+            DefaultExpenses = _templateService.DefaultExpenses ?? "Борт втрачено";
+
             if (!string.IsNullOrWhiteSpace(_templateService.LastSelectedPosition) && PositionNames.Contains(_templateService.LastSelectedPosition)) SelectedPosition = _templateService.LastSelectedPosition;
             if (!string.IsNullOrWhiteSpace(_templateService.LastSelectedPilot) && Pilots.Contains(_templateService.LastSelectedPilot)) SelectedPilot = _templateService.LastSelectedPilot;
             if (!string.IsNullOrWhiteSpace(_templateService.LastSelectedDrone) && Drones.Contains(_templateService.LastSelectedDrone)) SelectedDrone = _templateService.LastSelectedDrone;
@@ -61,6 +78,7 @@ namespace MapsWPF.ViewModels
         public ICommand SaveLaunchAreaCommand { get; }
         public ICommand SetUnitNameCommand { get; }
         public ICommand GenerateCommand { get; }
+        
 
         private readonly Func<System.Collections.Generic.List<string>, string>? _generateFunc;
         private readonly Action<string>? _onGenerated;
@@ -74,6 +92,113 @@ namespace MapsWPF.ViewModels
         public ObservableCollection<string> PositionNames { get; private set; } = new();
         public ObservableCollection<string> Pilots { get; private set; } = new();
         public ObservableCollection<string> Drones { get; private set; } = new();
+
+        public ObservableCollection<string> FlyDirectionList { get; private set; } = new();
+
+        public ObservableCollection<MapsWPF.Models.StatisticRecord>? Records => _statisticsService?.Records;
+
+        private string _distance = string.Empty;
+        public string Distance
+        {
+            get => _distance;
+            set
+            {
+                if (_distance != value)
+                {
+                    _distance = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Distance)));
+                }
+            }
+        }
+
+        private bool _isTargetDestroyed;
+        public bool IsTargetDestroyed
+        {
+            get => _isTargetDestroyed;
+            set
+            {
+                if (_isTargetDestroyed != value)
+                {
+                    _isTargetDestroyed = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTargetDestroyed)));
+                }
+            }
+        }
+
+        private bool _isTargetReturned = true; // Default to true (checked) -> Board Returned
+        public bool IsTargetReturned
+        {
+            get => _isTargetReturned;
+            set
+            {
+                if (_isTargetReturned != value)
+                {
+                    _isTargetReturned = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTargetReturned)));
+                }
+            }
+        }
+
+        private string _frequencies = string.Empty;
+        public string Frequencies
+        {
+            get => _frequencies;
+            set
+            {
+                if (_frequencies != value)
+                {
+                    _frequencies = value ?? string.Empty;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Frequencies)));
+                    try { _templateService.Frequencies = _frequencies; _templateService.SaveLastChoices(); } catch { }
+                }
+            }
+        }
+
+        private string _purpose = string.Empty;
+        public string Purpose
+        {
+            get => _purpose;
+            set
+            {
+                if (_purpose != value)
+                {
+                    _purpose = value ?? string.Empty;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Purpose)));
+                    try { _templateService.Purpose = _purpose; _templateService.SaveLastChoices(); } catch { }
+                }
+            }
+        }
+
+        // Report defaults (user-configurable)
+        private string _defaultTargetStatus = "Ціль знищено.";
+        public string DefaultTargetStatus
+        {
+            get => _defaultTargetStatus;
+            set
+            {
+                if (_defaultTargetStatus != value)
+                {
+                    _defaultTargetStatus = value ?? string.Empty;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DefaultTargetStatus)));
+                    try { _templateService.DefaultTargetStatus = _defaultTargetStatus; _templateService.SaveLastChoices(); } catch { }
+                }
+            }
+        }
+
+        private string _defaultExpenses = "Борт втрачено";
+        public string DefaultExpenses
+        {
+            get => _defaultExpenses;
+            set
+            {
+                if (_defaultExpenses != value)
+                {
+                    _defaultExpenses = value ?? string.Empty;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DefaultExpenses)));
+                    try { _templateService.DefaultExpenses = _defaultExpenses; _templateService.SaveLastChoices(); } catch { }
+                }
+            }
+        }
 
         private string _selectedPilot;
         public string SelectedPilot
@@ -155,7 +280,9 @@ namespace MapsWPF.ViewModels
             {
                 if (_selectedTemplate != value)
                 {
-                    _selectedTemplate = value ?? "Report";
+                    var newVal = value ?? "Report";
+
+                    _selectedTemplate = newVal;
                     TemplateText = string.Join(Environment.NewLine, _templateService.GetTemplateByName(_selectedTemplate) ?? new System.Collections.Generic.List<string>());
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedTemplate)));
                 }
@@ -171,6 +298,7 @@ namespace MapsWPF.ViewModels
                 {
                     _customUnit = value ?? string.Empty;
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomUnit)));
+                    try { _templateService.SaveCustomUnit(_customUnit); } catch { }
                 }
             }
         }
@@ -184,6 +312,7 @@ namespace MapsWPF.ViewModels
                 {
                     _launchArea = value ?? string.Empty;
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LaunchArea)));
+                    try { _templateService.SaveLaunchArea(_launchArea); } catch { }
                 }
             }
         }
@@ -294,10 +423,13 @@ namespace MapsWPF.ViewModels
             }
         }
 
-        private void ExecuteGenerate()
+        private async void ExecuteGenerate()
         {
             try
             {
+                // Persist current frequencies and purpose so replacements use up-to-date values
+                try { _templateService.Frequencies = Frequencies ?? string.Empty; _templateService.Purpose = Purpose ?? string.Empty; _templateService.SaveLastChoices(); } catch { }
+
                 // Preserve current selections so RefreshLists won't appear to clear them
                 var prevPosition = SelectedPosition;
                 var prevPilot = SelectedPilot;
@@ -305,6 +437,7 @@ namespace MapsWPF.ViewModels
                 var prevTarget = SelectedTarget;
                 var prevTemplate = SelectedTemplate;
                 var prevUnit = CustomUnit;
+                var prevLaunchArea = LaunchArea;
 
                 // If user entered a target text manually, DO NOT persist it automatically to targets.json.
                 // New targets remain transient for generation; persist targets only by editing targets.json manually.
@@ -324,8 +457,9 @@ namespace MapsWPF.ViewModels
                         _templateService.SaveLaunchArea(la);
                         var laMsg = $"ExecuteGenerate: Saved LaunchArea '{la}' to { _templateService.SettingsFolderPath }";
                         Console.WriteLine(laMsg);
-                        try { System.IO.Directory.CreateDirectory(_templateService.SettingsFolderPath); System.IO.File.AppendAllText(System.IO.Path.Combine(_templateService.SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " " + laMsg + Environment.NewLine); } catch { }
-                        RefreshLists();
+                        // update local LaunchAreasHistory collection without refreshing all lists (preserve template selection)
+                        LaunchAreasHistory.Clear();
+                        if (_templateService.LaunchAreasHistory != null) foreach (var x in _templateService.LaunchAreasHistory) LaunchAreasHistory.Add(x);
                     }
                 }
 
@@ -339,8 +473,9 @@ namespace MapsWPF.ViewModels
                         _templateService.SaveCustomUnit(unit);
                         var unitMsg = $"ExecuteGenerate: Saved CustomUnit '{unit}' to { _templateService.SettingsFolderPath }";
                         Console.WriteLine(unitMsg);
-                        try { System.IO.Directory.CreateDirectory(_templateService.SettingsFolderPath); System.IO.File.AppendAllText(System.IO.Path.Combine(_templateService.SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " " + unitMsg + Environment.NewLine); } catch { }
-                        RefreshLists();
+                        // update local UnitsHistory collection without refreshing all lists
+                        UnitsHistory.Clear();
+                        if (_templateService.UnitsHistory != null) foreach (var x in _templateService.UnitsHistory) UnitsHistory.Add(x);
                     }
                 }
 
@@ -353,49 +488,117 @@ namespace MapsWPF.ViewModels
                     return;
                 }
 
-                var generated = _generateFunc(lines);
-                if (_onGenerated != null)
+                // Statistics Logic
+                if (_statisticsService != null)
                 {
-                    _onGenerated(generated);
-                }
-                else
-                {
-                    _notificationService?.Notify("Згенеровано звіт", NotificationType.Info);
-                }
-
-                // After potential saves, refresh lists and restore prior selections (in dependency order)
-                RefreshLists();
-                if (!string.IsNullOrWhiteSpace(prevPosition) && PositionNames.Contains(prevPosition))
-                {
-                    SelectedPosition = prevPosition;
-                    RefreshPositionDetails();
-                    if (!string.IsNullOrWhiteSpace(prevPilot) && Pilots.Contains(prevPilot)) SelectedPilot = prevPilot;
-                    if (!string.IsNullOrWhiteSpace(prevDrone) && Drones.Contains(prevDrone)) SelectedDrone = prevDrone;
-                }
-                if (!string.IsNullOrWhiteSpace(prevTarget) && Targets.Contains(prevTarget)) SelectedTarget = prevTarget;
-
-                // Restore template and custom unit if possible so they don't appear to 'disappear' after generation
-                if (!string.IsNullOrWhiteSpace(prevTemplate) && TemplateNames.Contains(prevTemplate)) SelectedTemplate = prevTemplate;
-                else if (TemplateNames.Count > 0 && string.IsNullOrWhiteSpace(SelectedTemplate)) SelectedTemplate = TemplateNames.First();
-
-                // If Rotate is enabled, select the next template in the list (wrap-around)
-                if (RotateAfterGenerate && TemplateNames.Count > 0)
-                {
-                    var cur = SelectedTemplate;
-                    int idx = TemplateNames.IndexOf(cur);
-                    if (idx < 0) idx = 0;
-                    int next = (idx + 1) % TemplateNames.Count;
-                    SelectedTemplate = TemplateNames[next];
-                }
-
-                if (!string.IsNullOrWhiteSpace(prevUnit))
-                {
-                    CustomUnit = prevUnit;
-                    if (!UnitsHistory.Contains(prevUnit))
+                    var record = new MapsWPF.Models.StatisticRecord
                     {
-                        UnitsHistory.Insert(0, prevUnit);
-                        try { if (_templateService != null && _templateService.UnitsHistory != null && !_templateService.UnitsHistory.Contains(prevUnit)) _templateService.UnitsHistory.Insert(0, prevUnit); } catch { }
+                        Date = DateTime.Now,
+                        Position = SelectedPosition,
+                        Drone = SelectedDrone,
+                        Pilot = SelectedPilot,
+                        Distance = Distance,
+                        TemplateName = SelectedTemplate,
+                        IsTargetDestroyed = IsTargetDestroyed,
+                        IsBoardReturned = IsTargetReturned
+                    };
+
+                    var (success, msg) = _statisticsService.TryAddRecord(record);
+                    if (!success)
+                    {
+                        _notificationService?.Notify(msg, NotificationType.Warning);
                     }
+                }
+
+                // Use the UI dispatcher to execute generation code that depends on UI-owned objects. We use InvokeAsync so the work is queued on UI thread without deadlocking.
+                try
+                {
+                    string result = await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        try
+                        {
+                            return _generateFunc(lines);
+                        }
+                        catch (Exception ex)
+                        {
+                            return "__GENERATE_ERROR__:" + ex.ToString();
+                        }
+                    });
+
+                    // We're back on UI thread (because of await), so we can safely update UI
+                    try
+                    {
+                        if (_onGenerated != null)
+                        {
+                            _onGenerated(result);
+                        }
+                        else
+                        {
+                            _notificationService?.Notify("Згенеровано звіт", NotificationType.Info);
+                        }
+
+                        // After potential saves, refresh only necessary lists (we already updated Units/LaunchAreas above) and restore prior selections (in dependency order)
+                        if (!string.IsNullOrWhiteSpace(prevPosition) && PositionNames.Contains(prevPosition))
+                        {
+                            SelectedPosition = prevPosition;
+                            RefreshPositionDetails();
+                            if (!string.IsNullOrWhiteSpace(prevPilot) && Pilots.Contains(prevPilot)) SelectedPilot = prevPilot;
+                            if (!string.IsNullOrWhiteSpace(prevDrone) && Drones.Contains(prevDrone)) SelectedDrone = prevDrone;
+                        }
+                        if (!string.IsNullOrWhiteSpace(prevTarget) && Targets.Contains(prevTarget)) SelectedTarget = prevTarget;
+
+                        if (!string.IsNullOrWhiteSpace(prevLaunchArea))
+                        {
+                            LaunchArea = prevLaunchArea;
+                            // ensure it appears in history
+                            if (_templateService.LaunchAreasHistory == null) _templateService.LaunchAreasHistory = new System.Collections.Generic.List<string>();
+                            if (!_templateService.LaunchAreasHistory.Contains(prevLaunchArea)) _templateService.SaveLaunchArea(prevLaunchArea);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(prevTemplate))
+                        {
+                            var match = TemplateNames.FirstOrDefault(t => string.Equals(t?.Trim(), prevTemplate.Trim(), StringComparison.OrdinalIgnoreCase));
+                            if (match != null)
+                            {
+                                SelectedTemplate = match;
+                            }
+                            else if (TemplateNames.Count > 0 && string.IsNullOrWhiteSpace(SelectedTemplate))
+                            {
+                                SelectedTemplate = TemplateNames.First();
+                            }
+                        }
+                        else if (TemplateNames.Count > 0 && string.IsNullOrWhiteSpace(SelectedTemplate))
+                        {
+                            SelectedTemplate = TemplateNames.First();
+                        }
+
+                        if (RotateAfterGenerate && TemplateNames.Count > 0)
+                        {
+                            var cur = SelectedTemplate;
+                            int idx = TemplateNames.IndexOf(cur);
+                            if (idx < 0) idx = 0;
+                            int next = (idx + 1) % TemplateNames.Count;
+                            SelectedTemplate = TemplateNames[next];
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(prevUnit))
+                        {
+                            CustomUnit = prevUnit;
+                            if (!UnitsHistory.Contains(prevUnit))
+                            {
+                                UnitsHistory.Insert(0, prevUnit);
+                                try { if (_templateService != null && _templateService.UnitsHistory != null && !_templateService.UnitsHistory.Contains(prevUnit)) _templateService.UnitsHistory.Insert(0, prevUnit); } catch { }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _notificationService?.Notify($"Помилка генерації: {ex.Message}", NotificationType.Error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "maps_template_selection_debug.txt"), $"{DateTime.Now:O} ExecuteGenerate dispatch error: {ex}\n"); } catch { }
                 }
             }
             catch (Exception ex)
@@ -409,6 +612,7 @@ namespace MapsWPF.ViewModels
         {
             try
             {
+                var prevTemplate = SelectedTemplate;
                 Action update = () =>
                 {
                     // templates
@@ -450,7 +654,6 @@ namespace MapsWPF.ViewModels
 
                 var msg = $"RefreshLists: TemplateNames={TemplateNames.Count}, Targets={Targets.Count}, Units={UnitsHistory.Count}, LaunchAreas={LaunchAreasHistory.Count}, Positions={PositionNames.Count}, Pilots={Pilots.Count}, Drones={Drones.Count}, SettingsFolder={_templateService.SettingsFolderPath}";
                 Console.WriteLine(msg);
-                try { System.IO.Directory.CreateDirectory(_templateService.SettingsFolderPath); System.IO.File.AppendAllText(System.IO.Path.Combine(_templateService.SettingsFolderPath, "diagnostics.log"), DateTime.Now.ToString("o") + " " + msg + Environment.NewLine); } catch { }
             }
             catch (Exception ex)
             {

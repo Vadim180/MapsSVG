@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+
 using Accord.Math;
+
 using CoordinateSharp;
 
-namespace MapsWPF
+namespace MapsWPF.Utils
 {
     public class CoordinateConverter
     {
@@ -103,14 +105,14 @@ namespace MapsWPF
             return matrix.PseudoInverse().Dot(vector);
         }
 
-        public string FormatShortMGRSFromUTM(PointF utm, int inputUtmZone)
+        public string FormatShortMGRSFromUTM(PointF utm, int inputUtmZone, char bandLetter)
         {
             try
             {
-                string hemisphere = utm.Y > 0 ? "N" : "S";
+                string band = bandLetter.ToString();
 
-                // Use the determined zone instead of guessing
-                var tempUtm = new UniversalTransverseMercator(hemisphere, inputUtmZone, utm.X, utm.Y);
+                // Use the determined zone and band
+                var tempUtm = new UniversalTransverseMercator(band, inputUtmZone, utm.X, utm.Y);
                 var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
                 // Note: We already have the zone, so we don't strictly need to recalculate it from Longitude 
                 // unless we suspect the PointF is on a boundary. trusting inputUtmZone for MGRS generation is safer for consistency.
@@ -120,17 +122,7 @@ namespace MapsWPF
 
                 string fullMgrsString = coord.MGRS.ToString();
 
-                var parts = fullMgrsString.Split(' ');
-                if (parts.Length >= 4 && parts[2].Length >= 2 && parts[3].Length >= 2)
-                {
-                    string square = parts[1];
-                    string shortEast = parts[2].Substring(0, 2);
-                    string shortNorth = parts[3].Substring(0, 2);
-                    // Use the computed zone from MGRS or our input? MGRS string includes zone.
-                    // The MGRS string parts[0] is the Zone+Band.
-                    return $"{parts[0]} {square} {shortEast} {shortNorth}";
-                }
-
+                // Return the full MGRS string (do not truncate to 2-digit east/north)
                 return fullMgrsString;
             }
             catch
@@ -179,12 +171,28 @@ namespace MapsWPF
         /// </summary>
         public bool TryUTMToLatLng(PointF utm, int inputUtmZone, out double latitude, out double longitude)
         {
+            // Backwards compatibility default (guessing N)
+             return TryUTMToLatLng(utm, inputUtmZone, ' ', out latitude, out longitude);
+        }
+
+        public bool TryUTMToLatLng(PointF utm, int inputUtmZone, char bandLetter, out double latitude, out double longitude)
+        {
             latitude = double.NaN;
             longitude = double.NaN;
 
             try
             {
-                string hemisphere = utm.Y > 0 ? "N" : "S";
+                string hemisphere = "N";
+                if (bandLetter != ' ' && char.IsLetter(bandLetter))
+                {
+                   // Bands C..M are South, N..X are North
+                   hemisphere = (char.ToUpper(bandLetter) >= 'N') ? "N" : "S";
+                }
+                else
+                {
+                     // Fallback guess (legacy behavior, but dangerous near equator)
+                     hemisphere = "N"; // Default to North if unknown
+                }
 
                 var tempUtm = new UniversalTransverseMercator(hemisphere, inputUtmZone, utm.X, utm.Y);
                 var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
@@ -258,6 +266,22 @@ namespace MapsWPF
 
             return string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "{0}{1} {2:F2} E {3:F2} N", utmZone, bandLetter, utm.X, utm.Y);
+        }
+
+        public bool TryMGRSToLatLng(string mgrs, out double lat, out double lng)
+        {
+            lat = 0; lng = 0;
+            try
+            {
+                if (CoordinateSharp.Coordinate.TryParse(mgrs, out var c))
+                {
+                    lat = c.Latitude.DecimalDegree;
+                    lng = c.Longitude.DecimalDegree;
+                    return true;
+                }
+            }
+            catch { }
+            return false;
         }
     }
 }

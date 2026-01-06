@@ -4,21 +4,21 @@
 - Коротко описати поточні рішення по шарам проєкту та показати, як підключити сервіси через DI (Microsoft.Extensions.DependencyInjection).
 
 Структура (рекомендована)
-- Services/ — логіка додатка і сервіси (TemplateService, MapService, NotificationService, ClipboardService, Reporting/ReportController)
+- Services/ — логіка додатка і сервіси (TemplateService, MapService, NotificationService, ClipboardService, Reporting/ReportService)
 - Domain/ або Models/ — прості POCO моделі, налаштування (MapStartSettings, AttackSettings)
 - ViewModels/ — класи, що прив'язуються до UI (TemplateEditorViewModel, ReportViewModel)
 - Views/ — XAML вікна/контроли (MainWindow, CacheStatsWindow)
 - Data/MDs/ — документація і реновації
 
 Важливі рішення, виконані в рефакторі
-- Логіка генерації звітів винесена в `Services/Reporting/ReportController.cs` (тепер контролер — plain class у шарі сервісів).
+- Логіка генерації звітів винесена в `Services/Reporting/ReportService.cs` (тепер сервіс — plain class у шарі сервісів).
 - Інтерфейси для обмеження залежностей:
   - `ISelectionProvider` — дає контролеру доступ до вибору/стану (позиції, пілота, цілі тощо)
   - `IReportOutput` — інтерфейс для виводу звітів / копіювання / показу азимута
-- MainWindow реалізує `ISelectionProvider` та `IReportOutput` та надає їх ReportController (поки що інстанціювання робиться вручну в MainWindow).
+- MainWindow реалізує `ISelectionProvider` та `IReportOutput` та надає їх `ReportService` (поки що інстанціювання робиться вручну в MainWindow).
 
 Чому DI корисний тут
-- Покращує тестуваність (легко мокнути `ISelectionProvider` і перевірити `ReportController`).
+- Покращує тестуваність (легко мокнути `ISelectionProvider` і перевірити `ReportService`).
 - Центрально реєструє singleton/transient сервіси та дозволяє змінювати реалізації без зміни коду створення.
 
 Приклад: як зреєструвати сервіси через Microsoft DI (App.xaml.cs або Program)
@@ -34,8 +34,8 @@ services.AddSingleton<MapService>(sp => new MapService(new CoordinateConverter()
 services.AddSingleton<NotificationService>();
 services.AddSingleton<ClipboardService>();
 
-// ReportController: можна як singleton (стрімкий контроль стану) або transient
-services.AddSingleton<Services.Reporting.ReportController>();
+// ReportService: можна як singleton (стрімкий контроль стану) або transient
+services.AddSingleton<Services.Reporting.ReportService>();
 
 // ViewModels
 services.AddTransient<ViewModels.ReportViewModel>();
@@ -48,10 +48,10 @@ var main = provider.GetRequiredService<MainWindow>();
 main.Show();
 ```
 
-Приклад реєстрації ReportController з конкретними залежностями (якщо не використовувати конструктор-інжекцію для MapService тощо):
+Приклад реєстрації ReportService з конкретними залежностями (якщо не використовувати конструктор-інжекцію для MapService тощо):
 
 ```csharp
-services.AddSingleton(sp => new Services.Reporting.ReportController(
+services.AddSingleton(sp => new Services.Reporting.ReportService(
     sp.GetRequiredService<TemplateService>(),
     sp.GetRequiredService<MapService>(),
     sp.GetRequiredService<NotificationService>(),

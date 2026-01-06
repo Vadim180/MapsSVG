@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+
 using GMap.NET;
 
-namespace MapsWPF.Services.Reporting
+namespace MapsWPF.Services
 {
     public class ReportService
     {
@@ -19,7 +20,7 @@ namespace MapsWPF.Services.Reporting
         private bool _isSingleLineFormat = false;
         private bool _isReportTemplate = false;
 
-        public ReportController(TemplateService templates, MapService mapService, NotificationService notification, ClipboardService clipboard, ISelectionProvider selection, IReportOutput output)
+        public ReportService(TemplateService templates, MapService mapService, NotificationService notification, ClipboardService clipboard, ISelectionProvider selection, IReportOutput output)
         {
             _templates = templates ?? throw new ArgumentNullException(nameof(templates));
             _mapService = mapService ?? throw new ArgumentNullException(nameof(mapService));
@@ -56,7 +57,10 @@ namespace MapsWPF.Services.Reporting
             }
             else
             {
-                return string.Empty;
+                // No selected point available; continue generating template with empty coordinate-related fields
+                mgrsShort = string.Empty;
+                nearestLocality = string.Empty;
+                utm = PointF.Empty;
             }
 
             string selectedTarget = _selection.GetTargetType();
@@ -83,20 +87,25 @@ namespace MapsWPF.Services.Reporting
                 ["{nearestLocality}"] = nearestLocality,
                 ["{TargetType}"] = selectedTarget,
                 ["{UnitName}"] = _templates.CustomUnit,
-                ["{LaunchArea}"] = _templates.LaunchArea ?? ""
+                ["{LaunchArea}"] = _templates.LaunchArea ?? "",
+                ["{Frequencies}"] = _templates.Frequencies ?? string.Empty,
+                ["{Purpose}"] = _templates.Purpose ?? string.Empty,
+                ["{Direction}"] = string.Join(", ", _selection.GetSelectedFlyDirections())
             };
 
             if (template == _templates.EndWorkShablon)
             {
                 string targetResult = _selection.IsTargetDestroyed()
-                    ? $"Ціль знищено {selectedTarget}."
+                    ? (_templates.DefaultTargetStatus ?? "Ціль знищено.")
                     : "Ціль не знищено.";
 
                 string boardResult = _selection.IsTargetBoardLost()
-                    ? "Борт втрачено."
+                    ? ((_templates.DefaultExpenses ?? "Борт втрачено") + ".")
                     : "Борт повернуто.";
 
-                replacements["{TargetStatus}"] = $"{targetResult} {boardResult}";
+                // Set both placeholders explicitly for EndWork
+                replacements["{TargetStatus}"] = targetResult;
+                replacements["{Expenses}"] = boardResult;
 
                 var finalLines = new List<string>(template.Count);
                 foreach (var raw in template)
@@ -110,29 +119,29 @@ namespace MapsWPF.Services.Reporting
             {
                 if (_selection.IsTargetDestroyed())
                 {
-                    targetStatus = "знищено";
+                    targetStatus = _templates.DefaultTargetStatus ?? "Ціль знищено.";
                     if (_selection.IsTargetBoardLost())
                     {
-                        expenses = "Втрати: 1 FPV.";
+                        expenses = _templates.DefaultExpenses ?? "Борт втрачено";
                         additionalInfo = "Довідково: Підрив біля цілі, ";
                     }
                     else
                     {
-                        expenses = "Втрати: Дрон повернуто.";
+                        expenses = "Борт повернуто.";
                         additionalInfo = "Довідково: ціль не виявлено, ";
                     }
                 }
                 else
                 {
-                    targetStatus = "не знищено";
+                    targetStatus = "Ціль не знищено.";
                     if (_selection.IsTargetBoardLost())
                     {
-                        expenses = "Втрати: 1 FPV.";
+                        expenses = _templates.DefaultExpenses ?? "Борт втрачено";
                         additionalInfo = "Довідково: Технічні несправності, ";
                     }
                     else
                     {
-                        expenses = "Втрати: Дрон повернуто.";
+                        expenses = "Борт повернуто.";
                         additionalInfo = "Довідково: ціль не виявлено, ";
                     }
                 }
