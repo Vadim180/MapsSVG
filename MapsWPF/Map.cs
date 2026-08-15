@@ -92,6 +92,16 @@ namespace MapsWPF
 
             _workAreaEditPen = new Pen(workAreaStrokeBrush, 2);
             _workAreaEditPen.Freeze();
+
+            var workAreaBufferBrush = new SolidColorBrush(
+                Color.FromArgb(255, 255, 140, 0));
+            workAreaBufferBrush.Freeze();
+
+            _workAreaBufferPen = new Pen(workAreaBufferBrush, 2.5)
+            {
+                DashStyle = DashStyles.Dash
+            };
+            _workAreaBufferPen.Freeze();
                        
         }
 
@@ -102,6 +112,7 @@ namespace MapsWPF
 
         private static readonly SolidColorBrush _workAreaEditFillBrush;
         private static readonly Pen _workAreaEditPen;
+        private static readonly Pen _workAreaBufferPen;
 
         /// <summary>
         /// Optional provider that given a lat/lng returns additional coordinate strings (UTM, MGRS, etc.).
@@ -120,6 +131,10 @@ namespace MapsWPF
 
         public RectLatLng? WorkAreaEditBounds { get; set; }
 
+        public bool IsWorkAreaBufferVisible { get; set; }
+
+        public RectLatLng? WorkAreaBufferBounds { get; set; }
+
         public bool IsWorkAreaLimitDebugVisible { get; set; }
 
         public RectLatLng? WorkAreaLimitDebugBounds { get; set; }
@@ -136,6 +151,7 @@ namespace MapsWPF
             base.OnRender(drawingContext);
 
             DrawWorkAreaLimitDebugBounds(drawingContext);
+            DrawWorkAreaBufferBounds(drawingContext);
             DrawWorkAreaEditBounds(drawingContext);
 
             // Draw attack zone if attack point is set
@@ -253,6 +269,40 @@ namespace MapsWPF
                 _workAreaEditPen,
                 rect
             );
+        }
+
+        private void DrawWorkAreaBufferBounds(DrawingContext dc)
+        {
+            if (!IsWorkAreaBufferVisible || !WorkAreaBufferBounds.HasValue)
+            {
+                return;
+            }
+
+            var bounds = WorkAreaBufferBounds.Value;
+
+            var topLeft = new PointLatLng(bounds.Top, bounds.Left);
+            var bottomRight = new PointLatLng(bounds.Bottom, bounds.Right);
+
+            var topLeftLocal = FromLatLngToLocal(topLeft);
+            var bottomRightLocal = FromLatLngToLocal(bottomRight);
+
+            var left = Math.Min(topLeftLocal.X, bottomRightLocal.X);
+            var top = Math.Min(topLeftLocal.Y, bottomRightLocal.Y);
+            var right = Math.Max(topLeftLocal.X, bottomRightLocal.X);
+            var bottom = Math.Max(topLeftLocal.Y, bottomRightLocal.Y);
+
+            var width = right - left;
+            var height = bottom - top;
+
+            if (width < 1 || height < 1)
+            {
+                return;
+            }
+
+            dc.DrawRectangle(
+                null,
+                _workAreaBufferPen,
+                new Rect(left, top, width, height));
         }
 
         private void DrawAttackZone(DrawingContext dc)

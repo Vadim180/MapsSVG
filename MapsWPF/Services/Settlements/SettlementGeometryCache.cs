@@ -9,6 +9,8 @@ namespace MapsWPF.Services.Settlements
 
         public string Source { get; set; } = "local";
 
+        public List<string> Sources { get; set; } = new();
+
         public string CoordinateSystem { get; set; } = "UTM";
 
         public int UtmZone { get; set; } = 37;
@@ -52,6 +54,57 @@ namespace MapsWPF.Services.Settlements
         public List<string> Polygons { get; set; } = new();
 
         public SettlementPoint? FallbackPoint { get; set; }
+
+        public List<SettlementProviderReference> ProviderReferences { get; set; } = new();
+
+        public List<SettlementCenterCandidate> CenterCandidates { get; set; } = new();
+
+        public List<SettlementPolygonCandidate> PolygonCandidates { get; set; } = new();
+    }
+
+    public sealed class SettlementProviderReference
+    {
+        public string Provider { get; set; } = string.Empty;
+
+        public string ExternalId { get; set; } = string.Empty;
+
+        public string FeatureType { get; set; } = string.Empty;
+    }
+
+    public sealed class SettlementCenterCandidate
+    {
+        public string Provider { get; set; } = string.Empty;
+
+        public string ExternalId { get; set; } = string.Empty;
+
+        public int Priority { get; set; }
+
+        public int QualityScore { get; set; }
+
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+
+        public SettlementPoint Point { get; set; } = new();
+    }
+
+    public sealed class SettlementPolygonCandidate
+    {
+        public string Provider { get; set; } = string.Empty;
+
+        public string ExternalId { get; set; } = string.Empty;
+
+        public int Priority { get; set; }
+
+        public int QualityScore { get; set; }
+
+        public double AreaSquareKilometers { get; set; }
+
+        public int VertexCount { get; set; }
+
+        public bool ContainsCenter { get; set; }
+
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+
+        public string Polygon { get; set; } = string.Empty;
     }
 
     public sealed class SettlementPoint

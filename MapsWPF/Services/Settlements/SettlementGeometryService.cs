@@ -13,8 +13,6 @@ namespace MapsWPF.Services.Settlements
     {
         private const string CacheFileName = "settlements_geometry_cache.json";
 
-        private const double MaxPreservedGeometryAttachDistanceMeters = 15000.0;
-
         private readonly string _settingsFolderPath;
         private readonly string _cacheFilePath;
 
@@ -64,6 +62,8 @@ namespace MapsWPF.Services.Settlements
                 {
                     _cache.Settlements = new List<SettlementGeometryItem>();
                 }
+
+                SettlementGeometryMerger.Normalize(_cache);
             }
             catch (Exception ex)
             {
@@ -78,6 +78,7 @@ namespace MapsWPF.Services.Settlements
             {
                 Directory.CreateDirectory(_settingsFolderPath);
 
+                SettlementGeometryMerger.Normalize(cache);
                 cache.CreatedAt = DateTime.Now;
 
                 var json = JsonConvert.SerializeObject(cache, Formatting.Indented);
@@ -92,188 +93,52 @@ namespace MapsWPF.Services.Settlements
             }
         }
 
-        public void SavePreservingExistingGeometry(SettlementGeometryCache cache)
+        public SettlementGeometryCache SavePreservingExistingGeometry(
+            SettlementGeometryCache cache)
+        {
+            return MergePreservingExistingGeometry(cache, persistToDisk: true);
+        }
+
+        public SettlementGeometryCache MergePreservingExistingGeometry(
+            SettlementGeometryCache cache,
+            bool persistToDisk)
         {
             if (cache == null)
             {
-                return;
+                return _cache;
             }
 
             try
             {
-                Load();
+                var merged = SettlementGeometryMerger.Merge(_cache, cache);
 
-                PreserveExistingGeometry(_cache, cache);
+                if (persistToDisk)
+                {
+                    Save(merged);
+                }
+                else
+                {
+                    _cache = merged;
+                }
 
-                Save(cache);
+                return merged;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SETTLEMENT CACHE] Save preserving error: {ex}");
 
-                Save(cache);
-            }
-        }
-
-        private static void PreserveExistingGeometry(
-    SettlementGeometryCache existingCache,
-    SettlementGeometryCache newCache)
-        {
-            if (existingCache?.Settlements == null ||
-                newCache?.Settlements == null ||
-                existingCache.Settlements.Count == 0 ||
-                newCache.Settlements.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var newSettlement in newCache.Settlements)
-            {
-                var existingSettlement = FindMatchingExistingSettlement(
-                    existingCache.Settlements,
-                    newSettlement);
-
-                if (existingSettlement == null)
+                if (persistToDisk)
                 {
-                    continue;
+                    Save(cache);
+                }
+                else
+                {
+                    SettlementGeometryMerger.Normalize(cache);
+                    _cache = cache;
                 }
 
-                if (existingSettlement.Polygons != null &&
-                    existingSettlement.Polygons.Count > 0)
-                {
-                    newSettlement.Polygons ??= new List<string>();
-
-                    var existingLines = new HashSet<string>(
-                        newSettlement.Polygons,
-                        StringComparer.OrdinalIgnoreCase);
-
-                    foreach (var polygonLine in existingSettlement.Polygons)
-                    {
-                        if (string.IsNullOrWhiteSpace(polygonLine))
-                        {
-                            continue;
-                        }
-
-                        if (!existingLines.Add(polygonLine))
-                        {
-                            continue;
-                        }
-
-                        newSettlement.Polygons.Add(polygonLine);
-                    }
-                }
-
-                if (newSettlement.GeometrySourceOsmId <= 0 &&
-                    existingSettlement.GeometrySourceOsmId > 0)
-                {
-                    newSettlement.GeometrySourceOsmType =
-                        existingSettlement.GeometrySourceOsmType;
-
-                    newSettlement.GeometrySourceOsmId =
-                        existingSettlement.GeometrySourceOsmId;
-                }
+                return cache;
             }
-        }
-
-        private static SettlementGeometryItem? FindMatchingExistingSettlement(
-            List<SettlementGeometryItem> existingSettlements,
-            SettlementGeometryItem newSettlement)
-        {
-            var newNameKey = NormalizeNameKey(newSettlement.Name);
-
-            if (string.IsNullOrWhiteSpace(newNameKey))
-            {
-                return null;
-            }
-
-            var candidates = existingSettlements
-                .Where(x => NormalizeNameKey(x.Name) == newNameKey)
-                .ToList();
-
-            if (candidates.Count == 0)
-            {
-                return null;
-            }
-
-            if (newSettlement.OsmId > 0)
-            {
-                var exactByOsm = candidates.FirstOrDefault(x =>
-                    x.OsmId == newSettlement.OsmId &&
-                    string.Equals(
-                        x.OsmType,
-                        newSettlement.OsmType,
-                        StringComparison.OrdinalIgnoreCase));
-
-                if (exactByOsm != null)
-                {
-                    return exactByOsm;
-                }
-            }
-
-            if (TryGetFallbackPoint(newSettlement, out var newPoint))
-            {
-                SettlementGeometryItem? best = null;
-                double bestDistance = double.MaxValue;
-
-                foreach (var candidate in candidates)
-                {
-                    if (!TryGetFallbackPoint(candidate, out var candidatePoint))
-                    {
-                        continue;
-                    }
-
-                    var distance = GetDistance(newPoint, candidatePoint);
-
-                    if (distance < bestDistance)
-                    {
-                        bestDistance = distance;
-                        best = candidate;
-                    }
-                }
-
-                if (best != null &&
-                    bestDistance <= MaxPreservedGeometryAttachDistanceMeters)
-                {
-                    return best;
-                }
-            }
-
-            return candidates.Count == 1
-                ? candidates[0]
-                : null;
-        }
-
-        private static bool TryGetFallbackPoint(
-            SettlementGeometryItem settlement,
-            out PointF point)
-        {
-            point = PointF.Empty;
-
-            if (settlement.FallbackPoint == null)
-            {
-                return false;
-            }
-
-            point = new PointF(
-                settlement.FallbackPoint.X,
-                settlement.FallbackPoint.Y);
-
-            return true;
-        }
-
-        private static string NormalizeNameKey(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            return new string(
-                value
-                    .Trim()
-                    .ToLowerInvariant()
-                    .Where(char.IsLetterOrDigit)
-                    .ToArray());
         }
 
         public bool TryFindSettlement(PointF point, out SettlementSearchResult result)
@@ -403,12 +268,15 @@ namespace MapsWPF.Services.Settlements
         {
             var result = new PolygonAnalyzeResult();
 
-            if (settlement.Polygons == null || settlement.Polygons.Count == 0)
+            var polygonLines =
+                SettlementGeometryMerger.GetPreferredPolygonLines(settlement);
+
+            if (polygonLines.Count == 0)
             {
                 return result;
             }
 
-            foreach (var polygonLine in settlement.Polygons)
+            foreach (var polygonLine in polygonLines)
             {
                 var polygon = ParsePolygonLine(polygonLine);
 

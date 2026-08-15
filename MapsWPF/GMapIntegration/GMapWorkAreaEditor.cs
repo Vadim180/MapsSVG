@@ -40,6 +40,8 @@ public sealed class GMapWorkAreaEditor : IDisposable
 
     public RectLatLng? DraftBounds { get; private set; }
 
+    public event Action<RectLatLng?>? DraftBoundsChanged;
+
     public void AttachTo(MapsWPF.Map map)
     {
         ArgumentNullException.ThrowIfNull(map);
@@ -89,6 +91,8 @@ public sealed class GMapWorkAreaEditor : IDisposable
 
         ClearPreview();
 
+        DraftBoundsChanged?.Invoke(DraftBounds);
+
         map.Cursor = Cursors.Cross;
     }
 
@@ -97,6 +101,7 @@ public sealed class GMapWorkAreaEditor : IDisposable
         DraftBounds = bounds;
 
         DrawBounds(bounds);
+        DraftBoundsChanged?.Invoke(DraftBounds);
     }
 
     public void CancelEdit()
@@ -325,6 +330,7 @@ public sealed class GMapWorkAreaEditor : IDisposable
         DraftBounds = bounds;
 
         DrawBounds(bounds);
+        DraftBoundsChanged?.Invoke(DraftBounds);
     }
 
     private void MoveDraftBounds(Point currentLocalPoint)
@@ -363,6 +369,7 @@ public sealed class GMapWorkAreaEditor : IDisposable
         _lastMoveGeoPoint = currentGeoPoint;
 
         DrawBounds(movedBounds);
+        DraftBoundsChanged?.Invoke(DraftBounds);
     }
 
     private void ResizeDraftBounds(Point currentLocalPoint)
@@ -435,6 +442,7 @@ public sealed class GMapWorkAreaEditor : IDisposable
         DraftBounds = resizedBounds;
 
         DrawBounds(resizedBounds);
+        DraftBoundsChanged?.Invoke(DraftBounds);
     }
 
     private void RefreshVisibleBounds()
@@ -573,6 +581,8 @@ public sealed class GMapWorkAreaEditor : IDisposable
         }
 
         map.Cursor = Cursors.Arrow;
+
+        DraftBoundsChanged?.Invoke(DraftBounds);
     }
 
     private void UpdateCursor(Point localPoint)

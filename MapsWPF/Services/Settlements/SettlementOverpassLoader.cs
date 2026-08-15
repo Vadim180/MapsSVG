@@ -13,22 +13,31 @@ namespace MapsWPF.Services.Settlements
 {
     public sealed class SettlementOverpassLoader
     {
-        private const string OverpassUrl = "https://overpass-api.de/api/interpreter";
+        private static readonly string[] OverpassUrls =
+        {
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter"
+        };
 
         private const double MaxResidentialAttachDistanceMeters = 8000.0;
 
         private const double SettlementTileSizeDegrees = 0.20;
 
-        private const int SettlementTileDelayMs = 3000;
+        // Tiles are still requested sequentially; this pause prevents bursts
+        // without adding several minutes to a normal small work area.
+        private const int SettlementTileDelayMs = 1000;
         private const int SettlementTileTimeoutSeconds = 30;
 
         private const double ResidentialTileSizeDegrees = 0.10;
         private const int ResidentialTileDelayMs = 2000;
 
-        private const int RelationGeometryDelayMs = 15000;
+        // Normal relation requests remain sequential. 429/504 responses use
+        // the longer adaptive backoffs declared below.
+        private const int RelationGeometryDelayMs = 250;
         private const int RelationGeometryRequestTimeoutSeconds = 60;
-        private const int RelationGeometryDelayAfter429Ms = 90000;
-        private const int RelationGeometryDelayAfterServerErrorMs = 30000;
+        private const int RelationGeometryDelayAfter429Ms = 15000;
+        private const int RelationGeometryDelayAfterServerErrorMs = 5000;
+        private const int MaxConsecutiveRelationFailures = 3;
 
         private const double MaxRelationAttachDistanceMeters = 12000.0;
 
@@ -52,6 +61,7 @@ namespace MapsWPF.Services.Settlements
 
         private readonly HttpClient _httpClient = new();
         private readonly TryConvertLatLngToUtmDelegate _tryConvertLatLngToUtm;
+        private int _preferredOverpassEndpointIndex;
 
         public delegate bool TryConvertLatLngToUtmDelegate(
             double lat,
@@ -265,7 +275,388 @@ namespace MapsWPF.Services.Settlements
      settlements,
      cacheZone,
      cacheBand,
-     "overpass");
+      "overpass");
+        }
+
+        public async Task<SettlementGeometryCache> LoadContoursAsync(
+            SettlementCacheBounds bounds,
+            CancellationToken cancellationToken = default,
+            Action<SettlementGeometryCache>? onSnapshotReady = null,
+            Action<SettlementContourLoadProgress>? onProgress = null,
+            SettlementGeometryCache? existingCache = null,
+            Func<SettlementGeometryItem, CancellationToken,
+                Task<SettlementCityProviderResult>>? enrichSettlementAsync = null)
+        {
+            if (bounds == null)
+            {
+                throw new ArgumentNullException(nameof(bounds));
+            }
+
+            int? cacheZone = null;
+            string cacheBand = string.Empty;
+
+            TryConvertToUtm tryConvert = (
+                double lat,
+                double lng,
+                out PointF utm) =>
+            {
+                utm = PointF.Empty;
+
+                if (!_tryConvertLatLngToUtm(
+                        lat,
+                        lng,
+                        out var converted,
+                        out var zone,
+                        out var band))
+                {
+                    return false;
+                }
+
+                if (!cacheZone.HasValue)
+                {
+                    cacheZone = zone;
+                    cacheBand = band ?? string.Empty;
+                }
+
+                if (zone != cacheZone.Value ||
+                    !string.Equals(
+                        band ?? string.Empty,
+                        cacheBand,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                utm = converted;
+                return true;
+            };
+
+            var settlements = await LoadSettlementsByTilesAsync(
+                bounds,
+                tryConvert,
+                cancellationToken,
+                currentSettlements =>
+                {
+                    onSnapshotReady?.Invoke(
+                        CreateCacheSnapshot(
+                            bounds,
+                            currentSettlements,
+                            cacheZone,
+                            cacheBand,
+                            "overpass-place-nodes-tiles"));
+                });
+
+            settlements = Deduplicate(settlements);
+
+            MergeExistingGeometryForContourQueue(
+                existingCache?.Settlements,
+                settlements);
+
+            onProgress?.Invoke(new SettlementContourLoadProgress
+            {
+                Completed = 0,
+                Total = 0,
+                State = "Отримання списку relation..."
+            });
+
+            var relationCandidates = await LoadRelationGeometryCandidatesAsync(
+                bounds,
+                tryConvert,
+                cancellationToken);
+
+            var relationBySettlement =
+                new Dictionary<SettlementGeometryItem, RelationGeometryCandidate>();
+
+            foreach (var candidate in relationCandidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var target = FindSettlementTargetForRelation(
+                    settlements,
+                    candidate);
+
+                if (target == null)
+                {
+                    target = CreateSettlementFromRelationCandidate(candidate);
+
+                    CopyExistingGeometry(
+                        FindExistingSettlement(
+                            existingCache?.Settlements,
+                            target),
+                        target);
+
+                    settlements.Add(target);
+                }
+
+                SettlementGeometryMerger.AddProviderReference(
+                    target,
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    candidate.RelationId.ToString(CultureInfo.InvariantCulture),
+                    "relation");
+
+                if (target.FallbackPoint == null && candidate.Center.HasValue)
+                {
+                    SettlementGeometryMerger.AddCenterCandidate(
+                        target,
+                        new SettlementPoint(
+                            candidate.Center.Value.X,
+                            candidate.Center.Value.Y),
+                        SettlementDataSources.OpenStreetMapOverpass,
+                        candidate.RelationId.ToString(CultureInfo.InvariantCulture),
+                        SettlementDataSources.OpenStreetMapPriority);
+                }
+
+                if (!relationBySettlement.ContainsKey(target))
+                {
+                    relationBySettlement[target] = candidate;
+                }
+            }
+
+            settlements = settlements
+                .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.Place, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var total = settlements.Count;
+
+            onProgress?.Invoke(new SettlementContourLoadProgress
+            {
+                Completed = 0,
+                Total = total,
+                State = "Черга контурів сформована"
+            });
+
+            onSnapshotReady?.Invoke(
+                CreateCacheSnapshot(
+                    bounds,
+                    settlements,
+                    cacheZone,
+                    cacheBand,
+                    "overpass-place-nodes-tiles"));
+
+            var consecutiveRelationFailures = 0;
+            var relationProviderDisabled = false;
+
+            for (var i = 0; i < settlements.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var settlement = settlements[i];
+                relationBySettlement.TryGetValue(
+                    settlement,
+                    out var relationCandidate);
+
+                Task<SettlementCityProviderResult>? supplementalTask = null;
+
+                if (enrichSettlementAsync != null)
+                {
+                    supplementalTask = enrichSettlementAsync(
+                        SettlementGeometryMerger.CloneSettlementItem(settlement),
+                        cancellationToken);
+
+                    onProgress?.Invoke(new SettlementContourLoadProgress
+                    {
+                        Completed = i,
+                        Total = total,
+                        CurrentSettlementName = settlement.Name,
+                        State = "Паралельний запит до доступних провайдерів...",
+                        HasFallbackCenter = settlement.FallbackPoint != null
+                    });
+                }
+
+                var hasPolygon = HasUsablePolygons(settlement);
+                var hasOpenStreetMapPolygon =
+                    SettlementGeometryMerger.HasPolygonsFromProvider(
+                        settlement,
+                        SettlementDataSources.OpenStreetMapOverpass);
+
+                var state = hasOpenStreetMapPolygon
+                    ? "Контур OpenStreetMap уже є в кеші"
+                    : hasPolygon
+                        ? "Збережено контур іншого джерела"
+                        : "Центр збережено, relation не знайдена";
+                var delayAfterCurrentAttemptMs = 0;
+
+                if (!hasOpenStreetMapPolygon &&
+                    relationCandidate != null &&
+                    !relationProviderDisabled)
+                {
+                    onProgress?.Invoke(new SettlementContourLoadProgress
+                    {
+                        Completed = i,
+                        Total = total,
+                        CurrentSettlementName = settlement.Name,
+                        State = supplementalTask == null
+                            ? "Витягування контуру..."
+                            : "Overpass і зовнішні API працюють паралельно...",
+                        HasFallbackCenter = settlement.FallbackPoint != null
+                    });
+
+                    delayAfterCurrentAttemptMs = RelationGeometryDelayMs;
+
+                    try
+                    {
+                        var rings = await LoadRelationOuterPolygonsByIdAsync(
+                            relationCandidate.RelationId,
+                            tryConvert,
+                            cancellationToken);
+
+                        consecutiveRelationFailures = 0;
+
+                        var added = AttachRingsToSettlement(
+                            settlement,
+                            rings,
+                            relationCandidate.RelationId);
+
+                        hasPolygon = HasUsablePolygons(settlement);
+
+                        if (added > 0)
+                        {
+                            settlement.GeometrySourceOsmType = "relation";
+                            settlement.GeometrySourceOsmId =
+                                relationCandidate.RelationId;
+                            state = "Контур завантажено";
+                        }
+                        else
+                        {
+                            state = settlement.FallbackPoint != null
+                                ? "Контур не знайдено, показано центр"
+                                : "Контур не знайдено";
+                        }
+                    }
+                    catch (Exception ex) when (
+                        ex is TimeoutException ||
+                        ex is HttpRequestException ||
+                        ex is TaskCanceledException)
+                    {
+                        consecutiveRelationFailures++;
+                        delayAfterCurrentAttemptMs =
+                            GetRelationDelayAfterErrorMs(ex);
+
+                        state = settlement.FallbackPoint != null
+                            ? "Помилка контуру, показано центр"
+                            : "Помилка завантаження контуру";
+
+                        Debug.WriteLine(
+                            $"[SETTLEMENT CONTOUR QUEUE] {settlement.Name}: " +
+                            $"{ex.Message}");
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        consecutiveRelationFailures++;
+                        delayAfterCurrentAttemptMs =
+                            RelationGeometryDelayAfterServerErrorMs;
+
+                        state = settlement.FallbackPoint != null
+                            ? "Помилка контуру, показано центр"
+                            : "Помилка завантаження контуру";
+
+                        Debug.WriteLine(
+                            $"[SETTLEMENT CONTOUR QUEUE] {settlement.Name}: " +
+                            $"unexpected error: {ex}");
+                    }
+
+                    if (consecutiveRelationFailures >=
+                        MaxConsecutiveRelationFailures)
+                    {
+                        relationProviderDisabled = true;
+                        delayAfterCurrentAttemptMs = 0;
+                    }
+                }
+
+                SettlementCityProviderResult? supplementalResult = null;
+
+                if (supplementalTask != null)
+                {
+                    try
+                    {
+                        supplementalResult = await supplementalTask;
+
+                        SettlementGeometryMerger.MergeSettlementCandidates(
+                            settlement,
+                            supplementalResult.Settlement);
+                    }
+                    catch (OperationCanceledException) when (
+                        cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine(
+                            $"[SETTLEMENT PROVIDER POOL] {settlement.Name}: {ex}");
+                    }
+                }
+
+                SettlementGeometryQualitySelector.Recalculate(settlement);
+                hasPolygon = HasUsablePolygons(settlement);
+
+                var preferredProvider =
+                    SettlementGeometryQualitySelector.GetPreferredPolygonProvider(
+                        settlement);
+
+                if (!string.IsNullOrWhiteSpace(preferredProvider))
+                {
+                    var candidateProviderCount = settlement.PolygonCandidates
+                        .Where(x => !string.IsNullOrWhiteSpace(x.Polygon))
+                        .Select(x => x.Provider)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count();
+
+                    state = candidateProviderCount > 1
+                        ? $"Вибрано контур: {preferredProvider} " +
+                          $"({candidateProviderCount} кандидатів)"
+                        : $"Вибрано контур: {preferredProvider}";
+
+                    if (relationProviderDisabled)
+                    {
+                        state += "; Overpass призупинено після 3 помилок";
+                    }
+                }
+                else if (settlement.FallbackPoint != null)
+                {
+                    state = supplementalResult?.AttemptedProviderCount > 0
+                        ? "Контур не знайдено, вибрано найкращий центр"
+                        : state;
+
+                    if (relationProviderDisabled)
+                    {
+                        state += "; Overpass призупинено після 3 помилок";
+                    }
+                }
+
+                onSnapshotReady?.Invoke(
+                    CreateCacheSnapshot(
+                        bounds,
+                        settlements,
+                        cacheZone,
+                        cacheBand,
+                        "overpass-contours"));
+
+                onProgress?.Invoke(new SettlementContourLoadProgress
+                {
+                    Completed = i + 1,
+                    Total = total,
+                    CurrentSettlementName = settlement.Name,
+                    State = state,
+                    HasPolygon = hasPolygon,
+                    HasFallbackCenter = settlement.FallbackPoint != null
+                });
+
+                if (delayAfterCurrentAttemptMs > 0 && i < settlements.Count - 1)
+                {
+                    await Task.Delay(
+                        delayAfterCurrentAttemptMs,
+                        cancellationToken);
+                }
+            }
+
+            return CreateCacheSnapshot(
+                bounds,
+                settlements,
+                cacheZone,
+                cacheBand,
+                "overpass-contours");
         }
 
         private static SettlementGeometryCache CreateCacheSnapshot(
@@ -275,15 +666,22 @@ namespace MapsWPF.Services.Settlements
     string cacheBand,
     string source)
         {
-            return new SettlementGeometryCache
+            var cache = new SettlementGeometryCache
             {
                 Source = source,
+                Sources = new List<string>
+                {
+                    SettlementDataSources.OpenStreetMapOverpass
+                },
                 CoordinateSystem = "UTM",
                 UtmZone = cacheZone ?? 37,
                 UtmBand = string.IsNullOrWhiteSpace(cacheBand) ? "U" : cacheBand,
                 Bounds = bounds,
                 Settlements = settlements
             };
+
+            SettlementGeometryMerger.Normalize(cache);
+            return cache;
         }
 
         private async Task<List<RelationGeometryCandidate>> LoadRelationGeometryCandidatesAsync(
@@ -316,6 +714,13 @@ namespace MapsWPF.Services.Settlements
             {
                 Debug.WriteLine(
                     $"[SETTLEMENT RELATION] Candidates skipped: {ex.Message}");
+
+                return new List<RelationGeometryCandidate>();
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                Debug.WriteLine(
+                    $"[SETTLEMENT RELATION] Candidates parse error: {ex}");
 
                 return new List<RelationGeometryCandidate>();
             }
@@ -463,7 +868,9 @@ namespace MapsWPF.Services.Settlements
                     settlements,
                     candidate);
 
-                if (HasUsablePolygons(existingTarget))
+                if (SettlementGeometryMerger.HasPolygonsFromProvider(
+                        existingTarget,
+                        SettlementDataSources.OpenStreetMapOverpass))
                 {
                     Debug.WriteLine(
                         $"[SETTLEMENT RELATION] {i + 1}/{relationCandidates.Count}: " +
@@ -499,36 +906,10 @@ namespace MapsWPF.Services.Settlements
                         settlements.Add(target);
                     }
 
-                    target.Polygons ??= new List<string>();
-
-                    var existing = new HashSet<string>(
-                        target.Polygons,
-                        StringComparer.OrdinalIgnoreCase);
-
-                    var added = 0;
-
-                    foreach (var ring in rings)
-                    {
-                        if (ring.Count < 3)
-                        {
-                            continue;
-                        }
-
-                        var line = SettlementGeometryService.ToPolygonLine(ring);
-
-                        if (string.IsNullOrWhiteSpace(line))
-                        {
-                            continue;
-                        }
-
-                        if (!existing.Add(line))
-                        {
-                            continue;
-                        }
-
-                        target.Polygons.Add(line);
-                        added++;
-                    }
+                    var added = AttachRingsToSettlement(
+                        target,
+                        rings,
+                        candidate.RelationId);
 
                     if (added > 0)
                     {
@@ -574,8 +955,197 @@ namespace MapsWPF.Services.Settlements
 
         private static bool HasUsablePolygons(SettlementGeometryItem? settlement)
         {
-            return settlement?.Polygons != null &&
-                   settlement.Polygons.Any(x => !string.IsNullOrWhiteSpace(x));
+            return SettlementGeometryMerger.HasUsablePolygons(settlement);
+        }
+
+        private static int AttachRingsToSettlement(
+            SettlementGeometryItem settlement,
+            List<List<PointF>> rings,
+            long relationId)
+        {
+            settlement.Polygons ??= new List<string>();
+
+            var existing = new HashSet<string>(
+                settlement.Polygons,
+                StringComparer.OrdinalIgnoreCase);
+
+            var added = 0;
+
+            foreach (var ring in rings)
+            {
+                if (ring.Count < 3)
+                {
+                    continue;
+                }
+
+                var line = SettlementGeometryService.ToPolygonLine(ring);
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                SettlementGeometryMerger.AddPolygonCandidate(
+                    settlement,
+                    line,
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    relationId.ToString(CultureInfo.InvariantCulture),
+                    SettlementDataSources.OpenStreetMapPriority);
+
+                if (existing.Add(line))
+                {
+                    added++;
+                }
+            }
+
+            return added;
+        }
+
+        private static void MergeExistingGeometryForContourQueue(
+            List<SettlementGeometryItem>? existingSettlements,
+            List<SettlementGeometryItem> settlements)
+        {
+            if (existingSettlements == null || existingSettlements.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var settlement in settlements)
+            {
+                CopyExistingGeometry(
+                    FindExistingSettlement(existingSettlements, settlement),
+                    settlement);
+            }
+        }
+
+        private static SettlementGeometryItem? FindExistingSettlement(
+            List<SettlementGeometryItem>? existingSettlements,
+            SettlementGeometryItem settlement)
+        {
+            if (existingSettlements == null)
+            {
+                return null;
+            }
+
+            var nameKey = NormalizeNameKey(settlement.Name);
+
+            if (string.IsNullOrWhiteSpace(nameKey))
+            {
+                return null;
+            }
+
+            var candidates = existingSettlements
+                .Where(x => NormalizeNameKey(x.Name) == nameKey)
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                return null;
+            }
+
+            if (candidates.Count == 1 || settlement.FallbackPoint == null)
+            {
+                return candidates[0];
+            }
+
+            SettlementGeometryItem? best = null;
+            var bestDistance = double.MaxValue;
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.FallbackPoint == null)
+                {
+                    continue;
+                }
+
+                var distance = GetDistance(
+                    new PointF(
+                        settlement.FallbackPoint.X,
+                        settlement.FallbackPoint.Y),
+                    new PointF(
+                        candidate.FallbackPoint.X,
+                        candidate.FallbackPoint.Y));
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+
+            return best ?? candidates[0];
+        }
+
+        private static void CopyExistingGeometry(
+            SettlementGeometryItem? existing,
+            SettlementGeometryItem target)
+        {
+            if (existing == null)
+            {
+                return;
+            }
+
+            target.Polygons ??= new List<string>();
+
+            var polygons = new HashSet<string>(
+                target.Polygons,
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var polygon in existing.Polygons ?? new List<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(polygon) && polygons.Add(polygon))
+                {
+                    target.Polygons.Add(polygon);
+                }
+            }
+
+            foreach (var reference in existing.ProviderReferences ??
+                     new List<SettlementProviderReference>())
+            {
+                SettlementGeometryMerger.AddProviderReference(
+                    target,
+                    reference.Provider,
+                    reference.ExternalId,
+                    reference.FeatureType);
+            }
+
+            foreach (var center in existing.CenterCandidates ??
+                     new List<SettlementCenterCandidate>())
+            {
+                SettlementGeometryMerger.AddCenterCandidate(
+                    target,
+                    center.Point,
+                    center.Provider,
+                    center.ExternalId,
+                    center.Priority);
+            }
+
+            foreach (var polygon in existing.PolygonCandidates ??
+                     new List<SettlementPolygonCandidate>())
+            {
+                SettlementGeometryMerger.AddPolygonCandidate(
+                    target,
+                    polygon.Polygon,
+                    polygon.Provider,
+                    polygon.ExternalId,
+                    polygon.Priority);
+            }
+
+            if (target.FallbackPoint == null && existing.FallbackPoint != null)
+            {
+                target.FallbackPoint = new SettlementPoint(
+                    existing.FallbackPoint.X,
+                    existing.FallbackPoint.Y);
+            }
+
+            if (target.GeometrySourceOsmId <= 0 &&
+                existing.GeometrySourceOsmId > 0)
+            {
+                target.GeometrySourceOsmType =
+                    existing.GeometrySourceOsmType;
+                target.GeometrySourceOsmId =
+                    existing.GeometrySourceOsmId;
+            }
         }
 
         private static int GetRelationDelayAfterErrorMs(Exception ex)
@@ -674,10 +1244,21 @@ namespace MapsWPF.Services.Settlements
 
             if (candidate.Center.HasValue)
             {
-                item.FallbackPoint = new SettlementPoint(
-                    candidate.Center.Value.X,
-                    candidate.Center.Value.Y);
+                SettlementGeometryMerger.AddCenterCandidate(
+                    item,
+                    new SettlementPoint(
+                        candidate.Center.Value.X,
+                        candidate.Center.Value.Y),
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    candidate.RelationId.ToString(CultureInfo.InvariantCulture),
+                    SettlementDataSources.OpenStreetMapPriority);
             }
+
+            SettlementGeometryMerger.AddProviderReference(
+                item,
+                SettlementDataSources.OpenStreetMapOverpass,
+                candidate.RelationId.ToString(CultureInfo.InvariantCulture),
+                "relation");
 
             return item;
         }
@@ -955,7 +1536,45 @@ namespace MapsWPF.Services.Settlements
                 return null;
             }
 
+            StampOpenStreetMapMetadata(item);
+
             return item;
+        }
+
+        private static void StampOpenStreetMapMetadata(
+            SettlementGeometryItem item)
+        {
+            var externalId = item.OsmId.ToString(CultureInfo.InvariantCulture);
+
+            SettlementGeometryMerger.AddProviderReference(
+                item,
+                SettlementDataSources.OpenStreetMapOverpass,
+                externalId,
+                item.OsmType);
+
+            if (item.FallbackPoint != null)
+            {
+                SettlementGeometryMerger.AddCenterCandidate(
+                    item,
+                    item.FallbackPoint,
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    externalId,
+                    SettlementDataSources.OpenStreetMapPriority);
+            }
+
+            var polygonExternalId = item.GeometrySourceOsmId > 0
+                ? item.GeometrySourceOsmId.ToString(CultureInfo.InvariantCulture)
+                : externalId;
+
+            foreach (var polygon in item.Polygons)
+            {
+                SettlementGeometryMerger.AddPolygonCandidate(
+                    item,
+                    polygon,
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    polygonExternalId,
+                    SettlementDataSources.OpenStreetMapPriority);
+            }
         }
 
         private static ResidentialGeometryItem? ParseResidentialGeometry(
@@ -1218,32 +1837,82 @@ namespace MapsWPF.Services.Settlements
     TimeSpan timeout,
     CancellationToken cancellationToken)
         {
-            using var timeoutCts =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Exception? lastException = null;
 
-            timeoutCts.CancelAfter(timeout);
-
-            try
+            for (var attempt = 0; attempt < OverpassUrls.Length; attempt++)
             {
-                using var content = new FormUrlEncodedContent(
-                    new[]
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var endpointIndex =
+                    (_preferredOverpassEndpointIndex + attempt) %
+                    OverpassUrls.Length;
+
+                var endpoint = OverpassUrls[endpointIndex];
+
+                using var timeoutCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+
+                timeoutCts.CancelAfter(timeout);
+
+                try
+                {
+                    using var content = new FormUrlEncodedContent(
+                        new[]
+                        {
+                            new KeyValuePair<string, string>("data", query)
+                        });
+
+                    using var response = await _httpClient.PostAsync(
+                        endpoint,
+                        content,
+                        timeoutCts.Token);
+
+                    if (!response.IsSuccessStatusCode)
                     {
-                new KeyValuePair<string, string>("data", query)
-                    });
+                        var statusCode = (int)response.StatusCode;
+                        var error = new HttpRequestException(
+                            $"Overpass {endpoint} повернув HTTP {statusCode}",
+                            null,
+                            response.StatusCode);
 
-                using var response = await _httpClient.PostAsync(
-                    OverpassUrl,
-                    content,
-                    timeoutCts.Token);
+                        if (statusCode != 429 && statusCode < 500)
+                        {
+                            throw error;
+                        }
 
-                response.EnsureSuccessStatusCode();
+                        lastException = error;
+                        continue;
+                    }
 
-                return await response.Content.ReadAsStringAsync(timeoutCts.Token);
+                    var result = await response.Content.ReadAsStringAsync(
+                        timeoutCts.Token);
+
+                    _preferredOverpassEndpointIndex = endpointIndex;
+
+                    return result;
+                }
+                catch (OperationCanceledException) when (
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    lastException = new TimeoutException(
+                        $"Overpass {endpoint} не відповів вчасно.");
+                }
+                catch (HttpRequestException ex)
+                {
+                    if (ex.StatusCode.HasValue &&
+                        (int)ex.StatusCode.Value < 500 &&
+                        (int)ex.StatusCode.Value != 429)
+                    {
+                        throw;
+                    }
+
+                    lastException = ex;
+                }
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new TimeoutException("Overpass не відповів вчасно.");
-            }
+
+            throw lastException ??
+                  new HttpRequestException("Жоден Overpass endpoint не відповів.");
         }
 
         private static List<SettlementGeometryItem> ParseSettlements(

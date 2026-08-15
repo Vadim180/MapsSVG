@@ -590,30 +590,6 @@
               Checked="CheckBoxLimitMap_Checked"
               Unchecked="CheckBoxLimitMap_Unchecked"/>
 
-                                        <WrapPanel>
-                                            <Button Name="ButtonEditWorkArea"
-                Content="Робоча область"
-                Height="24"
-                Padding="10,0"
-                Margin="0,0,5,0"
-                Click="ButtonEditWorkArea_Click"/>
-
-                                            <Button Name="ButtonSaveWorkArea"
-                Content="Зберегти"
-                Height="24"
-                Padding="10,0"
-                Margin="0,0,5,0"
-                Visibility="Collapsed"
-                Click="ButtonSaveWorkArea_Click"/>
-
-                                            <Button Name="ButtonCancelWorkArea"
-                Content="Скасувати"
-                Height="24"
-                Padding="10,0"
-                Visibility="Collapsed"
-                Click="ButtonCancelWorkArea_Click"/>
-                                        </WrapPanel>
-                                        
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Orientation="Vertical" Margin="5,0,5,5">
                                         <Label Content="Top Left (UTM):" Padding="0"/>
@@ -672,15 +648,139 @@
                        Opacity="0.7"
                        TextWrapping="Wrap"/>
 
+                            <ProgressBar x:Name="ProgressSettlementContours"
+                         Minimum="0"
+                         Maximum="100"
+                         Value="0"
+                         Height="16"
+                         Margin="0,8,0,0"
+                         Visibility="Collapsed"/>
+
+                            <TextBlock x:Name="TextSettlementContourProgress"
+                       Text="Контури: -"
+                       Margin="0,4,0,0"
+                       FontSize="12"
+                       Opacity="0.85"/>
+
+                            <TextBlock x:Name="TextSettlementCurrentContour"
+                       Text="Поточне місто: -"
+                       Margin="0,2,0,0"
+                       FontSize="12"
+                       Opacity="0.85"
+                       TextWrapping="Wrap"/>
+
                             <Separator Margin="0,10"/>
 
+                            <CheckBox x:Name="CheckBoxShowSettlementContours"
+                                      Content="Відображати контури міст"
+                                      IsChecked="True"
+                                      Margin="0,0,0,6"
+                                      Checked="CheckBoxShowSettlementContours_Changed"
+                                      Unchecked="CheckBoxShowSettlementContours_Changed"
+                                      ToolTip="Показувати або приховувати контури та центри населених пунктів без видалення кешу"/>
+
+                            <TextBlock Text="Джерела даних:"
+                                       Margin="0,4,0,4"
+                                       FontWeight="SemiBold"/>
+
+                            <CheckBox x:Name="CheckBoxUseOpenStreetMapSettlementSource"
+                                      IsChecked="True"
+                                      Margin="0,0,0,4"
+                                      Checked="SettlementDataSourceCheckBox_Changed"
+                                      Unchecked="SettlementDataSourceCheckBox_Changed"
+                                      ToolTip="OpenStreetMap через чергу Overpass із автоматичним резервним сервером">
+                                <TextBlock Text="OpenStreetMap / Overpass — центри та контури"
+                                           TextWrapping="Wrap"/>
+                            </CheckBox>
+
+                            <CheckBox x:Name="CheckBoxUseAllAvailableSettlementProviders"
+                                      IsChecked="True"
+                                      Margin="0,0,0,4"
+                                      Checked="SettlementDataSourceCheckBox_Changed"
+                                      Unchecked="SettlementDataSourceCheckBox_Changed"
+                                      ToolTip="Для кожного міста паралельно опитати всі налаштовані API контурів і центрів">
+                                <TextBlock Text="Усі доступні API — паралельно для поточного міста"
+                                           TextWrapping="Wrap"/>
+                            </CheckBox>
+
+                            <Expander Header="Ключі зовнішніх API (необов’язково)"
+                                      Margin="18,2,0,6">
+                                <StackPanel Margin="0,6,0,0">
+                                    <TextBlock Text="Geoapify — полігони"
+                                               FontSize="11"/>
+                                    <PasswordBox x:Name="PasswordBoxGeoapifyApiKey"
+                                                 Margin="0,2,0,5"
+                                                 PasswordChanged="SettlementApiKeyPasswordBox_Changed"/>
+
+                                    <TextBlock Text="Azure Maps — полігони"
+                                               FontSize="11"/>
+                                    <PasswordBox x:Name="PasswordBoxAzureMapsApiKey"
+                                                 Margin="0,2,0,5"
+                                                 PasswordChanged="SettlementApiKeyPasswordBox_Changed"/>
+
+                                    <TextBlock Text="Google Geocoding (POC) — центри"
+                                               FontSize="11"/>
+                                    <PasswordBox x:Name="PasswordBoxGoogleGeocodingApiKey"
+                                                 Margin="0,2,0,5"
+                                                 PasswordChanged="SettlementApiKeyPasswordBox_Changed"/>
+
+                                    <TextBlock Text="Bing Maps — центри"
+                                               FontSize="11"/>
+                                    <PasswordBox x:Name="PasswordBoxBingMapsApiKey"
+                                                 Margin="0,2,0,5"
+                                                 PasswordChanged="SettlementApiKeyPasswordBox_Changed"/>
+
+                                    <TextBlock Text="GraphHopper — центри"
+                                               FontSize="11"/>
+                                    <PasswordBox x:Name="PasswordBoxGraphHopperApiKey"
+                                                 Margin="0,2,0,0"
+                                                 PasswordChanged="SettlementApiKeyPasswordBox_Changed"/>
+
+                                    <TextBlock Text="Ключі зберігаються локально у налаштуваннях MapsWPF."
+                                               Margin="0,6,0,0"
+                                               FontSize="10"
+                                               Opacity="0.65"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Expander>
+
+                            <TextBlock x:Name="TextSettlementDataSourcesStatus"
+                                       Margin="18,0,0,8"
+                                       FontSize="11"
+                                       Opacity="0.7"
+                                       TextWrapping="Wrap"/>
+
                             <WrapPanel>
-                                <Button x:Name="ButtonShowKupianskBoundary"
-                        Content="Показати межі Куп’янська"
+                                <Button Name="ButtonEditWorkArea"
+                        Content="Робоча область"
                         Height="28"
                         Padding="10,0"
                         Margin="0,0,6,6"
-                        Click="ButtonShowKupianskBoundary_Click"/>
+                        Click="ButtonEditWorkArea_Click"/>
+
+                                <Button Name="ButtonSaveWorkArea"
+                        Content="Зберегти"
+                        Height="28"
+                        Padding="10,0"
+                        Margin="0,0,6,6"
+                        Visibility="Collapsed"
+                        Click="ButtonSaveWorkArea_Click"/>
+
+                                <Button Name="ButtonCancelWorkArea"
+                        Content="Скасувати"
+                        Height="28"
+                        Padding="10,0"
+                        Margin="0,0,6,6"
+                        Visibility="Collapsed"
+                        Click="ButtonCancelWorkArea_Click"/>
+
+                                <Button Name="ButtonLoadSettlementContours"
+                        Content="Завантажити контури"
+                        Height="28"
+                        Padding="10,0"
+                        Margin="0,0,6,6"
+                        IsEnabled="False"
+                        Click="ButtonLoadSettlementContours_Click"/>
 
                                 <Button x:Name="ButtonClearSettlementBoundaries"
                         Content="Прибрати межі"
@@ -690,6 +790,21 @@
                         IsEnabled="False"
                         Click="ButtonClearSettlementBoundaries_Click"/>
                             </WrapPanel>
+
+                            <StackPanel Orientation="Horizontal"
+                          Margin="0,4,0,0">
+                                <TextBlock Text="Запас навколо області, км:"
+                           VerticalAlignment="Center"
+                           Margin="0,0,6,0"/>
+                                <TextBox Name="TextBoxSettlementContourPaddingKm"
+                         Text="1"
+                         Width="58"
+                         Height="24"
+                         Padding="4,0"
+                         VerticalContentAlignment="Center"
+                         ToolTip="Додаткова відстань навколо виділеної області"
+                         TextChanged="TextBoxSettlementContourPaddingKm_TextChanged"/>
+                            </StackPanel>
 
                         </StackPanel>
                     </ScrollViewer>

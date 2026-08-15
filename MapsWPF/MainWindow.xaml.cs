@@ -145,6 +145,22 @@ namespace MapsWPF
 
         private static readonly HttpClient _httpClient = new HttpClient();
 
+        private static readonly Brush[] SettlementBoundaryBrushes =
+        {
+            Brushes.Red,
+            Brushes.DodgerBlue,
+            Brushes.LimeGreen,
+            Brushes.DarkViolet,
+            Brushes.Orange,
+            Brushes.DeepPink,
+            Brushes.Cyan,
+            Brushes.Gold,
+            Brushes.MediumBlue,
+            Brushes.Crimson,
+            Brushes.DarkTurquoise,
+            Brushes.MediumOrchid
+        };
+
         private readonly Services.StatisticsService _statisticsService;
 
         private readonly GMapControlConfigurator _gMapControlConfigurator = new();
@@ -155,9 +171,30 @@ namespace MapsWPF
 
         private SettlementOverpassLoader? _settlementOverpassLoader;
 
+        private SettlementExternalGeometryLoader? _settlementExternalGeometryLoader;
+
+        private SettlementProviderPipeline? _settlementProviderPipeline;
+
+        private readonly object _settlementSnapshotSync = new();
+
         private readonly List<GMapRoute> _settlementBoundaryRoutes = new();
 
+        private readonly List<GMapMarker> _settlementCenterMarkers = new();
+
+        private readonly Dictionary<string, GMapMarker>
+            _settlementCenterMarkersByKey = new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly HashSet<string> _settlementRenderedPolygonKeys =
+            new(StringComparer.OrdinalIgnoreCase);
+
         private System.Threading.CancellationTokenSource? _settlementLoadCts;
+
+        private DateTime _lastSettlementCacheDiskSaveUtc = DateTime.MinValue;
+
+        private bool _settlementCacheHasUnpersistedChanges;
+
+        private static readonly TimeSpan SettlementCacheDiskSaveInterval =
+            TimeSpan.FromSeconds(3);
 
         private bool _wasTargetMarkerVisibleBeforeWorkAreaEdit;
         private bool _wasAttackOverlayVisibleBeforeWorkAreaEdit;
@@ -172,6 +209,11 @@ namespace MapsWPF
         private bool _isUpdatingZoomLimitsUi;
 
         private bool _isUpdatingMapLimitsUi;
+
+        private const double DefaultSettlementContourPaddingKm = 1.0;
+        private const double MaxSettlementContourPaddingKm = 1000.0;
+
+        private bool _isUpdatingSettlementContourPaddingUi;
 
         private bool _useShortReportButtonTitles;
 
@@ -199,6 +241,8 @@ namespace MapsWPF
             _targetMarkerManager.MarkerDeleted += TargetMarkerManager_MarkerDeleted;
 
             _workAreaEditor.AttachTo(MainMap);
+            _workAreaEditor.DraftBoundsChanged +=
+                WorkAreaEditor_DraftBoundsChanged;
 
             // Initialize cache statistics update timer
             _cacheStatsUpdateTimer = new DispatcherTimer();
@@ -327,6 +371,47 @@ namespace MapsWPF
                 }
             }
             catch { }
+
+            var contourPaddingKm = NormalizeSettlementContourPadding(
+                _settingsService.StartSettings.SettlementContourPaddingKm);
+
+            _settingsService.StartSettings.SettlementContourPaddingKm =
+                contourPaddingKm;
+
+            CheckBoxShowSettlementContours.IsChecked =
+                _settingsService.StartSettings.ShowSettlementContours;
+
+            CheckBoxUseOpenStreetMapSettlementSource.IsChecked =
+                _settingsService.StartSettings.UseOpenStreetMapSettlementSource;
+
+            CheckBoxUseAllAvailableSettlementProviders.IsChecked =
+                _settingsService.StartSettings.UseAllAvailableSettlementProviders;
+
+            PasswordBoxGeoapifyApiKey.Password =
+                _settingsService.StartSettings.GeoapifyApiKey ?? string.Empty;
+            PasswordBoxAzureMapsApiKey.Password =
+                _settingsService.StartSettings.AzureMapsSubscriptionKey ?? string.Empty;
+            PasswordBoxGoogleGeocodingApiKey.Password =
+                _settingsService.StartSettings.GoogleGeocodingApiKey ?? string.Empty;
+            PasswordBoxBingMapsApiKey.Password =
+                _settingsService.StartSettings.BingMapsApiKey ?? string.Empty;
+            PasswordBoxGraphHopperApiKey.Password =
+                _settingsService.StartSettings.GraphHopperApiKey ?? string.Empty;
+
+            _isUpdatingSettlementContourPaddingUi = true;
+
+            try
+            {
+                TextBoxSettlementContourPaddingKm.Text =
+                    contourPaddingKm.ToString(
+                        "0.##",
+                        CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+                _isUpdatingSettlementContourPaddingUi = false;
+            }
+
             // Map Zoom Limits
             CheckBoxZoomLimits.IsChecked = _settingsService.StartSettings.IsZoomLimitsEnabled;
             TextBoxMinZoom.Text = _settingsService.StartSettings.MinZoom.ToString();
@@ -337,6 +422,13 @@ namespace MapsWPF
 
             // Initialize map bounds from settings
             UpdateBoundsOfMap();
+
+            ButtonLoadSettlementContours.IsEnabled =
+                GetSavedWorkAreaBounds().HasValue &&
+                HasSelectedSettlementDataSources();
+
+            UpdateSettlementContourBufferOverlay();
+            UpdateSettlementDataSourceStatus();
 
             // If Map Limits are enabled at startup, make sure current position is inside the bounds
             if (_settingsService.StartSettings.IsMapLimitsEnabled)
@@ -648,6 +740,8 @@ namespace MapsWPF
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
         {
+            _settlementLoadCts?.Cancel();
+
             // Save current map state
             _settingsService.StartSettings.Lat = MainMap.Position.Lat;
             _settingsService.StartSettings.Lng = MainMap.Position.Lng;
@@ -658,6 +752,11 @@ namespace MapsWPF
 
             _settingsService.StartSettings.ShowGrid = CheckBoxDebug.IsChecked == true;
             _settingsService.StartSettings.ShowCoordinates = CheckBoxShowCoordinates.IsChecked == true;
+            _settingsService.StartSettings.ShowSettlementContours =
+                CheckBoxShowSettlementContours.IsChecked == true;
+            _settingsService.StartSettings.UseOpenStreetMapSettlementSource =
+                CheckBoxUseOpenStreetMapSettlementSource.IsChecked == true;
+            SaveSettlementProviderSettingsToModel();
 
             // Save panel/tab state: coordinates expander + which tab is selected
             _settingsService.StartSettings.IsCoordinatesExpanded = ExpanderCoordinates.IsExpanded;
@@ -923,6 +1022,8 @@ namespace MapsWPF
             // Цей виклик вже є в конструкторі, але він потрібен для відновлення атаки після завантаження
             RestoreAttackSettings();
 
+            RenderCachedSettlementGeometry();
+
         }
 
         private SettlementOverpassLoader GetSettlementOverpassLoader()
@@ -936,141 +1037,21 @@ namespace MapsWPF
             return _settlementOverpassLoader;
         }
 
-        private async Task LoadKupianskBoundaryTestAsync()
+        private SettlementProviderPipeline GetSettlementProviderPipeline()
         {
-            const long kupianskRelationId = 3592314;
-            const string kupianskName = "Куп’янськ";
-
-            try
+            if (_settlementProviderPipeline == null)
             {
-                UpdateSettlementLoadStatusFromCurrentCache(
-                    "Тестове завантаження меж Куп’янська...");
+                _settlementExternalGeometryLoader =
+                    new SettlementExternalGeometryLoader(
+                    TryConvertLatLngToUtmForSettlementLoader,
+                    TryConvertUtmToLatLngForSettlementLoader);
 
-                var polygons = await GetSettlementOverpassLoader()
-                    .LoadRelationPolygonsForTestAsync(
-                        kupianskRelationId);
-
-                if (polygons.Count == 0)
-                {
-                    UpdateSettlementLoadStatusFromCurrentCache(
-                        "Межі Куп’янська не отримано.");
-
-                    _notificationService?.Notify(
-                        "Не вдалося завантажити межі Куп’янська",
-                        NotificationType.Warning);
-
-                    Debug.WriteLine(
-                        "[SETTLEMENT TEST] Kupiansk: no polygons received");
-
-                    return;
-                }
-
-                var cache = _settlementGeometryService.CurrentCache;
-
-                cache.Settlements ??= new List<SettlementGeometryItem>();
-
-                var kupiansk = cache.Settlements.FirstOrDefault(
-                    x =>
-                        string.Equals(
-                            x.Name,
-                            kupianskName,
-                            StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(
-                            x.OsmType,
-                            "node",
-                            StringComparison.OrdinalIgnoreCase));
-
-                kupiansk ??= cache.Settlements.FirstOrDefault(
-                    x => string.Equals(
-                        x.Name,
-                        kupianskName,
-                        StringComparison.OrdinalIgnoreCase));
-
-                if (kupiansk == null)
-                {
-                    kupiansk = new SettlementGeometryItem
-                    {
-                        Name = kupianskName,
-                        Place = "town",
-                        OsmType = "relation",
-                        OsmId = kupianskRelationId
-                    };
-
-                    cache.Settlements.Add(kupiansk);
-                }
-
-                kupiansk.Polygons ??= new List<string>();
-
-                var existingPolygons = new HashSet<string>(
-                    kupiansk.Polygons,
-                    StringComparer.Ordinal);
-
-                foreach (var polygon in polygons)
-                {
-                    if (existingPolygons.Add(polygon))
-                    {
-                        kupiansk.Polygons.Add(polygon);
-                    }
-                }
-
-                kupiansk.GeometrySourceOsmType = "relation";
-                kupiansk.GeometrySourceOsmId = kupianskRelationId;
-
-                cache.Source = "overpass-relation-test";
-                cache.UtmZone = 37;
-                cache.UtmBand = "U";
-
-                _settlementGeometryService.Save(cache);
-                _settlementGeometryService.Load();
-
-                UpdateSettlementLoadStatusFromCurrentCache(
-                    "Межі Куп’янська завантажено.");
-
-                _notificationService?.Notify(
-                    "Межі Куп’янська завантажено",
-                    NotificationType.Info);
-
-                Debug.WriteLine(
-                    $"[SETTLEMENT TEST] Kupiansk saved: " +
-                    $"receivedPolygons={polygons.Count}, " +
-                    $"totalPolygons={kupiansk.Polygons.Count}");
+                _settlementProviderPipeline = new SettlementProviderPipeline(
+                    GetSettlementOverpassLoader(),
+                    _settlementExternalGeometryLoader);
             }
-            catch (TimeoutException ex)
-            {
-                Debug.WriteLine(
-                    $"[SETTLEMENT TEST] Kupiansk timeout: {ex}");
 
-                UpdateSettlementLoadStatusFromCurrentCache(
-                    "Overpass не відповів під час завантаження Куп’янська.");
-
-                _notificationService?.Notify(
-                    "Overpass не відповів вчасно",
-                    NotificationType.Warning);
-            }
-            catch (HttpRequestException ex)
-            {
-                Debug.WriteLine(
-                    $"[SETTLEMENT TEST] Kupiansk HTTP error: {ex}");
-
-                UpdateSettlementLoadStatusFromCurrentCache(
-                    "Помилка сервера під час завантаження Куп’янська.");
-
-                _notificationService?.Notify(
-                    "Не вдалося отримати межі Куп’янська",
-                    NotificationType.Warning);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(
-                    $"[SETTLEMENT TEST] Kupiansk error: {ex}");
-
-                UpdateSettlementLoadStatusFromCurrentCache(
-                    "Помилка завантаження меж Куп’янська.");
-
-                _notificationService?.Notify(
-                    "Помилка завантаження меж Куп’янська",
-                    NotificationType.Warning);
-            }
+            return _settlementProviderPipeline;
         }
 
         private bool TryConvertLatLngToUtmForSettlementLoader(
@@ -1121,6 +1102,26 @@ namespace MapsWPF
             return false;
         }
 
+        private bool TryConvertUtmToLatLngForSettlementLoader(
+            System.Drawing.PointF utm,
+            out double lat,
+            out double lng)
+        {
+            lat = 0;
+            lng = 0;
+
+            try
+            {
+                return _mapService != null &&
+                       _mapService.TryUTMToLatLng(utm, out lat, out lng);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SETTLEMENT UTM] Reverse convert error: {ex}");
+                return false;
+            }
+        }
+
         private static SettlementCacheBounds CreateSettlementCacheBoundsFromWorkArea(
     RectLatLng workAreaBounds,
     double paddingKm)
@@ -1159,6 +1160,45 @@ namespace MapsWPF
             };
         }
 
+        private void WorkAreaEditor_DraftBoundsChanged(
+            RectLatLng? draftBounds)
+        {
+            if (!_workAreaEditor.IsEditing)
+            {
+                return;
+            }
+
+            UpdateSettlementContourBufferOverlay(draftBounds);
+        }
+
+        private void UpdateSettlementContourBufferOverlay(
+            RectLatLng? editingBounds = null)
+        {
+            var workAreaBounds = _workAreaEditor.IsEditing
+                ? editingBounds ?? _workAreaEditor.DraftBounds
+                : GetSavedWorkAreaBounds();
+
+            if (!workAreaBounds.HasValue)
+            {
+                MainMap.IsWorkAreaBufferVisible = false;
+                MainMap.WorkAreaBufferBounds = null;
+                MainMap.InvalidateVisual(true);
+                return;
+            }
+
+            var cacheBounds = CreateSettlementCacheBoundsFromWorkArea(
+                workAreaBounds.Value,
+                GetSettlementContourPaddingKm());
+
+            MainMap.WorkAreaBufferBounds = RectLatLng.FromLTRB(
+                cacheBounds.Left,
+                cacheBounds.Top,
+                cacheBounds.Right,
+                cacheBounds.Bottom);
+            MainMap.IsWorkAreaBufferVisible = true;
+            MainMap.InvalidateVisual(true);
+        }
+
         private void UpdateSettlementLoadStatus(
     SettlementGeometryCache? cache,
     string stateText)
@@ -1166,16 +1206,19 @@ namespace MapsWPF
             var foundCount = cache?.Settlements?.Count ?? 0;
 
             var loadedCount = cache?.Settlements?
-                .Count(x => x.Polygons != null &&
-                            x.Polygons.Any(p => !string.IsNullOrWhiteSpace(p)))
+                .Count(SettlementGeometryMerger.HasUsablePolygons)
                 ?? 0;
 
-            Dispatcher.Invoke(() =>
+            if (!Dispatcher.CheckAccess())
             {
-                TextSettlementFoundStatus.Text = $"Знайдено НП: {foundCount}";
-                TextSettlementLoadedStatus.Text = $"Завантажено НП: {loadedCount}";
-                TextSettlementLoadStateStatus.Text = stateText;
-            });
+                Dispatcher.BeginInvoke(
+                    new Action(() => UpdateSettlementLoadStatus(cache, stateText)));
+                return;
+            }
+
+            TextSettlementFoundStatus.Text = $"Знайдено НП: {foundCount}";
+            TextSettlementLoadedStatus.Text = $"Завантажено НП: {loadedCount}";
+            TextSettlementLoadStateStatus.Text = stateText;
         }
 
         private void UpdateSettlementLoadStatusFromCurrentCache(string stateText)
@@ -1185,15 +1228,455 @@ namespace MapsWPF
                 stateText);
         }
 
+        private void UpdateSettlementContourProgress(
+            SettlementContourLoadProgress progress)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(
+                    new Action(() => UpdateSettlementContourProgress(progress)));
+                return;
+            }
+
+            var providerPercent = progress.Total <= 0
+                ? 0
+                : progress.Completed * 100.0 / progress.Total;
+
+            var percent = progress.OverallPercent ?? providerPercent;
+
+            ProgressSettlementContours.Value = Math.Min(100.0, percent);
+
+            var providerPrefix = progress.ProviderCount > 1
+                ? $"Паралельно джерел: {progress.ProviderCount}. "
+                : progress.ProviderCount == 1
+                    ? $"Джерело: {progress.ProviderName}. "
+                    : string.Empty;
+
+            var providerProgress = progress.Total <= 0
+                ? progress.State
+                : $"{progress.Completed}/{progress.Total}";
+
+            TextSettlementContourProgress.Text =
+                $"{providerPrefix}{providerProgress}; загалом {percent:0}%";
+
+            TextSettlementCurrentContour.Text =
+                string.IsNullOrWhiteSpace(progress.CurrentSettlementName)
+                    ? "Поточне місто: -"
+                    : $"Поточне місто: {progress.CurrentSettlementName} — " +
+                      progress.State;
+        }
+
+        private void HandleSettlementCacheSnapshot(
+            SettlementGeometryCache snapshot)
+        {
+            SettlementGeometryCache mergedSnapshot;
+
+            lock (_settlementSnapshotSync)
+            {
+                var now = DateTime.UtcNow;
+                var persistToDisk =
+                    now - _lastSettlementCacheDiskSaveUtc >=
+                    SettlementCacheDiskSaveInterval;
+
+                mergedSnapshot =
+                    _settlementGeometryService.MergePreservingExistingGeometry(
+                        snapshot,
+                        persistToDisk);
+
+                if (persistToDisk)
+                {
+                    _lastSettlementCacheDiskSaveUtc = now;
+                    _settlementCacheHasUnpersistedChanges = false;
+                }
+                else
+                {
+                    _settlementCacheHasUnpersistedChanges = true;
+                }
+            }
+
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    if (ShouldDisplaySettlementContours())
+                    {
+                        RenderSettlementCacheSnapshot(mergedSnapshot);
+                    }
+
+                    UpdateSettlementLoadStatus(
+                        mergedSnapshot,
+                        "Дані населених пунктів завантажуються...");
+                }));
+        }
+
+        private void RenderSettlementCacheSnapshot(
+            SettlementGeometryCache cache)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => RenderSettlementCacheSnapshot(cache)));
+                return;
+            }
+
+            if (!ShouldDisplaySettlementContours())
+            {
+                return;
+            }
+
+            if (_mapService == null || cache.Settlements == null)
+            {
+                return;
+            }
+
+            var displayBounds = GetCurrentSettlementDisplayBounds();
+
+            foreach (var settlement in cache.Settlements)
+            {
+                var settlementKey = GetSettlementOverlayKey(settlement);
+                var renderedPolygon = false;
+
+                var polygonLines =
+                    SettlementGeometryMerger.GetPreferredPolygonLines(settlement);
+
+                if (polygonLines.Count > 0)
+                {
+                    foreach (var polygonLine in polygonLines)
+                    {
+                        var polygonKey = settlementKey + "|" + polygonLine;
+
+                        if (_settlementRenderedPolygonKeys.Contains(polygonKey))
+                        {
+                            renderedPolygon = true;
+                            continue;
+                        }
+
+                        if (!TryCreateSettlementRoute(
+                                polygonLine,
+                                GetSettlementBoundaryBrush(settlementKey),
+                                out var route,
+                                out var mapPoints) ||
+                            (displayBounds != null &&
+                             !DoesRouteIntersectBounds(
+                                 mapPoints,
+                                 displayBounds)))
+                        {
+                            continue;
+                        }
+
+                        renderedPolygon = true;
+
+                        _settlementRenderedPolygonKeys.Add(polygonKey);
+
+                        _settlementBoundaryRoutes.Add(route);
+                        MainMap.Markers.Add(route);
+                    }
+                }
+
+                if (renderedPolygon)
+                {
+                    RemoveSettlementCenterMarker(settlementKey);
+                    continue;
+                }
+
+                if (!_settlementCenterMarkersByKey.ContainsKey(settlementKey) &&
+                    TryGetSettlementCenterPoint(settlement, out var center) &&
+                    (displayBounds == null ||
+                     IsPointInsideBounds(center, displayBounds)))
+                {
+                    AddSettlementCenterMarker(
+                        settlementKey,
+                        settlement.Name,
+                        center);
+                }
+            }
+
+            ButtonClearSettlementBoundaries.IsEnabled =
+                _settlementBoundaryRoutes.Count > 0 ||
+                _settlementCenterMarkers.Count > 0;
+        }
+
+        private void RenderCachedSettlementGeometry()
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Loaded,
+                    new Action(RenderCachedSettlementGeometry));
+                return;
+            }
+
+            if (!ShouldDisplaySettlementContours())
+            {
+                return;
+            }
+
+            if (!GetSavedWorkAreaBounds().HasValue)
+            {
+                return;
+            }
+
+            var cache = _settlementGeometryService.CurrentCache;
+
+            if (cache.Settlements == null || cache.Settlements.Count == 0)
+            {
+                return;
+            }
+
+            ClearSettlementBoundaryRoutes();
+            RenderSettlementCacheSnapshot(cache);
+            UpdateSettlementLoadStatus(
+                cache,
+                "Контури відображено з локального кешу.");
+        }
+
+        private static string GetSettlementOverlayKey(
+            SettlementGeometryItem settlement)
+        {
+            if (settlement.OsmId > 0)
+            {
+                return $"osm:{settlement.OsmType}:{settlement.OsmId}";
+            }
+
+            var providerReference = settlement.ProviderReferences?
+                .FirstOrDefault(x =>
+                    !string.IsNullOrWhiteSpace(x.Provider) &&
+                    !string.IsNullOrWhiteSpace(x.ExternalId));
+
+            if (providerReference != null)
+            {
+                return $"{providerReference.Provider}:" +
+                       $"{providerReference.ExternalId}";
+            }
+
+            if (settlement.FallbackPoint != null)
+            {
+                return $"{settlement.Name}:{settlement.Place}:" +
+                       $"{settlement.FallbackPoint.X:0}:" +
+                       $"{settlement.FallbackPoint.Y:0}";
+            }
+
+            return $"{settlement.Name}:{settlement.Place}";
+        }
+
+        private SettlementCacheBounds? GetCurrentSettlementDisplayBounds()
+        {
+            var workArea = GetSavedWorkAreaBounds();
+
+            return workArea.HasValue
+                ? CreateSettlementCacheBoundsFromWorkArea(
+                    workArea.Value,
+                    GetSettlementContourPaddingKm())
+                : null;
+        }
+
+        private static bool IsPointInsideBounds(
+            PointLatLng point,
+            SettlementCacheBounds bounds)
+        {
+            var north = Math.Max(bounds.Top, bounds.Bottom);
+            var south = Math.Min(bounds.Top, bounds.Bottom);
+            var east = Math.Max(bounds.Left, bounds.Right);
+            var west = Math.Min(bounds.Left, bounds.Right);
+
+            return point.Lat >= south &&
+                   point.Lat <= north &&
+                   point.Lng >= west &&
+                   point.Lng <= east;
+        }
+
+        private static bool DoesRouteIntersectBounds(
+            IReadOnlyCollection<PointLatLng> points,
+            SettlementCacheBounds bounds)
+        {
+            if (points == null || points.Count == 0)
+            {
+                return false;
+            }
+
+            var routeNorth = points.Max(x => x.Lat);
+            var routeSouth = points.Min(x => x.Lat);
+            var routeEast = points.Max(x => x.Lng);
+            var routeWest = points.Min(x => x.Lng);
+
+            var boundsNorth = Math.Max(bounds.Top, bounds.Bottom);
+            var boundsSouth = Math.Min(bounds.Top, bounds.Bottom);
+            var boundsEast = Math.Max(bounds.Left, bounds.Right);
+            var boundsWest = Math.Min(bounds.Left, bounds.Right);
+
+            return routeNorth >= boundsSouth &&
+                   routeSouth <= boundsNorth &&
+                   routeEast >= boundsWest &&
+                   routeWest <= boundsEast;
+        }
+
+        private static Brush GetSettlementBoundaryBrush(string settlementKey)
+        {
+            unchecked
+            {
+                uint hash = 2166136261;
+
+                foreach (var character in settlementKey)
+                {
+                    hash ^= character;
+                    hash *= 16777619;
+                }
+
+                return SettlementBoundaryBrushes[
+                    (int)(hash % (uint)SettlementBoundaryBrushes.Length)];
+            }
+        }
+
+        private bool TryGetSettlementCenterPoint(
+            SettlementGeometryItem settlement,
+            out PointLatLng center)
+        {
+            center = PointLatLng.Empty;
+
+            if (_mapService == null || settlement.FallbackPoint == null)
+            {
+                return false;
+            }
+
+            if (!_mapService.TryUTMToLatLng(
+                    new System.Drawing.PointF(
+                        settlement.FallbackPoint.X,
+                        settlement.FallbackPoint.Y),
+                    out var lat,
+                    out var lng))
+            {
+                return false;
+            }
+
+            center = new PointLatLng(lat, lng);
+            return true;
+        }
+
+        private void AddSettlementCenterMarker(
+            string settlementKey,
+            string settlementName,
+            PointLatLng center)
+        {
+            var marker = new GMapMarker(center)
+            {
+                Position = center,
+                Shape = new System.Windows.Shapes.Ellipse
+                {
+                    Width = 9,
+                    Height = 9,
+                    Fill = Brushes.Gold,
+                    Stroke = Brushes.DarkOrange,
+                    StrokeThickness = 1.5,
+                    ToolTip = settlementName,
+                    IsHitTestVisible = false
+                },
+                Offset = new Point(-4.5, -4.5),
+                ZIndex = 999,
+                Tag = settlementName
+            };
+
+            _settlementCenterMarkersByKey[settlementKey] = marker;
+            _settlementCenterMarkers.Add(marker);
+            MainMap.Markers.Add(marker);
+        }
+
+        private void RemoveSettlementCenterMarker(string settlementKey)
+        {
+            if (!_settlementCenterMarkersByKey.TryGetValue(
+                    settlementKey,
+                    out var marker))
+            {
+                return;
+            }
+
+            MainMap.Markers.Remove(marker);
+            _settlementCenterMarkersByKey.Remove(settlementKey);
+            _settlementCenterMarkers.Remove(marker);
+        }
+
+        private bool TryCreateSettlementRoute(
+            string? polygonLine,
+            Brush stroke,
+            out GMapRoute route,
+            out List<PointLatLng> mapPoints)
+        {
+            route = null!;
+            mapPoints = new List<PointLatLng>();
+
+            if (_mapService == null)
+            {
+                return false;
+            }
+
+            var utmPoints = SettlementGeometryService.ParsePolygonLine(
+                polygonLine);
+
+            if (utmPoints.Count < 3)
+            {
+                return false;
+            }
+
+            foreach (var utmPoint in utmPoints)
+            {
+                if (!_mapService.TryUTMToLatLng(
+                        utmPoint,
+                        out var lat,
+                        out var lng))
+                {
+                    continue;
+                }
+
+                mapPoints.Add(new PointLatLng(lat, lng));
+            }
+
+            if (mapPoints.Count < 3)
+            {
+                return false;
+            }
+
+            var firstPoint = mapPoints[0];
+            var lastPoint = mapPoints[mapPoints.Count - 1];
+
+            if (firstPoint.Lat != lastPoint.Lat ||
+                firstPoint.Lng != lastPoint.Lng)
+            {
+                mapPoints.Add(firstPoint);
+            }
+
+            route = new GMapRoute(mapPoints)
+            {
+                Shape = new System.Windows.Shapes.Path
+                {
+                    Stroke = stroke,
+                    StrokeThickness = 3,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    IsHitTestVisible = false
+                },
+                ZIndex = 1000
+            };
+
+            return true;
+        }
+
         private async Task RefreshSettlementGeometryCacheForWorkAreaAsync(
     RectLatLng workAreaBounds)
         {
-            const double paddingKm = 10.0;
+            var paddingKm = GetSettlementContourPaddingKm();
 
             _settlementLoadCts?.Cancel();
             _settlementLoadCts = new System.Threading.CancellationTokenSource();
 
-            var token = _settlementLoadCts.Token;
+            var loadCts = _settlementLoadCts;
+            var token = loadCts.Token;
+
+            SetSettlementContourLoadingUi(true);
+            ClearSettlementBoundaryRoutes();
+            ProgressSettlementContours.Visibility = Visibility.Visible;
+            ProgressSettlementContours.Value = 0;
+            TextSettlementContourProgress.Text =
+                "Контури: підготовка списку міст...";
+            TextSettlementCurrentContour.Text = "Поточне місто: -";
 
             try
             {
@@ -1202,7 +1685,7 @@ namespace MapsWPF
                     paddingKm);
 
                 UpdateSettlementLoadStatusFromCurrentCache(
-    "Оновлення списку НП...");
+    $"Оновлення списку НП (+{paddingKm:0.##} км)...");
 
                 _notificationService?.Notify(
                     "Завантаження НП робочої області...",
@@ -1213,42 +1696,35 @@ namespace MapsWPF
                     $"Top={bounds.Top}, Bottom={bounds.Bottom}, " +
                     $"Left={bounds.Left}, Right={bounds.Right}, PaddingKm={bounds.PaddingKm}");
 
-                var cache = await GetSettlementOverpassLoader()
-     .LoadAsync(
-         bounds,
-         token,
-       partialCache =>
-{
-    var count = partialCache.Settlements?.Count ?? 0;
+                var pipeline = GetSettlementProviderPipeline();
+                var existingCache = _settlementGeometryService.CurrentCache;
+                var providerOptions = GetSettlementProviderOptions();
 
-    if (count <= 0)
-    {
-        Debug.WriteLine("[SETTLEMENT LOAD] Progress cache is empty, not saved");
-
-        UpdateSettlementLoadStatusFromCurrentCache(
-            "Очікування відповіді Overpass...");
-        return;
-    }
-
-    _settlementGeometryService.SavePreservingExistingGeometry(partialCache);
-    _settlementGeometryService.Load();
-
-    var polygonCount = partialCache.Settlements
-        .Count(x => x.Polygons != null &&
-                    x.Polygons.Any(p => !string.IsNullOrWhiteSpace(p)));
-
-    UpdateSettlementLoadStatus(
-        partialCache,
-        "Довантаження НП триває...");
-
-    Debug.WriteLine(
-        $"[SETTLEMENT LOAD] Progress cache saved: " +
-        $"settlements={count}, withPolygons={polygonCount}");
-         });
+                var loadedCache = await Task.Run(
+                    () => pipeline.LoadAsync(
+                        bounds,
+                        existingCache,
+                        GMapProviders.List,
+                        providerOptions,
+                        token,
+                        HandleSettlementCacheSnapshot,
+                        UpdateSettlementContourProgress));
 
                 if (token.IsCancellationRequested)
                 {
                     return;
+                }
+
+                SettlementGeometryCache cache;
+
+                lock (_settlementSnapshotSync)
+                {
+                    cache =
+                        _settlementGeometryService.SavePreservingExistingGeometry(
+                            loadedCache);
+
+                    _lastSettlementCacheDiskSaveUtc = DateTime.UtcNow;
+                    _settlementCacheHasUnpersistedChanges = false;
                 }
 
                 if (cache.Settlements == null || cache.Settlements.Count == 0)
@@ -1264,38 +1740,348 @@ namespace MapsWPF
                     return;
                 }
 
-                _settlementGeometryService.SavePreservingExistingGeometry(cache);
-                _settlementGeometryService.Load();
-
                 UpdateSettlementLoadStatus(
     cache,
-    "Оновлення завершено");
+    "Об’єднання джерел завершено");
 
                 _notificationService?.Notify(
-                    $"НП робочої області завантажено: {cache.Settlements.Count}",
+                    $"Контури оброблено: {cache.Settlements.Count} НП",
                     NotificationType.Info);
 
                 Debug.WriteLine(
-                    $"[SETTLEMENT LOAD] Loaded settlements: {cache.Settlements.Count}");
+                    $"[SETTLEMENT PROVIDER PIPELINE] Completed: " +
+                    $"settlements={cache.Settlements.Count}");
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Завантаження контурів скасовано.");
             }
             catch (TimeoutException ex)
             {
                 Debug.WriteLine($"[SETTLEMENT LOAD] Timeout: {ex}");
 
                 UpdateSettlementLoadStatusFromCurrentCache(
-    "Overpass не відповів. Використовується попередній кеш.");
+    "Джерело даних не відповіло. Використовується попередній кеш.");
 
                 _notificationService?.Notify(
-                    "Не вдалося завантажити НП: сервер не відповів вчасно",
+                    "Не вдалося завантажити НП: джерело не відповіло вчасно",
                     NotificationType.Info);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SETTLEMENT LOAD] Error: {ex}");
 
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Помилка завантаження контурів.");
+
                 _notificationService?.Notify(
-                    "Не вдалося завантажити НП робочої області",
+                    "Не вдалося завантажити контури робочої області",
                     NotificationType.Info);
+            }
+            finally
+            {
+                lock (_settlementSnapshotSync)
+                {
+                    if (_settlementCacheHasUnpersistedChanges)
+                    {
+                        _settlementGeometryService.Save(
+                            _settlementGeometryService.CurrentCache);
+
+                        _lastSettlementCacheDiskSaveUtc = DateTime.UtcNow;
+                        _settlementCacheHasUnpersistedChanges = false;
+                    }
+                }
+
+                if (ReferenceEquals(_settlementLoadCts, loadCts))
+                {
+                    _settlementLoadCts = null;
+                    SetSettlementContourLoadingUi(false);
+                }
+            }
+        }
+
+        private void SetSettlementContourLoadingUi(bool isLoading)
+        {
+            ButtonLoadSettlementContours.Content = isLoading
+                ? "Скасувати завантаження"
+                : "Завантажити контури";
+            ButtonLoadSettlementContours.IsEnabled =
+                isLoading ||
+                (GetSavedWorkAreaBounds().HasValue &&
+                 HasSelectedSettlementDataSources());
+            ButtonSaveWorkArea.IsEnabled = !isLoading;
+            ButtonEditWorkArea.IsEnabled = !isLoading;
+            ButtonClearSettlementBoundaries.IsEnabled =
+                !isLoading &&
+                ShouldDisplaySettlementContours() &&
+                (_settlementBoundaryRoutes.Count > 0 ||
+                 _settlementCenterMarkers.Count > 0);
+            TextBoxSettlementContourPaddingKm.IsEnabled = !isLoading;
+            CheckBoxUseOpenStreetMapSettlementSource.IsEnabled = !isLoading;
+            CheckBoxUseAllAvailableSettlementProviders.IsEnabled = !isLoading;
+            PasswordBoxGeoapifyApiKey.IsEnabled = !isLoading;
+            PasswordBoxAzureMapsApiKey.IsEnabled = !isLoading;
+            PasswordBoxGoogleGeocodingApiKey.IsEnabled = !isLoading;
+            PasswordBoxBingMapsApiKey.IsEnabled = !isLoading;
+            PasswordBoxGraphHopperApiKey.IsEnabled = !isLoading;
+        }
+
+        private bool HasSelectedSettlementDataSources()
+        {
+            if (CheckBoxUseOpenStreetMapSettlementSource.IsChecked == true)
+            {
+                return true;
+            }
+
+            if (CheckBoxUseAllAvailableSettlementProviders.IsChecked != true)
+            {
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(PasswordBoxGeoapifyApiKey.Password) ||
+                   !string.IsNullOrWhiteSpace(PasswordBoxAzureMapsApiKey.Password) ||
+                   !string.IsNullOrWhiteSpace(PasswordBoxGoogleGeocodingApiKey.Password) ||
+                   !string.IsNullOrWhiteSpace(PasswordBoxBingMapsApiKey.Password) ||
+                   !string.IsNullOrWhiteSpace(PasswordBoxGraphHopperApiKey.Password);
+        }
+
+        private void SettlementDataSourceCheckBox_Changed(
+            object sender,
+            RoutedEventArgs e)
+        {
+            if (_isInitializing)
+            {
+                return;
+            }
+
+            SaveSettlementProviderSettingsToModel();
+
+            _settingsService.SaveStartSettings();
+
+            ButtonLoadSettlementContours.IsEnabled =
+                GetSavedWorkAreaBounds().HasValue &&
+                HasSelectedSettlementDataSources();
+
+            UpdateSettlementDataSourceStatus();
+        }
+
+        private void UpdateSettlementDataSourceStatus()
+        {
+            if (TextSettlementDataSourcesStatus == null || MainMap == null)
+            {
+                return;
+            }
+
+            var states = new List<string>();
+            var options = GetSettlementProviderOptions();
+
+            if (options.UseOpenStreetMapOverpass)
+            {
+                states.Add("OSM/Overpass: список міст, центри й контури");
+            }
+
+            if (options.UseAllAvailableProviders)
+            {
+                GetSettlementProviderPipeline();
+                var availability = _settlementExternalGeometryLoader!
+                    .GetAvailability(options, GMapProviders.List);
+
+                states.Add(availability.ActiveProviders.Count > 0
+                    ? "Паралельно: " +
+                      string.Join(", ", availability.ActiveProviders)
+                    : "Зовнішні API: додайте хоча б один ключ");
+
+                if (availability.SkippedProviders.Count > 0)
+                {
+                    states.Add(
+                        "Неактивні: " +
+                        string.Join("; ", availability.SkippedProviders));
+                }
+            }
+
+            states.Add(
+                "Комбобокс карти не обмежує джерела геометрії; " +
+                "черга міст послідовна, API одного міста працюють паралельно.");
+
+            TextSettlementDataSourcesStatus.Text = states.Count == 0
+                ? "Не вибрано жодного джерела."
+                : string.Join("\n", states);
+        }
+
+        private SettlementProviderOptions GetSettlementProviderOptions()
+        {
+            return new SettlementProviderOptions
+            {
+                UseOpenStreetMapOverpass =
+                    CheckBoxUseOpenStreetMapSettlementSource.IsChecked == true,
+                UseAllAvailableProviders =
+                    CheckBoxUseAllAvailableSettlementProviders.IsChecked == true,
+                GeoapifyApiKey = PasswordBoxGeoapifyApiKey.Password ?? string.Empty,
+                AzureMapsSubscriptionKey =
+                    PasswordBoxAzureMapsApiKey.Password ?? string.Empty,
+                GoogleGeocodingApiKey =
+                    PasswordBoxGoogleGeocodingApiKey.Password ?? string.Empty,
+                BingMapsApiKey = PasswordBoxBingMapsApiKey.Password ?? string.Empty,
+                GraphHopperApiKey =
+                    PasswordBoxGraphHopperApiKey.Password ?? string.Empty
+            };
+        }
+
+        private void SaveSettlementProviderSettingsToModel()
+        {
+            var options = GetSettlementProviderOptions();
+
+            _settingsService.StartSettings.UseOpenStreetMapSettlementSource =
+                options.UseOpenStreetMapOverpass;
+            _settingsService.StartSettings.UseAllAvailableSettlementProviders =
+                options.UseAllAvailableProviders;
+            _settingsService.StartSettings.UseSelectedMapProviderSettlementCenters =
+                options.UseAllAvailableProviders;
+            _settingsService.StartSettings.GeoapifyApiKey = options.GeoapifyApiKey;
+            _settingsService.StartSettings.AzureMapsSubscriptionKey =
+                options.AzureMapsSubscriptionKey;
+            _settingsService.StartSettings.GoogleGeocodingApiKey =
+                options.GoogleGeocodingApiKey;
+            _settingsService.StartSettings.BingMapsApiKey = options.BingMapsApiKey;
+            _settingsService.StartSettings.GraphHopperApiKey =
+                options.GraphHopperApiKey;
+        }
+
+        private void SettlementApiKeyPasswordBox_Changed(
+            object sender,
+            RoutedEventArgs e)
+        {
+            if (_isInitializing)
+            {
+                return;
+            }
+
+            SaveSettlementProviderSettingsToModel();
+            _settingsService.SaveStartSettings();
+
+            ButtonLoadSettlementContours.IsEnabled =
+                GetSavedWorkAreaBounds().HasValue &&
+                HasSelectedSettlementDataSources();
+
+            UpdateSettlementDataSourceStatus();
+        }
+
+        private bool ShouldDisplaySettlementContours()
+        {
+            return CheckBoxShowSettlementContours.IsChecked == true;
+        }
+
+        private void CheckBoxShowSettlementContours_Changed(
+            object sender,
+            RoutedEventArgs e)
+        {
+            if (_isInitializing)
+            {
+                return;
+            }
+
+            var shouldDisplay = CheckBoxShowSettlementContours.IsChecked == true;
+
+            _settingsService.StartSettings.ShowSettlementContours = shouldDisplay;
+            _settingsService.SaveStartSettings();
+
+            if (shouldDisplay)
+            {
+                RenderCachedSettlementGeometry();
+                return;
+            }
+
+            ClearSettlementBoundaryRoutes();
+            TextSettlementLoadStateStatus.Text =
+                "Відображення контурів вимкнено. Кеш збережено.";
+        }
+
+        private static double NormalizeSettlementContourPadding(double value)
+        {
+            if (double.IsNaN(value) ||
+                double.IsInfinity(value) ||
+                value < 0 ||
+                value > MaxSettlementContourPaddingKm)
+            {
+                return DefaultSettlementContourPaddingKm;
+            }
+
+            return value;
+        }
+
+        private double GetSettlementContourPaddingKm()
+        {
+            var paddingKm = NormalizeSettlementContourPadding(
+                _settingsService.StartSettings.SettlementContourPaddingKm);
+
+            _settingsService.StartSettings.SettlementContourPaddingKm =
+                paddingKm;
+
+            return paddingKm;
+        }
+
+        private static bool TryParseSettlementContourPadding(
+            string? text,
+            out double paddingKm)
+        {
+            paddingKm = 0;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var normalized = text.Trim().Replace(',', '.');
+
+            if (!double.TryParse(
+                    normalized,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var parsed))
+            {
+                return false;
+            }
+
+            if (double.IsNaN(parsed) ||
+                double.IsInfinity(parsed) ||
+                parsed < 0 ||
+                parsed > MaxSettlementContourPaddingKm)
+            {
+                return false;
+            }
+
+            paddingKm = parsed;
+            return true;
+        }
+
+        private void TextBoxSettlementContourPaddingKm_TextChanged(
+            object sender,
+            TextChangedEventArgs e)
+        {
+            if (_isInitializing || _isUpdatingSettlementContourPaddingUi)
+            {
+                return;
+            }
+
+            if (TryParseSettlementContourPadding(
+                    TextBoxSettlementContourPaddingKm.Text,
+                    out var paddingKm))
+            {
+                _settingsService.StartSettings.SettlementContourPaddingKm =
+                    paddingKm;
+
+                _settingsService.SaveStartSettings();
+
+                TextBoxSettlementContourPaddingKm.BorderBrush = Brushes.Green;
+                TextBoxSettlementContourPaddingKm.ClearValue(
+                    System.Windows.Controls.Control.BackgroundProperty);
+
+                UpdateSettlementContourBufferOverlay();
+            }
+            else
+            {
+                TextBoxSettlementContourPaddingKm.BorderBrush = Brushes.Red;
             }
         }
 
@@ -1450,6 +2236,8 @@ namespace MapsWPF
                 _settingsService.StartSettings.MapProviderName = type.Name;
                 _settingsService.SaveStartSettings();
             }
+
+            UpdateSettlementDataSourceStatus();
         }
 
         private void UpdateDistanceDisplay()
@@ -1683,131 +2471,6 @@ namespace MapsWPF
             catch { }
         }
 
-        private void ButtonShowKupianskBoundary_Click(
-    object sender,
-    RoutedEventArgs e)
-        {
-            const string kupianskName = "Куп’янськ";
-
-            ClearSettlementBoundaryRoutes();
-
-            if (_mapService == null)
-            {
-                _notificationService?.Notify(
-                    "Сервіс карти не ініціалізовано",
-                    NotificationType.Warning);
-
-                return;
-            }
-
-            var cache = _settlementGeometryService.CurrentCache;
-
-            var kupiansk = cache.Settlements?
-                .FirstOrDefault(x =>
-                    string.Equals(
-                        x.Name,
-                        kupianskName,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    x.Polygons != null &&
-                    x.Polygons.Any(p =>
-                        !string.IsNullOrWhiteSpace(p)));
-
-            if (kupiansk == null)
-            {
-                _notificationService?.Notify(
-                    "У локальному кеші немає меж Куп’янська",
-                    NotificationType.Warning);
-
-                TextSettlementLoadStateStatus.Text =
-                    "Межі Куп’янська не завантажені.";
-
-                return;
-            }
-
-            var allMapPoints = new List<PointLatLng>();
-
-            foreach (var polygonLine in kupiansk.Polygons)
-            {
-                var utmPoints =
-                    SettlementGeometryService.ParsePolygonLine(polygonLine);
-
-                if (utmPoints.Count < 3)
-                {
-                    continue;
-                }
-
-                var mapPoints = new List<PointLatLng>();
-
-                foreach (var utmPoint in utmPoints)
-                {
-                    if (!_mapService.TryUTMToLatLng(
-                            utmPoint,
-                            out var lat,
-                            out var lng))
-                    {
-                        continue;
-                    }
-
-                    mapPoints.Add(new PointLatLng(lat, lng));
-                }
-
-                if (mapPoints.Count < 3)
-                {
-                    continue;
-                }
-
-                var firstPoint = mapPoints[0];
-                var lastPoint = mapPoints[mapPoints.Count - 1];
-
-                if (firstPoint.Lat != lastPoint.Lat ||
-                    firstPoint.Lng != lastPoint.Lng)
-                {
-                    mapPoints.Add(firstPoint);
-                }
-
-                var route = new GMapRoute(mapPoints)
-                {
-                    Shape = new System.Windows.Shapes.Path
-                    {
-                        Stroke = Brushes.Red,
-                        StrokeThickness = 3,
-                        StrokeLineJoin = PenLineJoin.Round
-                    },
-                    ZIndex = 1000
-                };
-
-                _settlementBoundaryRoutes.Add(route);
-                MainMap.Markers.Add(route);
-
-                allMapPoints.AddRange(mapPoints);
-            }
-
-            if (_settlementBoundaryRoutes.Count == 0)
-            {
-                _notificationService?.Notify(
-                    "Не вдалося перетворити точки меж Куп’янська",
-                    NotificationType.Warning);
-
-                TextSettlementLoadStateStatus.Text =
-                    "Полігон Куп’янська містить некоректні точки.";
-
-                return;
-            }
-
-            ZoomToSettlementBoundary(allMapPoints);
-
-            ButtonClearSettlementBoundaries.IsEnabled = true;
-
-            TextSettlementLoadStateStatus.Text =
-                $"Показано межі Куп’янська: " +
-                $"{_settlementBoundaryRoutes.Count} контур.";
-
-            Debug.WriteLine(
-                $"[SETTLEMENT DISPLAY] Kupiansk: " +
-                $"routes={_settlementBoundaryRoutes.Count}, " +
-                $"points={allMapPoints.Count}");
-        }
-
         private void ButtonClearSettlementBoundaries_Click(
     object sender,
     RoutedEventArgs e)
@@ -1815,7 +2478,7 @@ namespace MapsWPF
             ClearSettlementBoundaryRoutes();
 
             TextSettlementLoadStateStatus.Text =
-                "Межі населеного пункту прибрано.";
+                "Контури та центри населених пунктів прибрано.";
         }
 
         private void ClearSettlementBoundaryRoutes()
@@ -1826,6 +2489,15 @@ namespace MapsWPF
             }
 
             _settlementBoundaryRoutes.Clear();
+
+            foreach (var marker in _settlementCenterMarkers)
+            {
+                MainMap.Markers.Remove(marker);
+            }
+
+            _settlementCenterMarkers.Clear();
+            _settlementCenterMarkersByKey.Clear();
+            _settlementRenderedPolygonKeys.Clear();
 
             ButtonClearSettlementBoundaries.IsEnabled = false;
 
@@ -2589,6 +3261,8 @@ namespace MapsWPF
             {
                 MainMap.ApplyBoundsOfMapToViewport();
             }
+
+            RenderCachedSettlementGeometry();
         }
 
         private void CheckBoxLimitMap_Unchecked(object sender, RoutedEventArgs e)
@@ -2610,10 +3284,51 @@ namespace MapsWPF
             _workAreaEditor.CancelEdit();
 
             RestoreMapAfterWorkAreaEdit(restoreOldBounds: true);
+            UpdateSettlementContourBufferOverlay();
 
             ButtonEditWorkArea.IsEnabled = true;
             ButtonSaveWorkArea.Visibility = Visibility.Collapsed;
             ButtonCancelWorkArea.Visibility = Visibility.Collapsed;
+        }
+
+        private async void ButtonLoadSettlementContours_Click(
+    object sender,
+    RoutedEventArgs e)
+        {
+            if (_settlementLoadCts != null)
+            {
+                _settlementLoadCts.Cancel();
+                return;
+            }
+
+            var savedBounds = GetSavedWorkAreaBounds();
+
+            if (!savedBounds.HasValue)
+            {
+                _notificationService?.Notify(
+                    "Спочатку збережи робочу область",
+                    NotificationType.Warning);
+
+                TextSettlementLoadStateStatus.Text =
+                    "Немає збереженої робочої області для завантаження.";
+
+                return;
+            }
+
+            if (!HasSelectedSettlementDataSources())
+            {
+                _notificationService?.Notify(
+                    "Вибери хоча б одне джерело даних",
+                    NotificationType.Warning);
+
+                TextSettlementLoadStateStatus.Text =
+                    "Не вибрано джерело даних населених пунктів.";
+
+                return;
+            }
+
+            await RefreshSettlementGeometryCacheForWorkAreaAsync(
+                savedBounds.Value);
         }
 
         private async void ButtonSaveWorkArea_Click(object sender, RoutedEventArgs e)
@@ -2634,7 +3349,10 @@ namespace MapsWPF
 
             SaveWorkAreaBounds(savedBounds);
 
-            // Тимчасово вимкнено на час тесту relation Куп’янська.
+            ButtonLoadSettlementContours.IsEnabled =
+                HasSelectedSettlementDataSources();
+
+            // Завантаження запускається окремою кнопкою, щоб не блокувати збереження області.
             // _ = RefreshSettlementGeometryCacheForWorkAreaAsync(savedBounds);
 
             _workAreaEditor.CompleteEdit();
@@ -2754,6 +3472,8 @@ namespace MapsWPF
             UpdateBoundsOfMap();
             EnsureZoomLimitsCompatibleWithBounds();
             EnsurePositionInsideBoundsOnEnable();
+            UpdateSettlementContourBufferOverlay();
+            RenderCachedSettlementGeometry();
         }
 
         private string FormatLimitPoint(double lat, double lng)
