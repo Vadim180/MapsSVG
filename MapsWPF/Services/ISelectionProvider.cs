@@ -9,7 +9,6 @@ namespace MapsWPF.Services
         string GetSelectedPosition();
         string GetSelectedPilot();
         string GetSelectedDrone();
-        IEnumerable<string> GetLocalCities();
         string GetShootingTarget();
         string GetHeightText();
         int GetSelectedRange();

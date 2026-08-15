@@ -1,9 +1,10 @@
+using GMap.NET;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
-
-using GMap.NET;
+using System.Linq;
+using System.Windows;
 
 namespace MapsWPF.Services
 {
@@ -18,9 +19,8 @@ namespace MapsWPF.Services
 
         private float? _lastAzimuth = null;
         private bool _isSingleLineFormat = false;
-        private bool _isReportTemplate = false;
 
-        public ReportService(TemplateService templates, MapService mapService, NotificationService notification, ClipboardService clipboard, ISelectionProvider selection, IReportOutput output)
+        public ReportService(TemplateService templates,MapService mapService,NotificationService notification,ClipboardService clipboard,ISelectionProvider selection,IReportOutput output)
         {
             _templates = templates ?? throw new ArgumentNullException(nameof(templates));
             _mapService = mapService ?? throw new ArgumentNullException(nameof(mapService));
@@ -30,37 +30,39 @@ namespace MapsWPF.Services
             _output = output ?? throw new ArgumentNullException(nameof(output));
         }
 
+        public TemplateService TemplateService => _templates;
+
         public string GenerateTextFromTemplate(List<string> template)
         {
             string selectedPosition = _selection.GetSelectedPosition();
             string selectedPilot = _selection.GetSelectedPilot();
             string selectedDrone = _selection.GetSelectedDrone();
-            string selectedLocalCities = string.Join(", ", _selection.GetLocalCities());
-            string shootingTargets = string.IsNullOrWhiteSpace(_selection.GetShootingTarget()) || _selection.GetShootingTarget() == "Патрулювання"
-                                        ? "Патрулювання" : _selection.GetShootingTarget().Trim();
+            string selectedDirections = string.Join(", ",_selection.GetSelectedFlyDirections());
+            string shootingTargets = _selection.GetShootingTarget()?.Trim() ?? string.Empty;
             string selectedheight = _selection.GetHeightText().Trim();
             string selectedrange2 = _selection.GetSelectedRange().ToString();
 
-            PointF utm;
-            string mgrsShort;
-            string nearestLocality;
+            PointF utm = PointF.Empty;
+            string mgrsShort = string.Empty;
+            string nearestLocality = string.Empty;
 
-            if (_selection.TryGetUTM(out utm))
+            if (_selection.TryGetClickedLatLng(out var clickedLatLng))
             {
-                mgrsShort = _selection.FormatShortMGRSFromUTM(utm);
-                nearestLocality = _selection.FindClosestLocalityFromLatLng(new PointLatLng(utm.Y, utm.X)).ToUpper(new CultureInfo("uk-UA"));
-            }
-            else if (_selection.TryGetClickedLatLng(out var clickedLatLng))
-            {
-                mgrsShort = _selection.FormatShortMGRSFromLatLng(clickedLatLng);
-                nearestLocality = _selection.FindClosestLocalityFromLatLng(clickedLatLng).ToUpper(new CultureInfo("uk-UA"));
-            }
-            else
-            {
-                // No selected point available; continue generating template with empty coordinate-related fields
-                mgrsShort = string.Empty;
-                nearestLocality = string.Empty;
-                utm = PointF.Empty;
+                if (_selection.TryGetUTM(out utm))
+                {
+                    mgrsShort = _selection.FormatShortMGRSFromUTM(utm);
+                }
+                else
+                {
+                    mgrsShort = _selection.FormatShortMGRSFromLatLng(clickedLatLng);
+                }
+
+                var nearestLocalityRaw =
+                    _selection.FindClosestLocalityFromLatLng(clickedLatLng);
+
+                nearestLocality = string.IsNullOrWhiteSpace(nearestLocalityRaw)
+                    ? string.Empty
+                    : nearestLocalityRaw.ToUpper(new CultureInfo("uk-UA"));
             }
 
             string selectedTarget = _selection.GetTargetType();
@@ -76,21 +78,19 @@ namespace MapsWPF.Services
                 ["{Pilot}"] = selectedPilot,
                 ["{DroneBy}"] = selectedDrone,
                 ["{Time}"] = timeString_,
-                ["{LocalCiti}"] = selectedLocalCities,
                 ["{ShootingTarget}"] = shootingTargets,
                 ["{azimyth}"] = _lastAzimuth.HasValue ? Math.Round(_lastAzimuth.Value).ToString(CultureInfo.InvariantCulture) : "0",
                 ["{range}"] = selectedrange2,
                 ["{height}"] = selectedheight,
                 ["{MGRS_Short}"] = mgrsShort,
                 ["{CurrentCoordMGRS}"] = mgrsShort,
-                ["{CurrentCoordUTM}"] = utm != null ? $"{utm.X:F1}/{utm.Y:F1}" : string.Empty,
+                ["{CurrentCoordUTM}"] = utm == PointF.Empty? string.Empty: $"{utm.X:F1}/{utm.Y:F1}",
                 ["{nearestLocality}"] = nearestLocality,
                 ["{TargetType}"] = selectedTarget,
-                ["{UnitName}"] = _templates.CustomUnit,
-                ["{LaunchArea}"] = _templates.LaunchArea ?? "",
+                ["{UnitName}"] = string.Empty,
                 ["{Frequencies}"] = _templates.Frequencies ?? string.Empty,
                 ["{Purpose}"] = _templates.Purpose ?? string.Empty,
-                ["{Direction}"] = string.Join(", ", _selection.GetSelectedFlyDirections())
+                ["{Direction}"] = selectedDirections
             };
 
             if (template == _templates.EndWorkShablon)
@@ -172,61 +172,238 @@ namespace MapsWPF.Services
             return input;
         }
 
+        private static bool TemplateContains(List<string> template, string placeholder)
+        {
+            if (template == null || template.Count == 0)
+            {
+                return false;
+            }
+
+            return template.Any(line =>
+                !string.IsNullOrWhiteSpace(line) &&
+                line.Contains(placeholder, StringComparison.Ordinal)
+            );
+        }
+
+        private bool HasAnySelectedDirection()
+        {
+            var directions = _selection.GetSelectedFlyDirections();
+
+            return directions != null &&
+                   directions.Any(x => !string.IsNullOrWhiteSpace(x));
+        }
+
+        private bool TryValidateRequiredFields(
+            string templateName,
+            List<string> template,
+            out string message)
+        {
+            message = string.Empty;
+
+            if (template == null || template.Count == 0)
+            {
+                message = "Шаблон порожній.";
+                return false;
+            }
+
+            var name = templateName?.Trim() ?? string.Empty;
+
+            if (string.Equals(name, "StartWork", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "EndWork", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Report", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!HasFlightPoint())
+                {
+                    message = "Спочатку вибери точку польоту на карті.";
+                    return false;
+                }
+            }
+
+            if (string.Equals(name, "Report", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!HasAttackPoint())
+                {
+                    message = "Спочатку встанови точку атаки.";
+                    return false;
+                }
+            }
+
+            if (TemplateContains(template, "{Position}") &&
+                string.IsNullOrWhiteSpace(_selection.GetSelectedPosition()))
+            {
+                message = "Вибери позицію.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{Pilot}") &&
+                string.IsNullOrWhiteSpace(_selection.GetSelectedPilot()))
+            {
+                message = "Вибери пілота.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{DroneBy}") &&
+                string.IsNullOrWhiteSpace(_selection.GetSelectedDrone()))
+            {
+                message = "Вибери дрон.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{Time}") &&
+                string.IsNullOrWhiteSpace(_selection.GetCurrentTimeString()))
+            {
+                message = "Не встановлено час роботи.";
+                return false;
+            }
+
+            if (!HasAnySelectedDirection())
+            {
+                message = "Вибери напрямок польоту.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{ShootingTarget}") &&
+                string.IsNullOrWhiteSpace(_selection.GetShootingTarget()))
+            {
+                message = "Вибери або введи ціль.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{TargetType}") &&
+                string.IsNullOrWhiteSpace(_selection.GetTargetType()))
+            {
+                message = "Вибери тип цілі.";
+                return false;
+            }
+
+            if (TemplateContains(template, "{nearestLocality}") &&
+    _selection.TryGetClickedLatLng(out var clickedLatLngForLocality))
+            {
+                var nearestLocality =
+                    _selection.FindClosestLocalityFromLatLng(clickedLatLngForLocality);
+
+                if (string.IsNullOrWhiteSpace(nearestLocality))
+                {
+                    message =
+                        "Найближчий населений пункт ще не визначено. Дочекайся завершення пошуку.";
+
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public string GenerateTextFromTemplateEditor(
+    string templateName,
+    List<string> template)
+        {
+            _selection.GetAndSetTime();
+
+            if (!TryValidateRequiredFields(templateName, template, out var message))
+            {
+                ShowValidationWarning(message);
+                return string.Empty;
+            }
+
+            _isSingleLineFormat = string.Equals(
+                templateName,
+                "Report",
+                StringComparison.OrdinalIgnoreCase
+            );
+
+            return GenerateTextFromTemplate(template);
+        }
+
         public void Start_of_Work_Click(object sender, EventArgs e)
         {
-            if (!_selection.TryGetUTM(out _)) return;
-
             _isSingleLineFormat = false;
+
             _selection.GetAndSetTime();
+
+            if (!TryValidateRequiredFields("StartWork", _templates.StartWorkShablon, out var message))
+            {
+                ShowValidationWarning(message);
+                return;
+            }
+
             string generatedText = GenerateTextFromTemplate(_templates.StartWorkShablon);
+
             _output.SetReportText(generatedText);
             _output.CopyToClipboardWithNotification(generatedText);
         }
 
         public void End_of_Work_Click(object sender, EventArgs e)
         {
-            if (!_selection.TryGetUTM(out _)) return;
+            _isSingleLineFormat = false;
 
             _selection.GetAndSetTime();
+
+            if (!TryValidateRequiredFields("EndWork", _templates.EndWorkShablon, out var message))
+            {
+                ShowValidationWarning(message);
+                return;
+            }
+
             string generatedText = GenerateTextFromTemplate(_templates.EndWorkShablon);
+
             _output.SetReportText(generatedText);
             _output.CopyToClipboardWithNotification(generatedText);
         }
 
         public void Combat_Work_Click(object sender, EventArgs e)
         {
-            var clicked = _selection.GetClickedPoint();
-            if (clicked.HasValue && _selection.GetAttackPoint() != PointF.Empty)
+            _selection.GetAndSetTime();
+
+            if (!TryValidateRequiredFields("Report", _templates.ReportWorkShablonActual, out var message))
             {
-                float azimuth = CalculateAzimuth(_selection.GetAttackPoint(), clicked.Value);
-                _lastAzimuth = azimuth;
-                _output.SetAzimuthDisplay(Math.Round(azimuth).ToString(CultureInfo.InvariantCulture) + "°");
-            }
-            else
-            {
-                string rawAzimuth = (_selection.GetAzimuthText() ?? string.Empty).Replace("°", "").Trim();
-                if (string.IsNullOrEmpty(rawAzimuth) || !float.TryParse(rawAzimuth, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
-                {
-                    _output.SetReportText("Помилка: неможливо зчитати значення азимута!");
-                    return;
-                }
-                _lastAzimuth = parsed;
-                _output.SetAzimuthDisplay(Math.Round(parsed).ToString(CultureInfo.InvariantCulture) + "°");
+                ShowValidationWarning(message);
+                return;
             }
 
-            if ((_selection.GetClickedPoint().HasValue || _lastAzimuth.HasValue) && _templates.ReportWorkShablonActual != null)
+            var clicked = _selection.GetClickedPoint();
+
+            if (!clicked.HasValue)
             {
-                _isReportTemplate = true;
-                _isSingleLineFormat = true;
-                string generatedText = GenerateTextFromTemplate(_templates.ReportWorkShablonActual);
-                _output.SetReportText(generatedText);
-                _isReportTemplate = false;
-                _output.CopyToClipboardWithNotification(generatedText);
+                ShowValidationWarning("Спочатку вибери точку польоту на карті.");
+                return;
             }
-            else
-            {
-                _output.SetReportText("Вкажіть точку польоту на карті!");
-            }
+
+            float azimuth = CalculateAzimuth(
+                _selection.GetAttackPoint(),
+                clicked.Value
+            );
+
+            _lastAzimuth = azimuth;
+
+            _output.SetAzimuthDisplay(
+                Math.Round(azimuth).ToString(CultureInfo.InvariantCulture) + "°"
+            );
+
+            _isSingleLineFormat = true;
+
+            string generatedText = GenerateTextFromTemplate(
+                _templates.ReportWorkShablonActual
+            );
+
+            _output.SetReportText(generatedText);
+            _output.CopyToClipboardWithNotification(generatedText);
+        }
+
+        private bool HasFlightPoint()
+        {
+            return _selection.GetClickedPoint().HasValue;
+        }
+
+        private bool HasAttackPoint()
+        {
+            return _selection.GetAttackPoint() != PointF.Empty;
+        }
+
+        private void ShowValidationWarning(string message)
+        {
+            _output.SetReportText(message);
+            _notification.Notify(message, NotificationType.Warning);
         }
 
         private float CalculateAzimuth(PointF fromPoint, PointF toPoint)

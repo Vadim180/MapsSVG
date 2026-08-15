@@ -1,10 +1,11 @@
-using MapsWPF.Models;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Diagnostics;
+using MapsWPF.Data.Defaults;
 
 namespace MapsWPF.Services
 {
@@ -14,28 +15,15 @@ namespace MapsWPF.Services
         public Dictionary<string, List<string>> Position_Point { get; set; } = new Dictionary<string, List<string>>();
         public Dictionary<string, List<string>> DroneByPosition { get; set; } = new Dictionary<string, List<string>>();
 
-        public List<string> LocalCiti { get; set; } = new List<string>
-        {
-            "Купянськ", "Подоли", "Соболівка", "Курилівка", "Осиново", "Петропавлівка", "Голубівка",
-            "Садове", "Благодатівка", "Московка", "Кіндрашівка", "Калинове", "Синьківка", "Радьківка",
-        };
         public List<string> StartWorkShablon { get; set; } = new List<string>();
         public List<string> EndWorkShablon { get; set; } = new List<string>();
         public List<string> ReportWorkShablon { get; set; } = new List<string>();
-        // Targets list (moved from Template TargetTypeShablon into targets.json)
         public List<string> Targets { get; set; } = new List<string>();
-        public List<string> TargetTypeShablon { get; set; } = new List<string>(); // backward compatibility
 
         // templates map (template name -> lines)
         public Dictionary<string, List<string>> Templates { get; set; } = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        public string CustomUnit { get; set; } = "зрдн";
-        public string LaunchArea { get; set; } = "Купянськ";
 
         public List<string> CustomReportWorkShablon { get; set; }
-
-        // Histories for UI comboboxes
-        public List<string> UnitsHistory { get; set; } = new List<string>();
-        public List<string> LaunchAreasHistory { get; set; } = new List<string>();
 
         // Last selections to persist UI state across runs
         public string LastHeight { get; set; }
@@ -52,76 +40,22 @@ namespace MapsWPF.Services
         // Defaults for report placeholders
         public string DefaultTargetStatus { get; set; } = "Ціль знищено.";
         public string DefaultExpenses { get; set; } = "Борт втрачено";
-        public List<string> FlyDirectionList { get; set; } = new List<string>();
 
         public TemplateService()
         {
-            if (CustomReportWorkShablon == null) CustomReportWorkShablon = new List<string>();
-            UnitsHistory = new List<string>();
-            LaunchAreasHistory = new List<string>();
+            if (CustomReportWorkShablon == null)
+            {
+                CustomReportWorkShablon = new List<string>();
+            }
         }
 
         public void InitializeData()
         {
-            bool loaded = false;
-            try
-            {
-                var defaultPath = Path.Combine(AppContext.BaseDirectory, "Data", "Templates", "templates.json");
-                if (File.Exists(defaultPath))
-                {
-                    var json = File.ReadAllText(defaultPath);
-                    var data = JsonConvert.DeserializeObject<TemplateDataModel>(json);
-                    if (data != null)
-                    {
-                        Position_Point = data.Position_Point ?? new Dictionary<string, List<string>>();
-                        DroneByPosition = data.DroneByPosition ?? new Dictionary<string, List<string>>();
-                        LocalCiti = data.LocalCiti ?? new List<string>();
-                        StartWorkShablon = data.StartWorkShablon ?? new List<string>();
-                        EndWorkShablon = data.EndWorkShablon ?? new List<string>();
-                        ReportWorkShablon = data.ReportWorkShablon ?? new List<string>();
-                        Targets = data.Targets ?? new List<string>();
-                        CustomUnit = data.CustomUnit ?? "зрдн";
-                        LaunchArea = data.LaunchArea ?? "Купянськ";
-                        DefaultTargetStatus = data.DefaultTargetStatus ?? "Ціль знищено.";
-                        DefaultExpenses = data.DefaultExpenses ?? "Борт втрачено";
-                        loaded = true;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error loading default templates: {ex.Message}");
-            }
+            StartWorkShablon = ReportTemplateDefaults.CreateStartWorkTemplate();
+            EndWorkShablon = ReportTemplateDefaults.CreateEndWorkTemplate();
+            ReportWorkShablon = ReportTemplateDefaults.CreateReportWorkTemplate();
 
-            if (!loaded)
-            {
-                // No hardcoded defaults: initialize empty structures and rely on Data/Templates sample files to populate settings when possible
-                Position_Point = new Dictionary<string, List<string>>();
-                DroneByPosition = new Dictionary<string, List<string>>();
-
-                LocalCiti = new List<string>();
-
-                StartWorkShablon = new List<string>();
-                EndWorkShablon = new List<string>();
-                ReportWorkShablon = new List<string>();
-
-                TargetTypeShablon = new List<string>();
-
-                Targets = new List<string>();
-
-                CustomUnit = "";
-                LaunchArea = "";
-                DefaultTargetStatus = "";
-                DefaultExpenses = "";
-            }
-
-            // initialize templates map (template name -> lines)
-            Templates = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Report"] = new List<string>(ReportWorkShablon ?? new List<string>()),
-                ["StartWork"] = new List<string>(StartWorkShablon ?? new List<string>()),
-                ["EndWork"] = new List<string>(EndWorkShablon ?? new List<string>())
-            };
+            Templates = ReportTemplateDefaults.CreateTemplateMap();
 
             if (CustomReportWorkShablon == null)
             {
@@ -130,526 +64,321 @@ namespace MapsWPF.Services
         }
 
         // Folder next to executable where settings JSON files are stored
-        public string SettingsFolderPath => Path.Combine(AppContext.BaseDirectory ?? ".", "settings");
+        public string SettingsFolderPath
+        {
+            get
+            {
+                var localAppData = Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData
+                );
+
+                return Path.Combine(
+                    localAppData,
+                    "MapsWPF",
+                    "settings"
+                );
+            }
+        }
 
         public void LoadAllData()
         {
-            Console.WriteLine($"TemplateService.LoadAllData: SettingsFolderPath={SettingsFolderPath}");
-            // Migrate legacy files (droneby.json → positions.json wrapper) if present
-            var folder = SettingsFolderPath;
-            // Fallback for local dev: if the expected settings folder does not exist in the app output, try the Build output folder
-            if (!Directory.Exists(folder))
-            {
-                var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "Build", "Debug", "net10.0-windows", "win-x64", "settings"));
-                if (Directory.Exists(candidate))
-                {
-                    Console.WriteLine($"TemplateService: Settings folder not found at {folder}, using fallback {candidate}");
-                    folder = candidate;
-                }
-            }
+            Console.WriteLine(
+                $"TemplateService.LoadAllData: SettingsFolderPath={SettingsFolderPath}"
+            );
 
-            if (Directory.Exists(folder))
-            {
-                MigrateOldPositionFiles(folder);
-            }
+            Directory.CreateDirectory(SettingsFolderPath);
 
+            // 1. Не чіпаємо наявну логіку шаблонів.
+            InitializeData();
 
-            // Try to load from settings folder next to exe first
-            if (!TryLoadFromSettingsFolder())
-            {
-                // Fallback to built-in defaults
-                InitializeData();
-                // Persist defaults to settings folder for easier user inspection and customization
-                TrySaveDefaultsToSettingsFolder();
-            }
-            else
-            {
-                // Even if loaded, ensure new files (like fly_directions.json) are created if missing
-                TrySaveDefaultsToSettingsFolder();
-            }
+            // 2. Позиції, пілоти, дрони і дефолтні цілі беремо з коду програми.
+            ApplyDefaultReportSelectionLists();
 
-            // Ensure FlyDirectionList has defaults if empty
-            if (FlyDirectionList.Count == 0 && LocalCiti.Count > 0)
-            {
-                FlyDirectionList.AddRange(LocalCiti);
-            }
+            // 3. Якщо користувач зберіг свої шаблони — вони замінюють дефолтні шаблони.
+            LoadUserTemplatesIfExists();
 
+            // 4. Користувацькі цілі додаються до дефолтних цілей.
+            LoadUserTargetsIfExists();
 
+            // 5. Останні вибори/поля форми звіту — локальні.
+            LoadLastChoicesIfExists();
         }
 
-        private bool TryLoadFromSettingsFolder()
+        private void LoadLastChoicesIfExists()
         {
             try
             {
-                var folder = SettingsFolderPath;
-                if (!Directory.Exists(folder)) return false;
+                var lastPath = Path.Combine(
+                    SettingsFolderPath,
+                    "lastchoices.json"
+                );
 
-                bool loaded = false;
-                var templatesPath = Path.Combine(folder, "templates.json");
-                if (File.Exists(templatesPath))
+                if (!File.Exists(lastPath))
                 {
-                    var json = File.ReadAllText(templatesPath);
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        // Try parsing as JObject to preserve property order as defined in JSON file
-                        try
-                        {
-                            var jobj = JObject.Parse(json);
-                            if (jobj != null && jobj.Properties().Any())
-                            {
-                                var tmpMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-                                foreach (var prop in jobj.Properties())
-                                {
-                                    var name = prop.Name;
-                                    var val = prop.Value;
-                                    List<string> lines = new List<string>();
-                                    if (val is JArray arr)
-                                    {
-                                        foreach (var it in arr) lines.Add(it.ToString());
-                                    }
-                                    else if (val != null)
-                                    {
-                                        var s = val.ToString();
-                                        lines = s.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s2 => s2.Trim()).Where(s2 => !string.IsNullOrEmpty(s2)).ToList();
-                                    }
-                                    tmpMap[name] = lines;
-                                }
-                                Templates = new Dictionary<string, List<string>>(tmpMap, StringComparer.OrdinalIgnoreCase);
-                                // keep legacy properties in sync for backward compat if needed
-                                if (Templates.ContainsKey("StartWork")) StartWorkShablon = Templates["StartWork"];
-                                if (Templates.ContainsKey("EndWork")) EndWorkShablon = Templates["EndWork"];
-                                if (Templates.ContainsKey("Report")) ReportWorkShablon = Templates["Report"];
-                                loaded = true;
-                            }
-                        }
-                        catch { }
-
-                        // Fallback to older dynamic parsing if needed
-                        if (!loaded)
-                        {
-                            dynamic d = JsonConvert.DeserializeObject(json);
-                            if (d != null)
-                            {
-                                if (d.StartWorkShablon != null)
-                                {
-                                    if (d.StartWorkShablon is IEnumerable<object> arr) { var tmp = new List<string>(); foreach (var o in arr) tmp.Add(o.ToString()); StartWorkShablon = tmp; }
-                                    else { string tmpStr = ((object)d.StartWorkShablon).ToString(); StartWorkShablon = tmpStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
-                                }
-                                if (d.EndWorkShablon != null)
-                                {
-                                    if (d.EndWorkShablon is IEnumerable<object> arr) { var tmp = new List<string>(); foreach (var o in arr) tmp.Add(o.ToString()); EndWorkShablon = tmp; }
-                                    else { string tmpStr = ((object)d.EndWorkShablon).ToString(); EndWorkShablon = tmpStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
-                                }
-                                if (d.ReportWorkShablon != null)
-                                {
-                                    if (d.ReportWorkShablon is IEnumerable<object> arr) { var tmp = new List<string>(); foreach (var o in arr) tmp.Add(o.ToString()); ReportWorkShablon = tmp; }
-                                    else { string tmpStr = ((object)d.ReportWorkShablon).ToString(); ReportWorkShablon = tmpStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
-                                }
-                                if (d.TargetTypeShablon != null)
-                                {
-                                    if (d.TargetTypeShablon is IEnumerable<object> arr) { var tmp = new List<string>(); foreach (var o in arr) tmp.Add(o.ToString()); TargetTypeShablon = tmp; }
-                                    else { string tmpStr = ((object)d.TargetTypeShablon).ToString(); TargetTypeShablon = tmpStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
-                                }
-                                loaded = true;
-                            }
-                        }
-                    }
+                    return;
                 }
 
-                // load targets.json if available (preferred over TargetTypeShablon)
-                try
-                {
-                    var targetsPath = Path.Combine(folder, "targets.json");
-                    if (File.Exists(targetsPath))
-                    {
-                        var tgtJson = File.ReadAllText(targetsPath);
-                        if (!string.IsNullOrWhiteSpace(tgtJson))
-                        {
-                            var jobj = JsonConvert.DeserializeObject(tgtJson);
-                            if (jobj != null)
-                            {
-                                // Expecting object { Targets: [ ... ] } or plain array
-                                try
-                                {
-                                    var jo = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JToken>(tgtJson);
-                                    if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Array)
-                                    {
-                                        Targets = jo.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                                    }
-                                    else if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Object && jo["Targets"] != null)
-                                    {
-                                        var tkn = jo["Targets"];
-                                        if (tkn.Type == Newtonsoft.Json.Linq.JTokenType.Array) Targets = tkn.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                                    }
-                                    loaded = true;
-                                }
-                                catch { }
-                            }
-                        }
-                    }
-                }
-                catch { }
+                var json = File.ReadAllText(lastPath);
 
-                // load fly_directions.json
-                var fdPath = Path.Combine(folder, "fly_directions.json");
-                try
+                if (string.IsNullOrWhiteSpace(json))
                 {
-                    if (File.Exists(fdPath))
-                    {
-                        var fdJson = File.ReadAllText(fdPath);
-                        if (!string.IsNullOrWhiteSpace(fdJson))
-                        {
-                            var jo = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JToken>(fdJson);
-                            if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Array)
-                            {
-                                FlyDirectionList = jo.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                            }
-                            else if (jo.Type == Newtonsoft.Json.Linq.JTokenType.Object && jo["FlyDirections"] != null)
-                            {
-                                var tkn = jo["FlyDirections"];
-                                if (tkn.Type == Newtonsoft.Json.Linq.JTokenType.Array) FlyDirectionList = tkn.Values<string>().Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex) { Console.WriteLine($"Error reading fly_directions.json ({fdPath}): {ex.Message}"); }
-                finally
-                {
-                    try
-                    {
-                        if (File.Exists(fdPath))
-                        {
-                            Console.WriteLine($"Loaded fly_directions.json from {fdPath} (entries={FlyDirectionList?.Count ?? 0})");
-                        }
-                        else Console.WriteLine($"fly_directions.json not present at {fdPath}");
-                    }
-                    catch { }
+                    return;
                 }
 
-                var positionsPath = Path.Combine(folder, "positions.json");
-                if (File.Exists(positionsPath))
-                {
-                    var json = File.ReadAllText(positionsPath);
-                    
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        // Support several forms:
-                        // 1) dictionary<string, List<string>> where keys are positions
-                        // 2) wrapper object { Position_Point: {...}, DroneByPosition: {...}, Pilots: [...] }
-                        // 3) mixed top-level object: keys are positions (arrays) and additionally a DroneByPosition object
-                        // First try to parse as a simple dictionary<string, List<string>>; if that throws, try JObject-based parsing below
-                        bool parsed = false;
-                        try
-                        {
-                            var jobjDict = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(json);
-                            if (jobjDict != null && jobjDict.Count > 0)
-                            {
-                                Position_Point = jobjDict;
-                                loaded = true;
-                                parsed = true;
-                                
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            
-                        }
+                dynamic data = JsonConvert.DeserializeObject(json);
 
-                        if (!parsed)
-                        {
-                            try
-                            {
-                                // Parse as JObject to handle mixed/wrapper formats robustly
-                                var j = Newtonsoft.Json.Linq.JObject.Parse(json);
-                                bool any = false;
-                                // If wrapper with Position_Point exists, prefer that
-                                if (j["Position_Point"] != null)
-                                {
-                                    try
-                                    {
-                                        var pp = j["Position_Point"].ToObject<Dictionary<string, List<string>>?>();
-                                        if (pp != null && pp.Count > 0) { Position_Point = pp; any = true; }
-                                    }
-                                    catch { }
-                                }
-                                // If top-level contains position keys (arrays), use them
-                                foreach (var prop in j.Properties())
-                                {
-                                    if (prop.Name.Equals("DroneByPosition", StringComparison.OrdinalIgnoreCase)) continue;
-                                    if (prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Array)
-                                    {
-                                        try
-                                        {
-                                            var arr = prop.Value.ToObject<List<string>>();
-                                            if (arr != null && arr.Count > 0)
-                                            {
-                                                Position_Point ??= new Dictionary<string, List<string>>();
-                                                Position_Point[prop.Name] = arr;
-                                                any = true;
-                                            }
-                                        }
-                                        catch (Exception ex) { }
-                                    }
-                                    else
-                                    {
-                                        // non-array property - ignored
-                                    }
-                                }
-                                // DroneByPosition may be present as a nested object or a top-level property
-                                if (j["DroneByPosition"] != null)
-                                {
-                                    try
-                                    {
-                                        var dp = j["DroneByPosition"].ToObject<Dictionary<string, List<string>>?>();
-                                        if (dp != null && dp.Count > 0) { DroneByPosition = dp; any = true; }
-                                    }
-                                    catch { }
-                                }
-                                if (any) loaded = true;
-                                
-                            }
-                            catch (Exception ex)
-                            {
-                                try { } catch { }
-                            }
-                        }
-                    }
+                if (data == null)
+                {
+                    return;
                 }
 
-                // Backwards-compatible: separate droneby.json still supported
-                var dronesPath = Path.Combine(folder, "droneby.json");
-                if (File.Exists(dronesPath))
+                LastHeight = data.LastHeight?.ToString() ?? LastHeight;
+                LastSelectedPosition = data.LastSelectedPosition?.ToString() ?? LastSelectedPosition;
+                LastSelectedPilot = data.LastSelectedPilot?.ToString() ?? LastSelectedPilot;
+                LastSelectedDrone = data.LastSelectedDrone?.ToString() ?? LastSelectedDrone;
+                LastSelectedTarget = data.LastSelectedTarget?.ToString() ?? LastSelectedTarget;
+
+                if (data.RotateAfterGenerate != null)
                 {
-                    var json = File.ReadAllText(dronesPath);
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        var jobj = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(json);
-                        if (jobj != null)
-                        {
-                            DroneByPosition = jobj;
-                            loaded = true;
-                        }
-                    }
+                    RotateAfterGenerate = (bool)data.RotateAfterGenerate;
                 }
 
-                var unitsPath = Path.Combine(folder, "units.json");
-                if (File.Exists(unitsPath))
-                {
-                    var json = File.ReadAllText(unitsPath);
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        try
-                        {
-                            dynamic u = JsonConvert.DeserializeObject(json);
-                            if (u != null)
-                            {
-                                if (u.UnitsHistory != null)
-                                    if (u.UnitsHistory is IEnumerable<object> arru) { var tmpu = new List<string>(); foreach (var o in arru) tmpu.Add(o.ToString()); UnitsHistory = tmpu; }
-                                if (u.CustomUnit != null) CustomUnit = u.CustomUnit.ToString();
-                                loaded = true;
-                            }
-                        }
-                        catch
-                        {
-                            // file may be plain array of units
-                            try
-                            {
-                                var arr = JsonConvert.DeserializeObject<List<string>>(json);
-                                if (arr != null && arr.Count > 0)
-                                {
-                                    UnitsHistory = arr;
-                                    CustomUnit = arr.FirstOrDefault();
-                                    loaded = true;
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-
-
-
-                var launchAreasPath = Path.Combine(folder, "launchareas.json");
-                if (File.Exists(launchAreasPath))
-                {
-                    var json = File.ReadAllText(launchAreasPath);
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        try
-                        {
-                            dynamic la = JsonConvert.DeserializeObject(json);
-                            if (la != null && la.LaunchAreasHistory != null)
-                            {
-                                if (la.LaunchAreasHistory is IEnumerable<object> arrla) { var tmpla = new List<string>(); foreach (var o in arrla) tmpla.Add(o.ToString()); LaunchAreasHistory = tmpla; }
-                                if (la.LaunchArea != null) LaunchArea = la.LaunchArea.ToString();
-                                loaded = true;
-                            }
-                        }
-                        catch
-                        {
-                            // support plain array
-                            try
-                            {
-                                var arr = JsonConvert.DeserializeObject<List<string>>(json);
-                                if (arr != null && arr.Count > 0)
-                                {
-                                    LaunchAreasHistory = arr;
-                                    LaunchArea = arr.FirstOrDefault();
-                                    loaded = true;
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-
-                // load lastchoices.json if present
-                try
-                {
-                    var lastPath = Path.Combine(folder, "lastchoices.json");
-                    if (File.Exists(lastPath))
-                    {
-                        var jsonLast = File.ReadAllText(lastPath);
-                        if (!string.IsNullOrWhiteSpace(jsonLast))
-                        {
-                            try
-                            {
-                                dynamic last = JsonConvert.DeserializeObject(jsonLast);
-                                if (last != null)
-                                {
-                                    if (last.LastHeight != null) LastHeight = last.LastHeight.ToString();
-                                    if (last.LastSelectedPosition != null) LastSelectedPosition = last.LastSelectedPosition.ToString();
-                                    if (last.LastSelectedPilot != null) LastSelectedPilot = last.LastSelectedPilot.ToString();
-                                    if (last.LastSelectedDrone != null) LastSelectedDrone = last.LastSelectedDrone.ToString();
-                                    if (last.LastSelectedTarget != null) LastSelectedTarget = last.LastSelectedTarget.ToString();
-                                    if (last.RotateAfterGenerate != null) RotateAfterGenerate = Convert.ToBoolean(last.RotateAfterGenerate);
-                                    if (last.Frequencies != null) Frequencies = last.Frequencies.ToString();
-                                    if (last.Purpose != null) Purpose = last.Purpose.ToString();
-                                    if (last.FlyDirectionList != null) {
-                                        try {
-                                            var lastList = ((IEnumerable<object>)last.FlyDirectionList).Select(o => o.ToString()).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-                                            // Merge behavior: prefer values from file (current FlyDirectionList) and append any items from lastchoices not already present
-                                            if (FlyDirectionList == null) FlyDirectionList = new List<string>();
-                                            foreach (var it in lastList)
-                                            {
-                                                if (!FlyDirectionList.Contains(it)) FlyDirectionList.Add(it);
-                                            }
-                                        } catch { }
-                                    }
-                                    if (last.DefaultTargetStatus != null) DefaultTargetStatus = last.DefaultTargetStatus.ToString();
-                                    if (last.DefaultExpenses != null) DefaultExpenses = last.DefaultExpenses.ToString();
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-                catch { }
-
-                return loaded;
+                Frequencies = data.Frequencies?.ToString() ?? Frequencies;
+                Purpose = data.Purpose?.ToString() ?? Purpose;
+                DefaultTargetStatus = data.DefaultTargetStatus?.ToString() ?? DefaultTargetStatus;
+                DefaultExpenses = data.DefaultExpenses?.ToString() ?? DefaultExpenses;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error loading settings from folder: {ex.Message}");
-                return false;
+                Debug.WriteLine($"[TemplateService] LoadLastChoicesIfExists: {ex}");
             }
         }
 
-        private void TrySaveDefaultsToSettingsFolder()
+        private void ApplyDefaultReportSelectionLists()
+        {
+            Position_Point = ReportSelectionDefaults.CreatePositionPilots();
+            DroneByPosition = ReportSelectionDefaults.CreateDronesByPosition();
+            Targets = ReportSelectionDefaults.CreateTargets();
+        }
+
+        private void LoadUserTemplatesIfExists()
         {
             try
             {
-                var folder = SettingsFolderPath;
-                Directory.CreateDirectory(folder);
+                var templatesPath = Path.Combine(
+                    SettingsFolderPath,
+                    "templates.json"
+                );
 
-                var templatesPath = Path.Combine(folder, "templates.json");
-                var defaultTemplatesPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "templates.json");
                 if (!File.Exists(templatesPath))
                 {
-                    if (File.Exists(defaultTemplatesPath)) File.Copy(defaultTemplatesPath, templatesPath);
-                    else
+                    return;
+                }
+
+                var json = File.ReadAllText(templatesPath);
+
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    return;
+                }
+
+                var loadedTemplates =
+                    JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(
+                        json
+                    );
+
+                if (loadedTemplates == null ||
+                    loadedTemplates.Count == 0)
+                {
+                    return;
+                }
+
+                var hasRealTemplate = false;
+
+                foreach (var item in loadedTemplates)
+                {
+                    if (string.IsNullOrWhiteSpace(item.Key))
                     {
-                        var obj = new { StartWorkShablon = StartWorkShablon, EndWorkShablon = EndWorkShablon, ReportWorkShablon = ReportWorkShablon };
-                        File.WriteAllText(templatesPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                        continue;
                     }
-                }
 
-                var positionsPath = Path.Combine(folder, "positions.json");
-                var defaultPositionsPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "positions.json");
-                if (!File.Exists(positionsPath))
-                {
-                    if (File.Exists(defaultPositionsPath)) File.Copy(defaultPositionsPath, positionsPath);
-                    else
+                    if (item.Value == null ||
+                        item.Value.Count == 0)
                     {
-                        var wrapper = new { Position_Point = Position_Point, DroneByPosition = DroneByPosition };
-                        File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapper, Formatting.Indented));
+                        continue;
                     }
+
+                    Templates[item.Key.Trim()] = item.Value
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(NormalizeTemplateLine)
+                        .ToList();
+
+                    hasRealTemplate = true;
                 }
 
-                var unitsPath = Path.Combine(folder, "units.json");
-                var defaultUnitsPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "units.json");
-                if (!File.Exists(unitsPath))
+                if (!hasRealTemplate)
                 {
-                    if (File.Exists(defaultUnitsPath)) File.Copy(defaultUnitsPath, unitsPath);
-                    else
-                    {
-                        var obj = new { CustomUnit = CustomUnit, UnitsHistory = UnitsHistory };
-                        File.WriteAllText(unitsPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
-                    }
+                    return;
                 }
 
-                var laPath = Path.Combine(folder, "launchareas.json");
-                var defaultLaPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "launchareas.json");
-                if (!File.Exists(laPath))
+                if (Templates.TryGetValue("Report", out var report))
                 {
-                    if (File.Exists(defaultLaPath)) File.Copy(defaultLaPath, laPath);
-                    else
-                    {
-                        var obj = new { LaunchArea = LaunchArea, LaunchAreasHistory = LaunchAreasHistory };
-                        File.WriteAllText(laPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
-                    }
+                    ReportWorkShablon = report;
                 }
 
-                var fdPath = Path.Combine(folder, "fly_directions.json");
-                var defaultFdPath = Path.Combine(AppContext.BaseDirectory ?? ".", "Data", "Templates", "fly_directions.json");
-                if (!File.Exists(fdPath))
+                if (Templates.TryGetValue("StartWork", out var start))
                 {
-                    var list = FlyDirectionList != null && FlyDirectionList.Count > 0 ? FlyDirectionList : LocalCiti;
-                    if (list == null) list = new List<string>();
-                    var obj = new { FlyDirections = list };
-                    File.WriteAllText(fdPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    StartWorkShablon = start;
                 }
 
-                // create targets.json from TargetTypeShablon for backwards compatibility
-                var targetsPath = Path.Combine(folder, "targets.json");
-                if (!File.Exists(targetsPath))
+                if (Templates.TryGetValue("EndWork", out var end))
                 {
-                    var t = Targets != null && Targets.Count > 0 ? Targets : TargetTypeShablon;
-                    if (t == null) t = new List<string>();
-                    // always create targets.json (may be empty) so user can edit it later
-                    File.WriteAllText(targetsPath, JsonConvert.SerializeObject(new { Targets = t }, Formatting.Indented));
+                    EndWorkShablon = end;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error saving defaults to settings folder: {ex.Message}");
+                Debug.WriteLine($"[TemplateService] LoadUserTemplatesIfExists: {ex}");
+            }
+        }
+
+        private static string NormalizeTemplateLine(string line)
+        {
+            return (line ?? string.Empty)
+                .Trim()
+                .Replace("{LocalCiti}", "{Direction}");
+        }
+
+        private void LoadUserTargetsIfExists()
+        {
+            try
+            {
+                var targetsPath = Path.Combine(
+                    SettingsFolderPath,
+                    "targets.json"
+                );
+
+                if (!File.Exists(targetsPath))
+                {
+                    return;
+                }
+
+                var json = File.ReadAllText(targetsPath);
+
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    return;
+                }
+
+                List<string>? userTargets = null;
+
+                var token = JToken.Parse(json);
+
+                if (token.Type == JTokenType.Array)
+                {
+                    userTargets = token
+                        .Values<string>()
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(x => x.Trim())
+                        .ToList();
+                }
+                else if (token.Type == JTokenType.Object &&
+                         token["Targets"] is JArray array)
+                {
+                    userTargets = array
+                        .Values<string>()
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(x => x.Trim())
+                        .ToList();
+                }
+
+                if (userTargets == null ||
+                    userTargets.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (var target in userTargets)
+                {
+                    if (!Targets.Contains(target, StringComparer.OrdinalIgnoreCase))
+                    {
+                        Targets.Add(target);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TemplateService] LoadUserTargetsIfExists: {ex}");
+            }
+        }
+
+        public void SaveUserTarget(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                return;
+            }
+
+            target = target.Trim();
+
+            if (!Targets.Contains(target, StringComparer.OrdinalIgnoreCase))
+            {
+                Targets.Add(target);
+            }
+
+            SaveUserTargets();
+        }
+
+        private void SaveUserTargets()
+        {
+            try
+            {
+                Directory.CreateDirectory(SettingsFolderPath);
+
+                var targetsPath = Path.Combine(
+                    SettingsFolderPath,
+                    "targets.json"
+                );
+
+                var defaultTargets = ReportSelectionDefaults.CreateTargets();
+
+                var userTargets = (Targets ?? new List<string>())
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .Where(x => !defaultTargets.Contains(x, StringComparer.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x)
+                    .ToList();
+
+                if (userTargets.Count == 0)
+                {
+                    if (File.Exists(targetsPath))
+                    {
+                        File.Delete(targetsPath);
+                    }
+
+                    return;
+                }
+
+                var json = JsonConvert.SerializeObject(
+                    new
+                    {
+                        Targets = userTargets
+                    },
+                    Formatting.Indented
+                );
+
+                File.WriteAllText(targetsPath, json);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TemplateService] SaveUserTargets: {ex}");
             }
         }
 
         public void SaveTargetsToSettingsFolder()
         {
-            try
-            {
-                var folder = SettingsFolderPath;
-                Directory.CreateDirectory(folder);
-                var targetsPath = Path.Combine(folder, "targets.json");
-                var obj = new { Targets = Targets ?? new List<string>() };
-                File.WriteAllText(targetsPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error saving targets to settings folder: {ex.Message}");
-            }
+            SaveUserTargets();
             SaveLastChoices();
         }
 
@@ -660,14 +389,44 @@ namespace MapsWPF.Services
 
         public void SaveTemplateByName(string name, List<string> template)
         {
-            if (string.IsNullOrWhiteSpace(name) || template == null) return;
-            if (Templates == null) Templates = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            Templates[name.Trim()] = template;
+            if (string.IsNullOrWhiteSpace(name) || template == null)
+            {
+                return;
+            }
 
-            // keep legacy fields in sync for other parts of code that still use them
-            if (string.Equals(name, "Report", StringComparison.OrdinalIgnoreCase)) ReportWorkShablon = template;
-            if (string.Equals(name, "StartWork", StringComparison.OrdinalIgnoreCase)) StartWorkShablon = template;
-            if (string.Equals(name, "EndWork", StringComparison.OrdinalIgnoreCase)) EndWorkShablon = template;
+            var normalizedTemplate = template
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(NormalizeTemplateLine)
+                .ToList();
+
+            if (normalizedTemplate.Count == 0)
+            {
+                return;
+            }
+
+            if (Templates == null)
+            {
+                Templates = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var templateName = name.Trim();
+
+            Templates[templateName] = normalizedTemplate;
+
+            if (string.Equals(templateName, "Report", StringComparison.OrdinalIgnoreCase))
+            {
+                ReportWorkShablon = normalizedTemplate;
+            }
+
+            if (string.Equals(templateName, "StartWork", StringComparison.OrdinalIgnoreCase))
+            {
+                StartWorkShablon = normalizedTemplate;
+            }
+
+            if (string.Equals(templateName, "EndWork", StringComparison.OrdinalIgnoreCase))
+            {
+                EndWorkShablon = normalizedTemplate;
+            }
 
             SaveTemplatesToSettingsFolder();
         }
@@ -691,14 +450,24 @@ namespace MapsWPF.Services
             {
                 var folder = SettingsFolderPath;
                 Directory.CreateDirectory(folder);
+
                 var templatesPath = Path.Combine(folder, "templates.json");
-                var map = Templates ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-                File.WriteAllText(templatesPath, JsonConvert.SerializeObject(map, Formatting.Indented));
+
+                var map = Templates ??
+                          new Dictionary<string, List<string>>(
+                              StringComparer.OrdinalIgnoreCase
+                          );
+
+                File.WriteAllText(
+                    templatesPath,
+                    JsonConvert.SerializeObject(map, Formatting.Indented)
+                );
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error saving templates to settings folder: {ex.Message}");
+                Debug.WriteLine($"[TemplateService] SaveTemplatesToSettingsFolder: {ex}");
             }
+
             SaveLastChoices();
         }
 
@@ -719,124 +488,19 @@ namespace MapsWPF.Services
                     RotateAfterGenerate = RotateAfterGenerate,
                     Frequencies = Frequencies,
                     Purpose = Purpose,
-                    FlyDirectionList = FlyDirectionList,
+                    //FlyDirectionList = FlyDirectionList,
                     DefaultTargetStatus = DefaultTargetStatus,
                     DefaultExpenses = DefaultExpenses
                 };
                 File.WriteAllText(lastPath, JsonConvert.SerializeObject(obj, Formatting.Indented));
             }
-            catch { }
-        }
-
-        public void SaveLaunchArea(string la)
-        {
-            if (string.IsNullOrWhiteSpace(la)) return;
-            if (LaunchAreasHistory == null) LaunchAreasHistory = new List<string>();
-            if (!LaunchAreasHistory.Contains(la)) LaunchAreasHistory.Add(la);
-            LaunchArea = la;
-            try { var folder = SettingsFolderPath; Directory.CreateDirectory(folder); File.WriteAllText(Path.Combine(folder, "launchareas.json"), JsonConvert.SerializeObject(new { LaunchArea = LaunchArea, LaunchAreasHistory = LaunchAreasHistory }, Formatting.Indented)); } catch { }
-            SaveLastChoices();
-        }
-
-        public void SaveCustomUnit(string unit)
-        {
-            if (string.IsNullOrWhiteSpace(unit)) return;
-            if (UnitsHistory == null) UnitsHistory = new List<string>();
-            if (!UnitsHistory.Contains(unit)) UnitsHistory.Add(unit);
-            CustomUnit = unit;
-            try { var folder = SettingsFolderPath; Directory.CreateDirectory(folder); File.WriteAllText(Path.Combine(folder, "units.json"), JsonConvert.SerializeObject(new { CustomUnit = CustomUnit, UnitsHistory = UnitsHistory }, Formatting.Indented)); } catch { }
-            SaveLastChoices();
-        }
-
-        private void MigrateOldPositionFiles(string folder)
-        {
-            try
-            {
-                var dronesPath = Path.Combine(folder, "droneby.json");
-                var positionsPath = Path.Combine(folder, "positions.json");
-                if (!File.Exists(dronesPath)) return;
-
-                string json = File.ReadAllText(dronesPath);
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    try { if (File.Exists(dronesPath + ".bak")) File.Delete(dronesPath + ".bak"); File.Move(dronesPath, dronesPath + ".bak"); } catch { }
-                    return;
-                }
-
-                Dictionary<string, List<string>> drones = null;
-                try { drones = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(json); } catch { }
-                if (drones == null || drones.Count == 0)
-                {
-                    try { if (File.Exists(dronesPath + ".bak")) File.Delete(dronesPath + ".bak"); File.Move(dronesPath, dronesPath + ".bak"); } catch { }
-                    return;
-                }
-
-                if (File.Exists(positionsPath))
-                {
-                    try
-                    {
-                        var posJson = File.ReadAllText(positionsPath);
-                        if (!string.IsNullOrWhiteSpace(posJson))
-                        {
-                            var wrapper = JsonConvert.DeserializeObject<dynamic>(posJson);
-                            if (wrapper != null)
-                            {
-                                if (wrapper.DroneByPosition == null)
-                                {
-                                    wrapper.DroneByPosition = JToken.FromObject(drones);
-                                    File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapper, Formatting.Indented));
-                                }
-                                else
-                                {
-                                    var existing = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(wrapper.DroneByPosition.ToString());
-                                    foreach (var kv in drones)
-                                    {
-                                        if (!existing.ContainsKey(kv.Key)) existing[kv.Key] = kv.Value;
-                                        else
-                                        {
-                                            var list = existing[kv.Key];
-                                            foreach (var item in kv.Value)
-                                            {
-                                                if (!list.Contains(item)) list.Add(item);
-                                            }
-                                        }
-                                    }
-                                    wrapper.DroneByPosition = JToken.FromObject(existing);
-                                    File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapper, Formatting.Indented));
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-                else
-                {
-                    var wrapperObj = new { Position_Point = Position_Point ?? new Dictionary<string, List<string>>(), DroneByPosition = drones };
-                    File.WriteAllText(positionsPath, JsonConvert.SerializeObject(wrapperObj, Formatting.Indented));
-                }
-
-                try { if (File.Exists(dronesPath + ".bak")) File.Delete(dronesPath + ".bak"); File.Move(dronesPath, dronesPath + ".bak"); } catch { }
-            }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error migrating old position files: {ex.Message}");
+                Debug.WriteLine($"[ContextName] {ex}");
             }
         }
+
     }
 
-    public class TemplateDataModel
-    {
-        public Dictionary<string, List<string>> Position_Point { get; set; }
-        public Dictionary<string, List<string>> DroneByPosition { get; set; }
-        public List<string> LocalCiti { get; set; }
-        public List<string> StartWorkShablon { get; set; }
-        public List<string> EndWorkShablon { get; set; }
-        public List<string> ReportWorkShablon { get; set; }
-        public List<string> Targets { get; set; }
-        public string CustomUnit { get; set; }
-        public string LaunchArea { get; set; }
-        public string DefaultTargetStatus { get; set; }
-        public string DefaultExpenses { get; set; }
-    }
 }
 

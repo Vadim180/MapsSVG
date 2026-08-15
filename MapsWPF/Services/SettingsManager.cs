@@ -1,110 +1,136 @@
 using System;
+using System.Diagnostics;
 using System.IO;
-using Newtonsoft.Json;
 using MapsWPF.Models;
+using Newtonsoft.Json;
 
 namespace MapsWPF.Services
 {
     public class SettingsService
     {
+        private readonly string _settingsFolder;
         private readonly string _coordinatesPath;
         private readonly string _attackPointPath;
 
         public MapStartSettings StartSettings { get; private set; }
         public AttackSettings AttackSettings { get; private set; }
 
-        public event Action OnAttackSettingsChanged;
-
-        public string GetSettingsFolder()
-        {
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings");
-        }
+        public event Action? OnAttackSettingsChanged;
 
         public SettingsService()
         {
-            var baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings");
-            if (!Directory.Exists(baseDir))
-            {
-                Directory.CreateDirectory(baseDir);
-            }
+            var localAppData = Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData
+            );
 
-            _coordinatesPath = Path.Combine(baseDir, "coordinates.json");
-            _attackPointPath = Path.Combine(baseDir, "attack_point.json");
+            _settingsFolder = Path.Combine(
+                localAppData,
+                "MapsWPF",
+                "settings"
+            );
+
+            Directory.CreateDirectory(_settingsFolder);
+
+            _coordinatesPath = Path.Combine(
+                _settingsFolder,
+                "coordinates.json"
+            );
+
+            _attackPointPath = Path.Combine(
+                _settingsFolder,
+                "attack_point.json"
+            );
 
             LoadSettings();
         }
 
+        public string GetSettingsFolder()
+        {
+            return _settingsFolder;
+        }
+
         private void LoadSettings()
         {
-            // Load Coordinates
-            if (File.Exists(_coordinatesPath))
+            StartSettings = LoadOrDefault<MapStartSettings>(
+                _coordinatesPath
+            );
+
+            AttackSettings = LoadOrDefault<AttackSettings>(
+                _attackPointPath
+            );
+
+            AttackSettings.PropertyChanged += AttackSettings_PropertyChanged;
+        }
+
+        private static T LoadOrDefault<T>(string path)
+            where T : new()
+        {
+            if (!File.Exists(path))
             {
-                try
-                {
-                    var json = File.ReadAllText(_coordinatesPath);
-                    StartSettings = JsonConvert.DeserializeObject<MapStartSettings>(json) ?? new MapStartSettings();
-                }
-                catch
-                {
-                    StartSettings = new MapStartSettings();
-                }
-            }
-            else
-            {
-                StartSettings = new MapStartSettings();
-                SaveStartSettings(); // Create default file
+                return new T();
             }
 
-            // Load Attack Settings
-            if (File.Exists(_attackPointPath))
+            try
             {
-                try
-                {
-                    var json = File.ReadAllText(_attackPointPath);
-                    AttackSettings = JsonConvert.DeserializeObject<AttackSettings>(json) ?? new AttackSettings();
-                }
-                catch
-                {
-                    AttackSettings = new AttackSettings();
-                }
-            }
-            else
-            {
-                AttackSettings = new AttackSettings();
-                SaveAttackSettings(); // Create default file
-            }
+                var json = File.ReadAllText(path);
 
-            // Hook up auto-save
-            AttackSettings.PropertyChanged += (s, e) =>
+                return JsonConvert.DeserializeObject<T>(json) ?? new T();
+            }
+            catch (Exception ex)
             {
-                SaveAttackSettings();
-                OnAttackSettingsChanged?.Invoke();
-            };
+                Debug.WriteLine(
+                    $"Не вдалося завантажити '{path}': {ex}"
+                );
+
+                return new T();
+            }
+        }
+
+        private void AttackSettings_PropertyChanged(
+            object? sender,
+            System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            SaveAttackSettings();
+            OnAttackSettingsChanged?.Invoke();
         }
 
         public void SaveStartSettings()
         {
-            try
-            {
-                var json = JsonConvert.SerializeObject(StartSettings, Formatting.Indented);
-                File.WriteAllText(_coordinatesPath, json);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error saving coordinates: {ex.Message}");
-            }
+            Save(
+                _coordinatesPath,
+                StartSettings
+            );
         }
 
         public void SaveAttackSettings()
         {
+            Save(
+                _attackPointPath,
+                AttackSettings
+            );
+        }
+
+        private static void Save<T>(
+            string path,
+            T data)
+        {
             try
             {
-                var json = JsonConvert.SerializeObject(AttackSettings, Formatting.Indented);
-                File.WriteAllText(_attackPointPath, json);
+                var json = JsonConvert.SerializeObject(
+                    data,
+                    Formatting.Indented
+                );
+
+                File.WriteAllText(
+                    path,
+                    json
+                );
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error saving attack settings: {ex.Message}");
+                Debug.WriteLine(
+                    $"Не вдалося зберегти '{path}': {ex}"
+                );
             }
         }
     }

@@ -7,6 +7,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using GMap.NET.MapProviders;
 using GMap.NET.Projections;
+using System.Globalization;
+using System.IO;
+using System.Text;
+
 #if NETFRAMEWORK
 using System.Collections.Concurrent;
 #endif
@@ -18,13 +22,13 @@ namespace GMap.NET.Internals
     /// </summary>
     internal sealed class Core : IDisposable
     {
-        internal    PointLatLng _position;
-        private     GPoint _positionPixel;
+        internal PointLatLng _position;
+        private GPoint _positionPixel;
 
-        internal    GPoint RenderOffset;
-        internal    GPoint CenterTileXYLocation;
-        private     GPoint _centerTileXYLocationLast;
-        private     GPoint _dragPoint;
+        internal GPoint RenderOffset;
+        internal GPoint CenterTileXYLocation;
+        private GPoint _centerTileXYLocationLast;
+        private GPoint _dragPoint;
 
         /// <summary>
         /// Throttling mechanism for UpdateBounds during drag operations.
@@ -34,7 +38,14 @@ namespace GMap.NET.Internals
         /// </summary>
         private DateTime _lastUpdateBoundsTime = DateTime.MinValue;
         private const int UPDATE_BOUNDS_THROTTLE_MS = 150; // Optimal balance between responsiveness and performance
+
+        private bool _hasPendingCenterTileUpdate = false;
+
+        private TaskCompletionSource<bool> _reloadCompletionSource;
+        private bool _isReloading = false;
+
         private GPoint _pendingCenterTileUpdate = GPoint.Empty;
+
         internal GPoint CompensationOffset;
 
         internal GPoint MouseDown;
@@ -177,24 +188,21 @@ namespace GMap.NET.Internals
         /// </summary>
         public PointLatLng Position
         {
-            get
-            {
-                return _position;
-            }
+            get { return _position; }
             set
             {
+                if (value == _position)
+                    return;
+
                 _position = value;
                 _positionPixel = Provider.Projection.FromLatLngToPixel(value, Zoom);
 
                 if (IsStarted)
                 {
                     if (!IsDragging)
-                    {
                         GoToCurrentPosition();
-                    }
 
-                    if (OnCurrentPositionChanged != null)
-                        OnCurrentPositionChanged(_position);
+                    OnCurrentPositionChanged?.Invoke(_position);
                 }
             }
         }
@@ -373,11 +381,6 @@ namespace GMap.NET.Internals
         /// </summary>
         public event MapTypeChanged OnMapTypeChanged;
 
-        /// <summary>
-        ///     Map pan limits. If set, map cannot be dragged outside this boundary.
-        /// </summary>
-        public RectLatLng? BoundsOfMap = null;
-
         readonly List<Thread> _gThreadPool = new List<Thread>();
 
         // should be only one pool for multiply controls, any ideas how to fix?
@@ -430,41 +433,53 @@ namespace GMap.NET.Internals
 
         void InvalidatorWatch(object sender, DoWorkEventArgs e)
         {
-            var w = sender as BackgroundWorker;
+            var worker = (BackgroundWorker)sender;
 
-            var span = TimeSpan.FromMilliseconds(111);
-            int spanMs = (int)span.TotalMilliseconds;
-            bool skiped = false;
-            TimeSpan delta;
-            DateTime now;
+            var minimumInterval = TimeSpan.FromMilliseconds(111);
+            var waitMilliseconds = (int)minimumInterval.TotalMilliseconds;
 
-            while (Refresh != null && (!skiped && Refresh.WaitOne() || Refresh.WaitOne(spanMs, false) || true))
+            var invalidatePending = false;
+
+            while (!worker.CancellationPending)
             {
-                if (w.CancellationPending)
-                    break;
+                var refresh = Refresh;
 
-                now = DateTime.Now;
+                if (refresh == null)
+                {
+                    break;
+                }
+
+                try
+                {
+                    if (refresh.WaitOne(waitMilliseconds))
+                    {
+                        invalidatePending = true;
+                    }
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+
+                if (!invalidatePending)
+                {
+                    continue;
+                }
+
+                var now = DateTime.Now;
+
                 lock (InvalidationLock)
                 {
-                    delta = now - LastInvalidation;
-                }
-
-                if (delta > span)
-                {
-                    lock (InvalidationLock)
+                    if (now - LastInvalidation < minimumInterval)
                     {
-                        LastInvalidation = now;
+                        continue;
                     }
 
-                    skiped = false;
+                    LastInvalidation = now;
+                }
 
-                    w.ReportProgress(1);
-                    Debug.WriteLine("Invalidate delta: " + (int)delta.TotalMilliseconds + "ms");
-                }
-                else
-                {
-                    skiped = true;
-                }
+                invalidatePending = false;
+                worker.ReportProgress(1);
             }
         }
 
@@ -588,6 +603,16 @@ namespace GMap.NET.Internals
             return zoom;
         }
 
+        public void RebaseDragAfterExternalOffset(GPoint currentMouse)
+        {
+            MouseCurrent = currentMouse;
+
+            _dragPoint.X = currentMouse.X - RenderOffset.X;
+            _dragPoint.Y = currentMouse.Y - RenderOffset.Y;
+
+            IsDragging = true;
+        }
+
         /// <summary>
         ///     initiates map dragging
         /// </summary>
@@ -599,27 +624,28 @@ namespace GMap.NET.Internals
             IsDragging = true;
         }
 
-                /// <summary>
-                ///     ends map dragging
-                /// </summary>
-                        public void EndDrag()
-                        {
-                            IsDragging = false;
-                            MouseDown = GPoint.Empty;
+        /// <summary>
+        ///     ends map dragging
+        /// </summary>
+        public void EndDrag()
+        {
+            IsDragging = false;
+            MouseDown = GPoint.Empty;
 
-                            // If there's a pending UpdateBounds from throttling, execute it now
-                            if (_pendingCenterTileUpdate != GPoint.Empty && _pendingCenterTileUpdate != _centerTileXYLocationLast)
-                            {
-                #if DEBUG
-                                Debug.WriteLine($"  [THROTTLE] EndDrag: Executing pending UpdateBounds for tile {_pendingCenterTileUpdate}");
-                #endif
-                                _centerTileXYLocationLast = _pendingCenterTileUpdate;
-                                _pendingCenterTileUpdate = GPoint.Empty;
-                                UpdateBounds();
-                            }
+            // If there's a pending UpdateBounds from throttling, execute it now
+            if (_hasPendingCenterTileUpdate && _pendingCenterTileUpdate != _centerTileXYLocationLast)
+            {
+#if DEBUG
+                Debug.WriteLine($"  [THROTTLE] EndDrag: Executing pending UpdateBounds for tile {_pendingCenterTileUpdate}");
+#endif
+                _centerTileXYLocationLast = _pendingCenterTileUpdate;
+                _hasPendingCenterTileUpdate = false;
+                _pendingCenterTileUpdate = GPoint.Empty;
+                UpdateBounds();
+            }
 
-                            Refresh.Set();
-                        }
+            Refresh.Set();
+        }
 
         /// <summary>
         ///     reloads map
@@ -653,43 +679,16 @@ namespace GMap.NET.Internals
             }
         }
 
-#if NETFRAMEWORK
         public Task ReloadMapAsync()
         {
+            if (_isReloading)
+                return _reloadCompletionSource.Task;
+
             ReloadMap();
-            return Task.Factory.StartNew(() =>
-            {
-                bool wait;
-                do
-                {
-                    Thread.Sleep(100);
-                    wait = TileLoadQueue4.Count > 0;
-                } while (wait);
-            });
+            _isReloading = true;
+            _reloadCompletionSource = new TaskCompletionSource<bool>();
+            return _reloadCompletionSource.Task;
         }
-#else
-        public Task ReloadMapAsync()
-        {
-            ReloadMap();
-            return Task.Factory.StartNew(() =>
-            {
-                bool wait;
-                do
-                {
-                    Thread.Sleep(100);
-                    Monitor.Enter(TileLoadQueue);
-                    try
-                    {
-                        wait = TileLoadQueue.Any();
-                    }
-                    finally
-                    {
-                        Monitor.Exit(TileLoadQueue);
-                    }
-                } while (wait);
-            });
-        }
-#endif
 
         /// <summary>
         ///     moves current position into map center
@@ -762,32 +761,7 @@ namespace GMap.NET.Internals
         {
             var newOffset = RenderOffset;
             newOffset.Offset(offset);
-            
-            // Check bounds before applying offset
-            if (BoundsOfMap.HasValue)
-            {
-                var oldOffset = RenderOffset;
-                RenderOffset = newOffset;
-                var testPosition = FromLocalToLatLng(Width / 2, Height / 2);
-                RenderOffset = oldOffset;
-                
-                if (!BoundsOfMap.Value.Contains(testPosition))
-                {
-                    // Clamp position to bounds
-                    var clampedLat = Math.Max(BoundsOfMap.Value.Bottom, Math.Min(BoundsOfMap.Value.Top, testPosition.Lat));
-                    var clampedLng = Math.Max(BoundsOfMap.Value.Left, Math.Min(BoundsOfMap.Value.Right, testPosition.Lng));
-                    
-                    // If position would be outside, adjust the offset to stay at boundary
-                    if (testPosition.Lat != clampedLat || testPosition.Lng != clampedLng)
-                    {
-                        // Calculate pixel position for clamped lat/lng
-                        var clampedPixel = Provider.Projection.FromLatLngToPixel(new PointLatLng(clampedLat, clampedLng), Zoom);
-                        newOffset.X = Width / 2 - clampedPixel.X + CompensationOffset.X;
-                        newOffset.Y = Height / 2 - clampedPixel.Y + CompensationOffset.Y;
-                    }
-                }
-            }
-            
+
             RenderOffset = newOffset;
 
             UpdateCenterTileXYLocation();
@@ -800,10 +774,15 @@ namespace GMap.NET.Internals
 
             {
                 LastLocationInBounds = Position;
-
                 IsDragging = true;
-                Position = FromLocalToLatLng(Width / 2, Height / 2);
-                IsDragging = false;
+                try
+                {
+                    Position = FromLocalToLatLng(Width / 2, Height / 2);
+                }
+                finally
+                {
+                    IsDragging = false;
+                }
             }
 
             if (OnMapDrag != null)
@@ -820,40 +799,7 @@ namespace GMap.NET.Internals
         {
             var newOffsetX = pt.X - _dragPoint.X;
             var newOffsetY = pt.Y - _dragPoint.Y;
-            
-            // Check bounds before applying offset
-            if (BoundsOfMap.HasValue)
-            {
-                var testOffset = RenderOffset;
-                testOffset.X = newOffsetX;
-                testOffset.Y = newOffsetY;
-                
-                var oldOffset = RenderOffset;
-                RenderOffset = testOffset;
-                var testPosition = FromLocalToLatLng(Width / 2, Height / 2);
-                RenderOffset = oldOffset;
-                
-                if (!BoundsOfMap.Value.Contains(testPosition))
-                {
-                    // Clamp position to bounds
-                    var clampedLat = Math.Max(BoundsOfMap.Value.Bottom, Math.Min(BoundsOfMap.Value.Top, testPosition.Lat));
-                    var clampedLng = Math.Max(BoundsOfMap.Value.Left, Math.Min(BoundsOfMap.Value.Right, testPosition.Lng));
-                    
-                    // If position would be outside, adjust the offset to stay at boundary
-                    if (testPosition.Lat != clampedLat || testPosition.Lng != clampedLng)
-                    {
-                        // Calculate pixel position for clamped lat/lng
-                        var clampedPixel = Provider.Projection.FromLatLngToPixel(new PointLatLng(clampedLat, clampedLng), Zoom);
-                        newOffsetX = Width / 2 - clampedPixel.X + CompensationOffset.X;
-                        newOffsetY = Height / 2 - clampedPixel.Y + CompensationOffset.Y;
-                        
-                        // Update drag point to prevent drift
-                        _dragPoint.X = pt.X - newOffsetX;
-                        _dragPoint.Y = pt.Y - newOffsetY;
-                    }
-                }
-            }
-            
+
             RenderOffset.X = newOffsetX;
             RenderOffset.Y = newOffsetY;
 
@@ -861,27 +807,44 @@ namespace GMap.NET.Internals
 
             if (CenterTileXYLocation != _centerTileXYLocationLast)
             {
-                var now = DateTime.Now;
-                var timeSinceLastUpdate = (now - _lastUpdateBoundsTime).TotalMilliseconds;
-
-                // Throttle UpdateBounds during drag - only call if enough time has passed
-                if (timeSinceLastUpdate >= _updateBoundsThrottleMs)
+                // Throttle потрібен тільки під час реального перетягування мишкою.
+                // Для zoom / fit / програмного Position потрібно оновлювати тайли одразу,
+                // інакше TileDrawingList може не покрити весь екран.
+                if (!IsDragging)
                 {
                     _centerTileXYLocationLast = CenterTileXYLocation;
                     _pendingCenterTileUpdate = GPoint.Empty;
-                    _lastUpdateBoundsTime = now;
+                    _lastUpdateBoundsTime = DateTime.Now;
+
                     UpdateBounds();
-#if DEBUG
-                    Debug.WriteLine($"  [THROTTLE] UpdateBounds executed (interval: {timeSinceLastUpdate:F0}ms)");
-#endif
                 }
                 else
                 {
-                    // Store pending update for later
-                    _pendingCenterTileUpdate = CenterTileXYLocation;
+                    var now = DateTime.Now;
+                    var timeSinceLastUpdate = (now - _lastUpdateBoundsTime).TotalMilliseconds;
+
+                    if (timeSinceLastUpdate >= _updateBoundsThrottleMs)
+                    {
+                        _centerTileXYLocationLast = CenterTileXYLocation;
+                        _hasPendingCenterTileUpdate = false;
+
+                        _pendingCenterTileUpdate = GPoint.Empty;
+                        _lastUpdateBoundsTime = now;
+
+                        UpdateBounds();
+
 #if DEBUG
-                    Debug.WriteLine($"  [THROTTLE] UpdateBounds skipped (next in {_updateBoundsThrottleMs - timeSinceLastUpdate:F0}ms)");
+                        Debug.WriteLine($"  [THROTTLE] UpdateBounds executed (interval: {timeSinceLastUpdate:F0}ms)");
 #endif
+                    }
+                    else
+                    {
+                        _hasPendingCenterTileUpdate = true;
+                        _pendingCenterTileUpdate = CenterTileXYLocation;
+#if DEBUG
+                        Debug.WriteLine($"  [THROTTLE] UpdateBounds skipped (next in {_updateBoundsThrottleMs - timeSinceLastUpdate:F0}ms)");
+#endif
+                    }
                 }
             }
 
@@ -1256,6 +1219,13 @@ namespace GMap.NET.Internals
             {
                 OnTileLoadComplete(lastTileLoadTimeMs);
             }
+
+            if (_isReloading)
+            {
+                _isReloading = false;
+                _reloadCompletionSource?.TrySetResult(true);
+                _reloadCompletionSource = null;
+            }
         }
 
         public AutoResetEvent Refresh = new AutoResetEvent(false);
@@ -1265,164 +1235,156 @@ namespace GMap.NET.Internals
         /// <summary>
         ///     updates map bounds
         /// </summary>
-                void UpdateBounds()
+        void UpdateBounds()
+        {
+            if (!IsStarted || Provider.Equals(EmptyProvider.Instance))
+            {
+                return;
+            }
+
+            UpdatingBounds = true;
+            try
+            {
+#if DEBUG
+                var swTotal = System.Diagnostics.Stopwatch.StartNew();
+#endif
+                // --- формування TileDrawingList ---
+                TileDrawingListLock.AcquireWriterLock();
+                try
                 {
-                    if (!IsStarted || Provider.Equals(EmptyProvider.Instance))
+                    TileDrawingList.Clear();
+
+                    for (long i = (int)Math.Floor(-_sizeOfMapArea.Width * ScaleX),
+                            countI = (int)Math.Ceiling(_sizeOfMapArea.Width * ScaleX);
+                        i <= countI;
+                        i++)
                     {
-                        return;
+                        for (long j = (int)Math.Floor(-_sizeOfMapArea.Height * ScaleY),
+                             countJ = (int)Math.Ceiling(_sizeOfMapArea.Height * ScaleY);
+                             j <= countJ;
+                             j++)
+                        {
+                            var p = CenterTileXYLocation;
+                            p.X += i;
+                            p.Y += j;
+
+#if ContinuesMap
+                    // wrap-around логіка для безперервної карти
+#endif
+
+                            if (p.X >= _minOfTiles.Width && p.Y >= _minOfTiles.Height &&
+                                p.X <= _maxOfTiles.Width && p.Y <= _maxOfTiles.Height)
+                            {
+                                var dt = new DrawTile()
+                                {
+                                    PosXY = p,
+                                    PosPixel = new GPoint(p.X * TileRect.Width, p.Y * TileRect.Height),
+                                    DistanceSqr = (CenterTileXYLocation.X - p.X) * (CenterTileXYLocation.X - p.X) +
+                                                  (CenterTileXYLocation.Y - p.Y) * (CenterTileXYLocation.Y - p.Y)
+                                };
+
+                                if (!TileDrawingList.Contains(dt))
+                                {
+                                    TileDrawingList.Add(dt);
+                                }
+                            }
+                        }
                     }
-        #if DEBUG
-                    var swTotal = System.Diagnostics.Stopwatch.StartNew();
-        #endif
-                    UpdatingBounds = true;
-        #if DEBUG
-                    var swLock = System.Diagnostics.Stopwatch.StartNew();
-        #endif
-                    TileDrawingListLock.AcquireWriterLock();
-        #if DEBUG
-                    swLock.Stop();
-                    var swCalc = System.Diagnostics.Stopwatch.StartNew();
-        #endif
+
+                    if (GMaps.Instance.ShuffleTilesOnLoad)
+                        Stuff.Shuffle(TileDrawingList);
+                    else
+                        TileDrawingList.Sort();
+                }
+                finally
+                {
+                    TileDrawingListLock.ReleaseWriterLock();
+                }
+
+                // --- черга завантаження (з блокуванням) ---
+#if !NETFRAMEWORK
+                Monitor.Enter(TileLoadQueue);
+                try
+                {
+#endif
+                    TileDrawingListLock.AcquireReaderLock();
                     try
                     {
-                        #region -- find tiles around --
-
-                        TileDrawingList.Clear();
-
-                        for (long i = (int)Math.Floor(-_sizeOfMapArea.Width * ScaleX),
-                            countI = (int)Math.Ceiling(_sizeOfMapArea.Width * ScaleX);
-                            i <= countI;
-                            i++)
+                        foreach (var p in TileDrawingList)
                         {
-                            for (long j = (int)Math.Floor(-_sizeOfMapArea.Height * ScaleY),
-                                countJ = (int)Math.Ceiling(_sizeOfMapArea.Height * ScaleY);
-                                j <= countJ;
-                                j++)
+                            var task = new LoadTask(p.PosXY, Zoom, this);
+#if NETFRAMEWORK
+                    AddLoadTask(task);
+#else
+                            if (!TileLoadQueue.Contains(task))
                             {
-                                var p = CenterTileXYLocation;
-                                p.X += i;
-                                p.Y += j;
+                                TileLoadQueue.Push(task);
+                            }
+#endif
+                        }
+                    }
+                    finally
+                    {
+                        TileDrawingListLock.ReleaseReaderLock();
+                    }
+#if !NETFRAMEWORK
+                }
+                finally
+                {
+                    Monitor.Exit(TileLoadQueue);
+                }
+#endif
 
-        #if ContinuesMap
-                       // ----------------------------
-                       if(p.X < minOfTiles.Width)
-                       {
-                          p.X += (maxOfTiles.Width + 1);
-                       }
-
-                       if(p.X > maxOfTiles.Width)
-                       {
-                          p.X -= (maxOfTiles.Width + 1);
-                       }
-                       // ----------------------------
-        #endif
-
-                                if (p.X >= _minOfTiles.Width && p.Y >= _minOfTiles.Height && p.X <= _maxOfTiles.Width &&
-                                    p.Y <= _maxOfTiles.Height)
-                                {
-                                    var dt = new DrawTile()
-                                    {
-                                        PosXY = p,
-                                        PosPixel = new GPoint(p.X * TileRect.Width, p.Y * TileRect.Height),
-                                        DistanceSqr = (CenterTileXYLocation.X - p.X) * (CenterTileXYLocation.X - p.X) +
-                                                      (CenterTileXYLocation.Y - p.Y) * (CenterTileXYLocation.Y - p.Y)
-                                    };
-
-                                    if (!TileDrawingList.Contains(dt))
-                                    {
-                                        TileDrawingList.Add(dt);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-
-                                                            if (GMaps.Instance.ShuffleTilesOnLoad)
-                                                            {
-                                                                Stuff.Shuffle(TileDrawingList);
-                                                            }
-                                                            else
-                                                            {
-                                                                TileDrawingList.Sort();
-                                                            }
-
-                                                            #endregion
-                                                        }
-                                                        finally
-                                                        {
-                                                            TileDrawingListLock.ReleaseWriterLock();
-                                                        }
-
-                                    #if NETFRAMEWORK
-                                                        Interlocked.Exchange(ref _loadWaitCount, 0);
-                                    #else
-                                                        Monitor.Enter(TileLoadQueue);
-                                                        try
-                                                        {
-                                    #endif
-                                                        TileDrawingListLock.AcquireReaderLock();
-                                                        try
-                                                        {
-                                                            foreach (var p in TileDrawingList)
-                                                            {
-                                                                var task = new LoadTask(p.PosXY, Zoom, this);
-                                    #if NETFRAMEWORK
-                                                                AddLoadTask(task);
-                                    #else
-                                                                    {
-                                                                        if (!TileLoadQueue.Contains(task))
-                                                                        {
-                                                                            TileLoadQueue.Push(task);
-                                                                        }
-                                                                    }
-                                    #endif
-                                                            }
-                                                        }
-                                                        finally
-                                                        {
-                                                            TileDrawingListLock.ReleaseReaderLock();
-                                                        }
-                                    #if DEBUG
-                                                        swTotal.Stop();
-                                                        Debug.WriteLine($"    [UpdateBounds] Total: {swTotal.ElapsedMilliseconds}ms, Tiles: {TileDrawingList.Count}");
-                                    #endif
+#if DEBUG
+                swTotal.Stop();
+                Debug.WriteLine($"    [UpdateBounds] Total: {swTotal.ElapsedMilliseconds}ms, Tiles: {TileDrawingList.Count}");
+#endif
 
 #if !NETFRAMEWORK
-            #region -- starts loader threads if needed --
-
+                // --- запуск потоків завантаження ---
                 lock (_gThreadPool)
                 {
                     while (_gThreadPool.Count < GThreadPoolSize)
                     {
-                        var t = new Thread(TileLoadThread);
+                        var t = new Thread(TileLoadThread)
                         {
-                            t.Name = "TileLoader: " + _gThreadPool.Count;
-                            t.IsBackground = true;
-                            t.Priority = ThreadPriority.BelowNormal;
-                        }
-
+                            Name = "TileLoader: " + _gThreadPool.Count,
+                            IsBackground = true,
+                            Priority = ThreadPriority.BelowNormal
+                        };
                         _gThreadPool.Add(t);
-
                         Debug.WriteLine("add " + t.Name + " to GThreadPool");
-
                         t.Start();
                     }
                 }
-            #endregion
 #endif
-            {
+
                 _lastTileLoadStart = DateTime.Now;
                 Debug.WriteLine("OnTileLoadStart - at zoom " + Zoom + ", time: " + _lastTileLoadStart.TimeOfDay);
-            }
+
 #if !NETFRAMEWORK
                 _loadWaitCount = 0;
-                Monitor.PulseAll(TileLoadQueue);
+                Monitor.Enter(TileLoadQueue);
+                try
+                {
+                    Monitor.PulseAll(TileLoadQueue);
+                }
+                finally
+                {
+                    Monitor.Exit(TileLoadQueue);
+                }
+#endif
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[UpdateBounds] ERROR: {ex}");
+                // Можна перекинути виняток далі, але краще не приховувати
+                // throw; // якщо хочете, щоб падіння було видно
             }
             finally
             {
-                Monitor.Exit(TileLoadQueue);
+                UpdatingBounds = false;
             }
-#endif
-            UpdatingBounds = false;
 
             if (OnTileLoadStart != null)
             {

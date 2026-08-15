@@ -4,6 +4,7 @@ using GMap.NET.WindowsPresentation;
 
 using MapsWPF.Services;
 using MapsWPF.Utils;
+using MapsWPF.GMapIntegration;
 
 using System;
 using System.Collections.Generic;
@@ -24,15 +25,101 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Windows.Controls.Primitives;
+using System.Threading.Tasks;
+using MapsWPF.Services.Settlements;
 
 namespace MapsWPF
 {
     public partial class MainWindow : Window, Services.ISelectionProvider, Services.IReportOutput
     {
-        private bool _isInitializing = true;
+        [Conditional("DEBUG")]
+        private void DebugSplitterState(
+    string source,
+    double? horizontalChange = null,
+    double? currentRightWidth = null,
+    double? requestedRightWidth = null,
+    double? clampedRightWidth = null,
+    double? futureMapWidth = null)
+        {
+            var logPath = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "MapsWPF-bounds-diagnostics.log"
+            );
 
-        // marker
-        GMapMarker currentMarker;
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("============================================================");
+            sb.AppendLine($"{DateTime.Now:HH:mm:ss.fff} | {source}");
+            sb.AppendLine("============================================================");
+
+            if (horizontalChange.HasValue)
+            {
+                sb.AppendLine($"HorizontalChange={horizontalChange.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            if (currentRightWidth.HasValue)
+            {
+                sb.AppendLine($"CurrentRightWidth={currentRightWidth.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            if (requestedRightWidth.HasValue)
+            {
+                sb.AppendLine($"RequestedRightWidth={requestedRightWidth.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            if (clampedRightWidth.HasValue)
+            {
+                sb.AppendLine($"ClampedRightWidth={clampedRightWidth.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            if (futureMapWidth.HasValue)
+            {
+                sb.AppendLine($"FutureMapWidth={futureMapWidth.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("ACTUAL LAYOUT:");
+            sb.AppendLine($"MainLayoutGrid.ActualWidth={MainLayoutGrid.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"MapColumn.ActualWidth={MapColumn.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"MainMap.ActualWidth={MainMap.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"SplitterColumn.ActualWidth={SplitterColumn.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"RightColumn.ActualWidth={RightColumn.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"RightSettingsGrid.ActualWidth={RightSettingsGrid.ActualWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+
+            sb.AppendLine();
+            sb.AppendLine("COLUMN WIDTH SETTINGS:");
+            sb.AppendLine($"RightColumn.Width.Value={RightColumn.Width.Value.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"RightColumn.Width.GridUnitType={RightColumn.Width.GridUnitType}");
+
+            var formulaMapWidth = MainLayoutGrid.ActualWidth -
+                                  SplitterColumn.ActualWidth -
+                                  RightColumn.ActualWidth;
+
+            sb.AppendLine();
+            sb.AppendLine("WIDTH FORMULA:");
+            sb.AppendLine($"FormulaMapWidth=MainLayoutGrid.ActualWidth - SplitterColumn.ActualWidth - RightColumn.ActualWidth");
+            sb.AppendLine($"FormulaMapWidth={formulaMapWidth.ToString("0.##########", CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"FormulaMinusMainMap={Math.Abs(formulaMapWidth - MainMap.ActualWidth).ToString("0.##########", CultureInfo.InvariantCulture)}");
+
+            if (futureMapWidth.HasValue)
+            {
+                sb.AppendLine($"FutureMinusMainMapActual={(futureMapWidth.Value - MainMap.ActualWidth).ToString("0.##########", CultureInfo.InvariantCulture)}");
+                sb.AppendLine($"FutureMinusMapColumnActual={(futureMapWidth.Value - MapColumn.ActualWidth).ToString("0.##########", CultureInfo.InvariantCulture)}");
+            }
+
+            System.IO.File.AppendAllText(logPath, sb.ToString());
+            Debug.WriteLine(sb.ToString());
+        }
+
+        private bool _isInitializing = true;
+        private bool _isMapInitialized = false;
+
+        private bool _flightDirectionChanged = false;
+        private string _lastSavedFlightDirection = string.Empty;
+
+        private List<string> _lastSavedSelectedCities = new List<string>();
 
         // coordinate converter
         private CoordinateConverter _coordinateConverter = new();
@@ -53,23 +140,42 @@ namespace MapsWPF
         private int _lastUtmZone = 0;
         private char _lastUtmBand = ' ';
 
-        // Geocoding cancellation token
-        private CancellationTokenSource _geocodingCts;
-
         // Cache statistics debouncing
         private DispatcherTimer _cacheStatsUpdateTimer;
-        private int _lastMemCache = -1;
-        private int _lastSqliteCache = -1;
-        private int _lastNetwork = -1;
-
-        // Tile load counters
-        private int _tilesLoadedFromRam = 0;
-        private int _tilesLoadedFromDisk = 0;
-        private int _tilesLoadedFromNet = 0;
 
         private static readonly HttpClient _httpClient = new HttpClient();
 
         private readonly Services.StatisticsService _statisticsService;
+
+        private readonly GMapControlConfigurator _gMapControlConfigurator = new();
+        private readonly GMapTargetMarkerManager _targetMarkerManager = new();
+        private readonly GMapWorkAreaEditor _workAreaEditor = new();
+
+        private readonly SettlementGeometryService _settlementGeometryService = new();
+
+        private SettlementOverpassLoader? _settlementOverpassLoader;
+
+        private readonly List<GMapRoute> _settlementBoundaryRoutes = new();
+
+        private System.Threading.CancellationTokenSource? _settlementLoadCts;
+
+        private bool _wasTargetMarkerVisibleBeforeWorkAreaEdit;
+        private bool _wasAttackOverlayVisibleBeforeWorkAreaEdit;
+        private RectLatLng? _boundsBeforeWorkAreaEdit;
+
+        private const double MinRightPanelWidth = 280;
+        private const double MaxRightPanelWidth = 520;
+
+        private const int TechnicalMinZoom = 1;
+        private const int TechnicalMaxZoom = 24;
+
+        private bool _isUpdatingZoomLimitsUi;
+
+        private bool _isUpdatingMapLimitsUi;
+
+        private bool _useShortReportButtonTitles;
+
+        private const double MinMapWidth = 500;
 
         public MainWindow(Services.SettingsService settingsService, Services.StatisticsService statisticsService)
         {
@@ -87,12 +193,21 @@ namespace MapsWPF
 
             InitializeComponent();
 
+            _gMapControlConfigurator.Configure(MainMap);
+
+            _targetMarkerManager.AttachTo(MainMap);
+            _targetMarkerManager.MarkerDeleted += TargetMarkerManager_MarkerDeleted;
+
+            _workAreaEditor.AttachTo(MainMap);
+
             // Initialize cache statistics update timer
             _cacheStatsUpdateTimer = new DispatcherTimer();
             _cacheStatsUpdateTimer.Interval = TimeSpan.FromMilliseconds(500);
             _cacheStatsUpdateTimer.Tick += CacheStatsUpdateTimer_Tick;
 
             // Load startup settings (injected via constructor)
+
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(UpdateReportGenerationButtonTitles));
 
             // Apply saved AccessMode (persisted as string) and respect offline mode
             var savedModeStr = _settingsService.StartSettings.AccessMode ?? "ServerAndCache";
@@ -101,7 +216,8 @@ namespace MapsWPF
                 savedMode = MainMap.Manager.Mode;
             }
             // If there's no internet available, force CacheOnly
-            if (!PingNetwork("google.com") && savedMode != AccessMode.CacheOnly)
+            if (!NetworkInterface.GetIsNetworkAvailable() &&
+                savedMode != AccessMode.CacheOnly)
             {
                 MainMap.Manager.Mode = AccessMode.CacheOnly;
                 MessageBox.Show("No internet connection available, going to CacheOnly mode.",
@@ -150,6 +266,8 @@ namespace MapsWPF
 
             // Load panel/tab state: keep coordinates expander behavior and map old 'expanded' flags to the selected tab
             ExpanderCoordinates.IsExpanded = _settingsService.StartSettings.IsCoordinatesExpanded;
+
+            ExpanderFlightDirection.IsExpanded = _settingsService.StartSettings.IsFlightDirectionExpanded;
 
             // Choose which tab should be selected on startup if any of the old 'expanded' flags were set.
             int selectedTab = 0; // default to first tab (Target)
@@ -226,15 +344,15 @@ namespace MapsWPF
                 EnsurePositionInsideBoundsOnEnable();
             }
 
+            if (_settingsService.StartSettings.IsMapLimitsEnabled &&
+    MainMap.BoundsOfMap.HasValue)
+            {
+                MainMap.ApplyBoundsOfMapToViewport();
+            }
+
             // Force update labels
 
             MainMap_OnCurrentPositionChanged(MainMap.Position);
-
-            MainMap.IgnoreMarkerOnMouseWheel = true;
-            MainMap.TouchEnabled = false;
-            MainMap.MultiTouchEnabled = true;
-            MainMap.MouseWheelZoomType = MouseWheelZoomType.MousePositionWithoutCenter;
-            MainMap.ShowCenter = false;
 
             //-- map events
             MainMap.OnPositionChanged += MainMap_OnCurrentPositionChanged;
@@ -245,14 +363,23 @@ namespace MapsWPF
 
             // Task 4: Enforce limits on Drag
 
-            MainMap.OnMapDrag += MainMap_OnMapDrag;
-
             MainMap.MouseMove += MainMap_MouseMove;
             MainMap.MouseRightButtonDown += MainMap_MouseRightButtonDown;
-            MainMap.MouseRightButtonUp += MainMap_MouseRightButtonUp;
             MainMap.MouseEnter += MainMap_MouseEnter;
-            MainMap.MouseWheel += MainMap_MouseWheel;
             MainMap.Loaded += MainMap_Loaded;
+
+            // Підписки з MainMap_Loaded (перенесені в конструктор)
+            MainMap.OnPositionChanged += (p) =>
+            {
+                if (!MainMap.IsDragging)
+                {
+                    UpdateDistanceDisplay();
+                }
+            };
+
+            // Зміни в налаштуваннях атаки
+            _settingsService.OnAttackSettingsChanged += () => Dispatcher.Invoke(RestoreAttackSettings);
+            this.Closing += MainWindow_Closing;
 
             // initialize WASD timer
             _wasdTimer = new DispatcherTimer();
@@ -304,28 +431,11 @@ namespace MapsWPF
             // Initialize report template service
             try
             {
-                _templateService = new Services.TemplateService();
-                _templateService.LoadAllData();
-                var startupMsg = $"TemplateService loaded: Templates={_templateService.Templates?.Count ?? 0}, Targets={_templateService.Targets?.Count ?? 0}, Positions={_templateService.Position_Point?.Count ?? 0}, DroneByPosition={_templateService.DroneByPosition?.Count ?? 0}, Units={_templateService.UnitsHistory?.Count ?? 0}, LaunchAreas={_templateService.LaunchAreasHistory?.Count ?? 0}, SettingsFolder={_templateService.SettingsFolderPath}";
-                Console.WriteLine(startupMsg);
-
-
-                // Initialize map service
                 _mapService = new Services.MapService(_coordinateConverter);
-
-                // Clipboard and Notification services are provided by DI and will be injected by the host (App.cs)
-                // Use SetClipboardService / SetNotificationService to provide these instances.
-
-                try
-                {
-                    RefreshTemplatesAndHistories();
-
-                }
-                catch { }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Reports initialization failed: {ex.Message}");
+                Console.WriteLine($"MapService initialization failed: {ex.Message}");
             }
 
             CheckBoxCacheRoute.IsChecked = MainMap.Manager.UseRouteCache;
@@ -335,6 +445,8 @@ namespace MapsWPF
             TextBoxLng.Text = MainMap.Position.Lng.ToString(CultureInfo.InvariantCulture);
 
             CheckBoxCurrentMarker.IsChecked = true;
+
+            //CheckBoxDragMap.IsChecked = MainMap.CanDragMap;
             CheckBoxDragMap.IsChecked = MainMap.CanDragMap;
 
             // Apply saved right panel width (pixels) if present
@@ -342,13 +454,167 @@ namespace MapsWPF
             {
                 if (_settingsService?.StartSettings != null)
                 {
-                    var w = _settingsService.StartSettings.RightPanelWidth;
-                    if (w > 50) RightColumn.Width = new GridLength(w, GridUnitType.Pixel);
+                    var width = _settingsService.StartSettings.RightPanelWidth;
+
+                    if (width > 50)
+                    {
+                        var clampedWidth = Math.Max(
+                            MinRightPanelWidth,
+                            Math.Min(MaxRightPanelWidth, width)
+                        );
+
+                        RightColumn.Width = new GridLength(
+                            clampedWidth,
+                            GridUnitType.Pixel
+                        );
+                    }
                 }
             }
             catch { }
 
             _isInitializing = false;
+
+            if (TextBoxFlightDirection != null)
+            {
+                _lastSavedFlightDirection = _settingsService.StartSettings.FlightDirectionCities ?? string.Empty;
+                TextBoxFlightDirection.Text = _lastSavedFlightDirection;
+
+                TextBoxFlightDirection.TextChanged += (s, e) =>
+                {
+                    if (_isInitializing) return;
+                    bool hasChanged = !string.Equals(TextBoxFlightDirection.Text, _lastSavedFlightDirection, StringComparison.Ordinal);
+                    ButtonSaveFlightDirection.IsEnabled = hasChanged;
+                    ButtonCancelFlightDirection.IsEnabled = hasChanged;
+                    _flightDirectionChanged = hasChanged;
+                    UpdateFlightCitiesList();
+                };
+
+                UpdateFlightCitiesList();
+                ListBoxFlightCities.UpdateLayout();
+                RestoreSelectedFlightCities();
+                _lastSavedSelectedCities = _settingsService.StartSettings.SelectedFlightCities?.ToList() ?? new List<string>();
+
+                ListBoxFlightCities.SelectionChanged += (s, e) =>
+                {
+                    if (_isInitializing) return;
+                    SaveSelectedFlightCities();
+                };
+            }
+
+        }
+
+        private void ReportGenerationButtonsGrid_SizeChanged(
+    object sender,
+    SizeChangedEventArgs e)
+        {
+            UpdateReportGenerationButtonTitles();
+        }
+
+        private void UpdateReportGenerationButtonTitles()
+        {
+            if (ButtonGenerateStartWork == null ||
+                ButtonGenerateEndWork == null ||
+                ButtonGenerateCombatWork == null)
+            {
+                return;
+            }
+
+            if (ButtonGenerateStartWork.ActualWidth <= 0 ||
+                ButtonGenerateEndWork.ActualWidth <= 0 ||
+                ButtonGenerateCombatWork.ActualWidth <= 0)
+            {
+                return;
+            }
+
+            var fullTitlesFit =
+                DoesButtonTextFit(ButtonGenerateStartWork, "Початок роботи") &&
+                DoesButtonTextFit(ButtonGenerateEndWork, "Кінець роботи") &&
+                DoesButtonTextFit(ButtonGenerateCombatWork, "Бойова робота");
+
+            var shouldUseShortTitles = !fullTitlesFit;
+
+            if (_useShortReportButtonTitles == shouldUseShortTitles)
+            {
+                return;
+            }
+
+            _useShortReportButtonTitles = shouldUseShortTitles;
+
+            if (_useShortReportButtonTitles)
+            {
+                ButtonGenerateStartWork.Content = "Початок";
+                ButtonGenerateEndWork.Content = "Кінець";
+                ButtonGenerateCombatWork.Content = "Бойова";
+            }
+            else
+            {
+                ButtonGenerateStartWork.Content = "Початок роботи";
+                ButtonGenerateEndWork.Content = "Кінець роботи";
+                ButtonGenerateCombatWork.Content = "Бойова робота";
+            }
+
+            ButtonGenerateStartWork.ToolTip = "Початок роботи";
+            ButtonGenerateEndWork.ToolTip = "Кінець роботи";
+            ButtonGenerateCombatWork.ToolTip = "Бойова робота";
+        }
+
+        private bool DoesButtonTextFit(Button button, string text)
+        {
+            if (button == null ||
+                string.IsNullOrWhiteSpace(text) ||
+                button.ActualWidth <= 0)
+            {
+                return false;
+            }
+
+            var textBlock = new TextBlock
+            {
+                Text = text,
+                FontFamily = button.FontFamily,
+                FontSize = button.FontSize,
+                FontStyle = button.FontStyle,
+                FontWeight = button.FontWeight,
+                FontStretch = button.FontStretch
+            };
+
+            textBlock.Measure(
+                new Size(
+                    double.PositiveInfinity,
+                    double.PositiveInfinity
+                )
+            );
+
+            var requiredWidth =
+                textBlock.DesiredSize.Width +
+                button.Padding.Left +
+                button.Padding.Right +
+                14;
+
+            return requiredWidth <= button.ActualWidth;
+        }
+
+        public IEnumerable<string> GetSelectedFlyDirections()
+        {
+            return ListBoxFlightCities?.SelectedItems?.Cast<string>() ?? Enumerable.Empty<string>();
+        }
+
+        private static RectLatLng CreateNormalizedBounds(
+    double firstLat,
+    double firstLng,
+    double secondLat,
+    double secondLng)
+        {
+            var top = Math.Max(firstLat, secondLat);
+            var bottom = Math.Min(firstLat, secondLat);
+            var left = Math.Min(firstLng, secondLng);
+            var right = Math.Max(firstLng, secondLng);
+
+            return RectLatLng.FromLTRB(
+                left,
+                top,
+                right,
+                bottom
+            );
         }
 
         private void PlaceholderTag_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -385,7 +651,7 @@ namespace MapsWPF
             // Save current map state
             _settingsService.StartSettings.Lat = MainMap.Position.Lat;
             _settingsService.StartSettings.Lng = MainMap.Position.Lng;
-            _settingsService.StartSettings.Zoom = (int)MainMap.Zoom;
+            _settingsService.StartSettings.Zoom = MainMap.Zoom;
 
 
             _settingsService.StartSettings.GoGeo = TextBoxGeo.Text;
@@ -421,8 +687,6 @@ namespace MapsWPF
 
             // Zoom Limits
             _settingsService.StartSettings.IsZoomLimitsEnabled = CheckBoxZoomLimits.IsChecked == true;
-            if (int.TryParse(TextBoxMinZoom.Text, out int minZ) && minZ >= 1 && minZ <= 24) _settingsService.StartSettings.MinZoom = minZ;
-            if (int.TryParse(TextBoxMaxZoom.Text, out int maxZ) && maxZ >= 1 && maxZ <= 24) _settingsService.StartSettings.MaxZoom = maxZ;
 
             // Map Limits settings are updated in their respective event handlers/setters, 
             // but saving calls SaveStartSettings for all.
@@ -454,6 +718,7 @@ namespace MapsWPF
                 if (ExpanderGo != null) _settingsService.StartSettings.IsGoExpanded = ExpanderGo.IsExpanded;
                 if (ExpanderRay != null) _settingsService.StartSettings.IsRayExpanded = ExpanderRay.IsExpanded;
                 if (ExpanderMapLimits != null) _settingsService.StartSettings.IsMapLimitsExpanded = ExpanderMapLimits.IsExpanded;
+                if (ExpanderFlightDirection != null) _settingsService.StartSettings.IsFlightDirectionExpanded = ExpanderFlightDirection.IsExpanded;
 
                 _settingsService.SaveStartSettings();
             }
@@ -516,52 +781,28 @@ namespace MapsWPF
             UpdateMapAttackZone();
 
             // Initialize angle label
+            // Initialize angle, azimuth and distance labels
             try
             {
                 if (_settingsService.AttackSettings.IsSet)
                 {
-                    LabelAngleValue.Content = _settingsService.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                    LabelAngleValue.Content =
+                        _settingsService.AttackSettings.Angle.ToString(
+                            "F1",
+                            CultureInfo.InvariantCulture
+                        ) + "°";
 
-                    // Also update azimuth display relative to current target marker
-                    try
-                    {
-                        if (currentMarker != null)
-                        {
-                            var ap = new PointLatLng(_settingsService.AttackSettings.Lat, _settingsService.AttackSettings.Lng);
-                            // compute azimuth similar to ReportService.CalculateAzimuth, but using lat/lng approximate
-                            // compute azimuth using conventional 0 = North (use lng as East, lat as North)
-                            var dx = currentMarker.Position.Lng - ap.Lng; // Easting difference (degrees)
-                            var dy = currentMarker.Position.Lat - ap.Lat; // Northing difference (degrees)
-                            var angleRad = Math.Atan2(dx, dy);
-                            var angleDeg = (angleRad * (180.0 / Math.PI) + 360.0) % 360.0;
-                            SetAzimuthDisplay(Math.Round(angleDeg).ToString(CultureInfo.InvariantCulture) + "°");
-
-                            // Also update Range textbox to show distance in meters
-                            try
-                            {
-                                var distKm = MainMap.MapProvider.Projection.GetDistance(ap, currentMarker.Position);
-                                var distM = distKm * 1000.0;
-                                TextBoxRange.Text = Math.Round(distM).ToString(CultureInfo.InvariantCulture);
-                            }
-                            catch { }
-
-                            // Auto-detection of LaunchArea removed; keep manual selection loaded from JSON only.
-                        }
-                        else
-                        {
-                            // If attack settings not set, clear range
-                            try { TextBoxRange.Text = string.Empty; } catch { }
-                        }
-
-                    }
-                    catch { }
+                    UpdateDistanceDisplay();
                 }
                 else
                 {
                     LabelAngleValue.Content = "-";
+
                 }
             }
-            catch { }
+            catch
+            {
+            }
 
             _settingsService.AttackSettings.PropertyChanged += AttackSettings_PropertyChanged;
         }
@@ -580,7 +821,7 @@ namespace MapsWPF
                         // Update Servo label as well (Angle + delta)
                         var servo = (_settingsService.AttackSettings.Angle + _settingsService.AttackSettings.ServoAngleDelta + 360) % 360;
                         LabelServoValue.Content = servo.ToString("F1", CultureInfo.InvariantCulture) + "°";
-                        
+
                         // Keep the input box in sync
                         if (TextBoxServoAngle != null && !TextBoxServoAngle.IsFocused)
                         {
@@ -607,114 +848,599 @@ namespace MapsWPF
 
         public RenderTargetBitmap ToImageSource(FrameworkElement obj)
         {
-            var transform = obj.LayoutTransform;
-            obj.LayoutTransform = null;
-            var margin = obj.Margin;
-            obj.Margin = new Thickness(0, 0, margin.Right - margin.Left, margin.Bottom - margin.Top);
-            var size = new System.Windows.Size(obj.Width, obj.Height);
-            obj.Measure(size);
-            obj.Arrange(new Rect(size));
-            var bmp = new RenderTargetBitmap((int)size.Width, (int)size.Height, 96, 96, PixelFormats.Pbgra32);
-            bmp.Render(obj);
-            if (bmp.CanFreeze) bmp.Freeze();
-            obj.LayoutTransform = transform;
-            obj.Margin = margin;
-            return bmp;
+            ArgumentNullException.ThrowIfNull(obj);
+
+            var width = obj.ActualWidth;
+            var height = obj.ActualHeight;
+
+            if (width <= 0 || height <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Неможливо створити зображення: елемент ще не має фактичного розміру."
+                );
+            }
+
+            var oldTransform = obj.LayoutTransform;
+            var oldMargin = obj.Margin;
+
+            try
+            {
+                obj.LayoutTransform = null;
+                obj.Margin = new Thickness(
+                    0,
+                    0,
+                    oldMargin.Right - oldMargin.Left,
+                    oldMargin.Bottom - oldMargin.Top
+                );
+
+                var size = new Size(width, height);
+
+                obj.Measure(size);
+                obj.Arrange(new Rect(size));
+
+                var bitmap = new RenderTargetBitmap(
+                    (int)Math.Ceiling(width),
+                    (int)Math.Ceiling(height),
+                    96,
+                    96,
+                    PixelFormats.Pbgra32
+                );
+
+                bitmap.Render(obj);
+
+                if (bitmap.CanFreeze)
+                {
+                    bitmap.Freeze();
+                }
+
+                return bitmap;
+            }
+            finally
+            {
+                obj.LayoutTransform = oldTransform;
+                obj.Margin = oldMargin;
+            }
         }
 
         void MainMap_Loaded(object sender, RoutedEventArgs e)
         {
+            // Запобігаємо повторному виконанню
+            if (_isMapInitialized)
+                return;
+            _isMapInitialized = true;
+
+            // Ініціалізація стану (те, що було в Loaded, без підписок)
             MainMap.Zoom = _settingsService.StartSettings.Zoom;
             MainMap.Position = new PointLatLng(_settingsService.StartSettings.Lat, _settingsService.StartSettings.Lng);
             TextBoxLat.Text = MainMap.Position.Lat.ToString(CultureInfo.InvariantCulture);
             TextBoxLng.Text = MainMap.Position.Lng.ToString(CultureInfo.InvariantCulture);
             TextBoxGeo.Text = _settingsService.StartSettings.GoGeo;
 
-            ValidateAndApplyZoomLimits(); 
+            ValidateAndApplyZoomLimits();
             MainMap_OnCurrentPositionChanged(MainMap.Position);
             RestoreTargetPoint();
 
-            MainMap.OnPositionChanged += (p) => UpdateDistanceDisplay();
-            MainMap.MouseLeftButtonDown += MainMap_MouseLeftButtonDown;
-            //MainMap.MouseLeftButtonUp += MainMap_MouseLeftButtonUp;
-            MainMap.PreviewMouseLeftButtonDown += MainMap_PreviewMouseLeftButtonDown;
-            MainMap.PreviewMouseLeftButtonUp += MainMap_PreviewMouseLeftButtonUp;
-            MainMap.PreviewMouseMove += MainMap_PreviewMouseMove;
-
+            // Цей виклик вже є в конструкторі, але він потрібен для відновлення атаки після завантаження
             RestoreAttackSettings();
-            _settingsService.OnAttackSettingsChanged += () => Dispatcher.Invoke(RestoreAttackSettings);
-            this.Closing += MainWindow_Closing;
+
+        }
+
+        private SettlementOverpassLoader GetSettlementOverpassLoader()
+        {
+            if (_settlementOverpassLoader == null)
+            {
+                _settlementOverpassLoader =
+                    new SettlementOverpassLoader(TryConvertLatLngToUtmForSettlementLoader);
+            }
+
+            return _settlementOverpassLoader;
+        }
+
+        private async Task LoadKupianskBoundaryTestAsync()
+        {
+            const long kupianskRelationId = 3592314;
+            const string kupianskName = "Куп’янськ";
+
+            try
+            {
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Тестове завантаження меж Куп’янська...");
+
+                var polygons = await GetSettlementOverpassLoader()
+                    .LoadRelationPolygonsForTestAsync(
+                        kupianskRelationId);
+
+                if (polygons.Count == 0)
+                {
+                    UpdateSettlementLoadStatusFromCurrentCache(
+                        "Межі Куп’янська не отримано.");
+
+                    _notificationService?.Notify(
+                        "Не вдалося завантажити межі Куп’янська",
+                        NotificationType.Warning);
+
+                    Debug.WriteLine(
+                        "[SETTLEMENT TEST] Kupiansk: no polygons received");
+
+                    return;
+                }
+
+                var cache = _settlementGeometryService.CurrentCache;
+
+                cache.Settlements ??= new List<SettlementGeometryItem>();
+
+                var kupiansk = cache.Settlements.FirstOrDefault(
+                    x =>
+                        string.Equals(
+                            x.Name,
+                            kupianskName,
+                            StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(
+                            x.OsmType,
+                            "node",
+                            StringComparison.OrdinalIgnoreCase));
+
+                kupiansk ??= cache.Settlements.FirstOrDefault(
+                    x => string.Equals(
+                        x.Name,
+                        kupianskName,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (kupiansk == null)
+                {
+                    kupiansk = new SettlementGeometryItem
+                    {
+                        Name = kupianskName,
+                        Place = "town",
+                        OsmType = "relation",
+                        OsmId = kupianskRelationId
+                    };
+
+                    cache.Settlements.Add(kupiansk);
+                }
+
+                kupiansk.Polygons ??= new List<string>();
+
+                var existingPolygons = new HashSet<string>(
+                    kupiansk.Polygons,
+                    StringComparer.Ordinal);
+
+                foreach (var polygon in polygons)
+                {
+                    if (existingPolygons.Add(polygon))
+                    {
+                        kupiansk.Polygons.Add(polygon);
+                    }
+                }
+
+                kupiansk.GeometrySourceOsmType = "relation";
+                kupiansk.GeometrySourceOsmId = kupianskRelationId;
+
+                cache.Source = "overpass-relation-test";
+                cache.UtmZone = 37;
+                cache.UtmBand = "U";
+
+                _settlementGeometryService.Save(cache);
+                _settlementGeometryService.Load();
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Межі Куп’янська завантажено.");
+
+                _notificationService?.Notify(
+                    "Межі Куп’янська завантажено",
+                    NotificationType.Info);
+
+                Debug.WriteLine(
+                    $"[SETTLEMENT TEST] Kupiansk saved: " +
+                    $"receivedPolygons={polygons.Count}, " +
+                    $"totalPolygons={kupiansk.Polygons.Count}");
+            }
+            catch (TimeoutException ex)
+            {
+                Debug.WriteLine(
+                    $"[SETTLEMENT TEST] Kupiansk timeout: {ex}");
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Overpass не відповів під час завантаження Куп’янська.");
+
+                _notificationService?.Notify(
+                    "Overpass не відповів вчасно",
+                    NotificationType.Warning);
+            }
+            catch (HttpRequestException ex)
+            {
+                Debug.WriteLine(
+                    $"[SETTLEMENT TEST] Kupiansk HTTP error: {ex}");
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Помилка сервера під час завантаження Куп’янська.");
+
+                _notificationService?.Notify(
+                    "Не вдалося отримати межі Куп’янська",
+                    NotificationType.Warning);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    $"[SETTLEMENT TEST] Kupiansk error: {ex}");
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+                    "Помилка завантаження меж Куп’янська.");
+
+                _notificationService?.Notify(
+                    "Помилка завантаження меж Куп’янська",
+                    NotificationType.Warning);
+            }
+        }
+
+        private bool TryConvertLatLngToUtmForSettlementLoader(
+    double lat,
+    double lng,
+    out System.Drawing.PointF utm,
+    out int zone,
+    out string band)
+        {
+            utm = System.Drawing.PointF.Empty;
+            zone = 0;
+            band = string.Empty;
+
+            try
+            {
+                if (_mapService != null &&
+                    _mapService.TryLatLngToUTM(
+                        lat,
+                        lng,
+                        out var mapServiceUtm,
+                        out var mapServiceZone,
+                        out var mapServiceBand))
+                {
+                    utm = mapServiceUtm;
+                    zone = mapServiceZone;
+                    band = mapServiceBand.ToString();
+                    return true;
+                }
+
+                if (_coordinateConverter.TryLatLngToUTM(
+                        lat,
+                        lng,
+                        out var converterUtm,
+                        out var converterZone,
+                        out var converterBand))
+                {
+                    utm = converterUtm;
+                    zone = converterZone;
+                    band = converterBand.ToString();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SETTLEMENT UTM] Convert error: {ex}");
+            }
+
+            return false;
+        }
+
+        private static SettlementCacheBounds CreateSettlementCacheBoundsFromWorkArea(
+    RectLatLng workAreaBounds,
+    double paddingKm)
+        {
+            var lat1 = workAreaBounds.Lat;
+            var lat2 = workAreaBounds.Lat - workAreaBounds.HeightLat;
+
+            var lng1 = workAreaBounds.Lng;
+            var lng2 = workAreaBounds.Lng + workAreaBounds.WidthLng;
+
+            var top = Math.Max(lat1, lat2);
+            var bottom = Math.Min(lat1, lat2);
+            var left = Math.Min(lng1, lng2);
+            var right = Math.Max(lng1, lng2);
+
+            var centerLat = (top + bottom) / 2.0;
+
+            var latPadding = paddingKm / 111.32;
+
+            var cosLat = Math.Cos(centerLat * Math.PI / 180.0);
+
+            if (Math.Abs(cosLat) < 0.1)
+            {
+                cosLat = 0.1;
+            }
+
+            var lngPadding = paddingKm / (111.32 * Math.Abs(cosLat));
+
+            return new SettlementCacheBounds
+            {
+                Top = top + latPadding,
+                Bottom = bottom - latPadding,
+                Left = left - lngPadding,
+                Right = right + lngPadding,
+                PaddingKm = paddingKm
+            };
+        }
+
+        private void UpdateSettlementLoadStatus(
+    SettlementGeometryCache? cache,
+    string stateText)
+        {
+            var foundCount = cache?.Settlements?.Count ?? 0;
+
+            var loadedCount = cache?.Settlements?
+                .Count(x => x.Polygons != null &&
+                            x.Polygons.Any(p => !string.IsNullOrWhiteSpace(p)))
+                ?? 0;
+
+            Dispatcher.Invoke(() =>
+            {
+                TextSettlementFoundStatus.Text = $"Знайдено НП: {foundCount}";
+                TextSettlementLoadedStatus.Text = $"Завантажено НП: {loadedCount}";
+                TextSettlementLoadStateStatus.Text = stateText;
+            });
+        }
+
+        private void UpdateSettlementLoadStatusFromCurrentCache(string stateText)
+        {
+            UpdateSettlementLoadStatus(
+                _settlementGeometryService.CurrentCache,
+                stateText);
+        }
+
+        private async Task RefreshSettlementGeometryCacheForWorkAreaAsync(
+    RectLatLng workAreaBounds)
+        {
+            const double paddingKm = 10.0;
+
+            _settlementLoadCts?.Cancel();
+            _settlementLoadCts = new System.Threading.CancellationTokenSource();
+
+            var token = _settlementLoadCts.Token;
+
+            try
+            {
+                var bounds = CreateSettlementCacheBoundsFromWorkArea(
+                    workAreaBounds,
+                    paddingKm);
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+    "Оновлення списку НП...");
+
+                _notificationService?.Notify(
+                    "Завантаження НП робочої області...",
+                    NotificationType.Info);
+
+                Debug.WriteLine(
+                    $"[SETTLEMENT LOAD] Bounds: " +
+                    $"Top={bounds.Top}, Bottom={bounds.Bottom}, " +
+                    $"Left={bounds.Left}, Right={bounds.Right}, PaddingKm={bounds.PaddingKm}");
+
+                var cache = await GetSettlementOverpassLoader()
+     .LoadAsync(
+         bounds,
+         token,
+       partialCache =>
+{
+    var count = partialCache.Settlements?.Count ?? 0;
+
+    if (count <= 0)
+    {
+        Debug.WriteLine("[SETTLEMENT LOAD] Progress cache is empty, not saved");
+
+        UpdateSettlementLoadStatusFromCurrentCache(
+            "Очікування відповіді Overpass...");
+        return;
+    }
+
+    _settlementGeometryService.SavePreservingExistingGeometry(partialCache);
+    _settlementGeometryService.Load();
+
+    var polygonCount = partialCache.Settlements
+        .Count(x => x.Polygons != null &&
+                    x.Polygons.Any(p => !string.IsNullOrWhiteSpace(p)));
+
+    UpdateSettlementLoadStatus(
+        partialCache,
+        "Довантаження НП триває...");
+
+    Debug.WriteLine(
+        $"[SETTLEMENT LOAD] Progress cache saved: " +
+        $"settlements={count}, withPolygons={polygonCount}");
+         });
+
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (cache.Settlements == null || cache.Settlements.Count == 0)
+                {
+                    _notificationService?.Notify(
+                        "НП у робочій області не знайдено",
+                        NotificationType.Info);
+
+                    UpdateSettlementLoadStatusFromCurrentCache(
+                        "Не вдалося оновити НП. Використовується попередній кеш.");
+
+                    Debug.WriteLine("[SETTLEMENT LOAD] Loaded 0 settlements, cache not overwritten");
+                    return;
+                }
+
+                _settlementGeometryService.SavePreservingExistingGeometry(cache);
+                _settlementGeometryService.Load();
+
+                UpdateSettlementLoadStatus(
+    cache,
+    "Оновлення завершено");
+
+                _notificationService?.Notify(
+                    $"НП робочої області завантажено: {cache.Settlements.Count}",
+                    NotificationType.Info);
+
+                Debug.WriteLine(
+                    $"[SETTLEMENT LOAD] Loaded settlements: {cache.Settlements.Count}");
+            }
+            catch (TimeoutException ex)
+            {
+                Debug.WriteLine($"[SETTLEMENT LOAD] Timeout: {ex}");
+
+                UpdateSettlementLoadStatusFromCurrentCache(
+    "Overpass не відповів. Використовується попередній кеш.");
+
+                _notificationService?.Notify(
+                    "Не вдалося завантажити НП: сервер не відповів вчасно",
+                    NotificationType.Info);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SETTLEMENT LOAD] Error: {ex}");
+
+                _notificationService?.Notify(
+                    "Не вдалося завантажити НП робочої області",
+                    NotificationType.Info);
+            }
         }
 
         private void RestoreTargetPoint()
         {
             if (_settingsService.StartSettings.TargetLat.HasValue && _settingsService.StartSettings.TargetLng.HasValue)
             {
-                var pos = new PointLatLng(_settingsService.StartSettings.TargetLat.Value, _settingsService.StartSettings.TargetLng.Value);
-                CreateTargetMarker(pos);
-                UpdateTargetLocationInfo(pos);
+                var pos = new PointLatLng(
+                    _settingsService.StartSettings.TargetLat.Value,
+                    _settingsService.StartSettings.TargetLng.Value
+                );
+
+                _targetMarkerManager.SetMarker(pos);
+
+                _ = UpdateTargetLocationInfoAsync(pos);
+                UpdateDistanceDisplay();
             }
         }
 
-        private void CreateTargetMarker(PointLatLng pos)
+        private void SetTargetPoint(PointLatLng position)
         {
-            if (currentMarker != null)
-            {
-                MainMap.Markers.Remove(currentMarker);
-            }
+            _targetMarkerManager.SetMarker(position);
 
-            currentMarker = new GMapMarker(pos);
-            var s = new System.Windows.Shapes.Ellipse
-            {
-                Width = 10,
-                Height = 10,
-                Fill = System.Windows.Media.Brushes.Red,
-                Stroke = System.Windows.Media.Brushes.White,
-                StrokeThickness = 2,
-                IsHitTestVisible = true
-            };
+            _settingsService.StartSettings.TargetLat = position.Lat;
+            _settingsService.StartSettings.TargetLng = position.Lng;
+            _settingsService.SaveStartSettings();
 
-            s.MouseLeftButtonDown += Marker_MouseLeftButtonDown;
-
-            currentMarker.Shape = s;
-            currentMarker.Offset = new System.Windows.Point(-5, -5);
-            currentMarker.ZIndex = int.MaxValue;
-            MainMap.Markers.Add(currentMarker);
-
+            _ = UpdateTargetLocationInfoAsync(position);
             UpdateDistanceDisplay();
         }
 
-        private void Marker_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private void TargetMarkerManager_MarkerDeleted(object? sender, EventArgs e)
         {
-            if (e.ClickCount == 2)
+            MainMap.TargetDistance = -1;
+            LabelDistanceValue.Content = "Distance: -";
+
+            LabelTargetLocation.Content = "-";
+            LabelTargetAddress.Content = "-";
+
+            _settingsService.StartSettings.LastTargetLocationName = string.Empty;
+            _settingsService.StartSettings.LastTargetAddress = string.Empty;
+            _settingsService.StartSettings.CachedTargetLat = null;
+            _settingsService.StartSettings.CachedTargetLng = null;
+            _settingsService.StartSettings.TargetLat = null;
+            _settingsService.StartSettings.TargetLng = null;
+            _settingsService.SaveStartSettings();
+
+            MainMap.InvalidateVisual();
+        }
+
+        private void TextBoxFlightDirection_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isInitializing) return;
+
+            // Порівнюємо поточний текст з останнім збереженим
+            bool hasChanged = !string.Equals(TextBoxFlightDirection.Text, _lastSavedFlightDirection, StringComparison.Ordinal);
+
+            ButtonSaveFlightDirection.IsEnabled = hasChanged;
+            ButtonCancelFlightDirection.IsEnabled = hasChanged;
+            _flightDirectionChanged = hasChanged;
+
+            // Оновлюємо список тегів (для попереднього перегляду)
+            UpdateFlightCitiesList();
+        }
+
+        private void RestoreSelectedFlightCities()
+        {
+            if (ListBoxFlightCities?.Items == null) return;
+
+            var savedSelection = _settingsService.StartSettings.SelectedFlightCities;
+            if (savedSelection == null || savedSelection.Count == 0)
             {
-                // Double click to delete
-
-                if (currentMarker != null)
-                {
-                    MainMap.Markers.Remove(currentMarker);
-                    currentMarker = null;
-                    MainMap.TargetDistance = -1;
-                    LabelDistanceValue.Content = "Distance: -";
-
-                    // Task 1: Clear fields on delete
-
-                    LabelTargetLocation.Content = "-";
-                    LabelTargetAddress.Content = "-";
-                    _settingsService.StartSettings.LastTargetLocationName = null;
-                    _settingsService.StartSettings.LastTargetAddress = null;
-
-                    MainMap.InvalidateVisual();
-
-                    // Clear from settings
-                    _settingsService.StartSettings.TargetLat = null;
-                    _settingsService.StartSettings.TargetLng = null;
-                    _settingsService.SaveStartSettings();
-
-
-                    e.Handled = true;
-                }
+                ListBoxFlightCities.SelectedItems.Clear();
+                return;
             }
+
+            ListBoxFlightCities.SelectedItems.Clear();
+            foreach (string? item in ListBoxFlightCities.Items)
+            {
+                if (item != null && savedSelection.Contains(item, StringComparer.OrdinalIgnoreCase))
+                    ListBoxFlightCities.SelectedItems.Add(item);
+            }
+        }
+
+        private List<string> FindDuplicateCities(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return new List<string>();
+
+            var cities = input.Split(new[] { '\r', '\n', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                              .Select(c => c.Trim())
+                              .Where(c => !string.IsNullOrWhiteSpace(c))
+                              .ToList();
+
+            return cities.GroupBy(c => c, StringComparer.OrdinalIgnoreCase)
+                         .Where(g => g.Count() > 1)
+                         .Select(g => g.Key)
+                         .ToList();
+        }
+
+        private void ButtonSaveFlightDirection_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string currentText = TextBoxFlightDirection.Text ?? string.Empty;
+
+                // Перевірка на дублікати
+                var duplicates = FindDuplicateCities(currentText);
+                if (duplicates.Any())
+                {
+                    MessageBox.Show(
+                        $"Знайдено дублікати населених пунктів:\n\n{string.Join(", ", duplicates)}\n\n" +
+                        "Будь ласка, виправте список перед збереженням.",
+                        "Помилка збереження",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return; // не зберігаємо
+                }
+
+                _settingsService.StartSettings.FlightDirectionCities = currentText;
+
+                RemoveInvalidSelectedFlightCities();
+
+                _settingsService.SaveStartSettings();
+
+                _lastSavedFlightDirection = currentText;
+                _flightDirectionChanged = false;
+                ButtonSaveFlightDirection.IsEnabled = false;
+                ButtonCancelFlightDirection.IsEnabled = false;
+
+                UpdateFlightCitiesList();
+                RestoreSelectedFlightCities();
+
+                _notificationService?.Notify("Список міст збережено.");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Не вдалося зберегти: {ex.Message}", "Помилка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void ButtonCancelFlightDirection_Click(object sender, RoutedEventArgs e)
+        {
+            TextBoxFlightDirection.Text = _lastSavedFlightDirection;
+            // Виділення не чіпаємо – воно вже збережене окремо
         }
 
         void MainMap_OnMapTypeChanged(GMapProvider type)
@@ -726,265 +1452,137 @@ namespace MapsWPF
             }
         }
 
-        void MainMap_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            var p = e.GetPosition(MainMap);
-            var pos = MainMap.FromLocalToLatLng((int)p.X, (int)p.Y);
-
-            // Settings Map Limits
-            if (Keyboard.IsKeyDown(Key.RightCtrl))
-            {
-                if (_coordinateConverter.TryLatLngToUTM(pos.Lat, pos.Lng, out System.Drawing.PointF utm, out int zone, out char band))
-                {
-                    string mgrs = _coordinateConverter.FormatShortMGRSFromUTM(utm, zone, band);
-                    TextBoxLimitBottomRight.Text = mgrs;
-                }
-                e.Handled = true;
-                return;
-            }
-            if (Keyboard.IsKeyDown(Key.RightAlt))
-            {
-                if (_coordinateConverter.TryLatLngToUTM(pos.Lat, pos.Lng, out System.Drawing.PointF utm, out int zone, out char band))
-                {
-                    string mgrs = _coordinateConverter.FormatShortMGRSFromUTM(utm, zone, band);
-                    TextBoxLimitTopLeft.Text = mgrs;
-                }
-                e.Handled = true;
-                return;
-            }
-
-            CreateTargetMarker(pos);
-
-            _settingsService.StartSettings.TargetLat = pos.Lat;
-            _settingsService.StartSettings.TargetLng = pos.Lng;
-            _settingsService.SaveStartSettings();
-
-            UpdateTargetLocationInfo(pos);
-        }
-
-        void MainMap_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            if (currentMarker != null)
-            {
-                var pos = currentMarker.Position;
-
-
-                _settingsService.StartSettings.TargetLat = pos.Lat;
-                _settingsService.StartSettings.TargetLng = pos.Lng;
-                _settingsService.SaveStartSettings();
-
-
-                UpdateTargetLocationInfo(pos);
-                UpdateDistanceDisplay();
-            }
-        }
-
         private void UpdateDistanceDisplay()
         {
-            if (currentMarker != null && _settingsService != null && _settingsService.AttackSettings.IsSet)
+            var targetMarker = _targetMarkerManager.CurrentMarker;
+
+            if (targetMarker != null &&
+                _settingsService != null &&
+                _settingsService.AttackSettings.IsSet)
             {
-                // Attack Point is now Geo-based
-                var apLatLng = new PointLatLng(_settingsService.AttackSettings.Lat, _settingsService.AttackSettings.Lng);
-                var distKm = MainMap.MapProvider.Projection.GetDistance(apLatLng, currentMarker.Position);
+                var attackPoint = new PointLatLng(
+                    _settingsService.AttackSettings.Lat,
+                    _settingsService.AttackSettings.Lng
+                );
+
+                var distKm = MainMap.MapProvider.Projection.GetDistance(
+                    attackPoint,
+                    targetMarker.Position
+                );
+
                 var distM = distKm * 1000.0;
 
-                // Update Range textbox (kilometers with fractional part)
-                try { TextBoxRange.Text = (distM / 1000.0).ToString("F1", CultureInfo.InvariantCulture); } catch { }
+                var distKmValue = distM / 1000.0;
+                LabelDistanceValue.Content = $"{distKmValue:F1} km";
 
-                double distKmVal = distM / 1000.0;
-                LabelDistanceValue.Content = $"{distKmVal:F1} km";
-                // Update angle label alongside distance and compute azimuth to target
                 try
                 {
-                    if (_settingsService.AttackSettings.IsSet)
-                    {
-                        LabelAngleValue.Content = _settingsService.AttackSettings.Angle.ToString("F1", CultureInfo.InvariantCulture) + "°";
+                    LabelAngleValue.Content =
+                        _settingsService.AttackSettings.Angle.ToString(
+                            "F1",
+                            CultureInfo.InvariantCulture
+                        ) + "°";
 
-                        // compute azimuth using conventional 0 = North (lng as East, lat as North)
-                        var dx = currentMarker.Position.Lng - apLatLng.Lng; // East difference (degrees)
-                        var dy = currentMarker.Position.Lat - apLatLng.Lat; // North difference (degrees)
-                        var angleRad = Math.Atan2(dx, dy);
-                        var angleDeg = (angleRad * (180.0 / Math.PI) + 360.0) % 360.0;
-                        try { SetAzimuthDisplay(Math.Round(angleDeg).ToString(CultureInfo.InvariantCulture) + "°"); } catch { }
-                    }
-                    else
+                    var dx = targetMarker.Position.Lng - attackPoint.Lng;
+                    var dy = targetMarker.Position.Lat - attackPoint.Lat;
+
+                    var angleRad = Math.Atan2(dx, dy);
+                    var angleDeg = (angleRad * (180.0 / Math.PI) + 360.0) % 360.0;
+
+                    try
                     {
-                        LabelAngleValue.Content = "-";
+                        SetAzimuthDisplay(
+                            Math.Round(angleDeg).ToString(CultureInfo.InvariantCulture) + "°"
+                        );
+                    }
+                    catch
+                    {
                     }
                 }
-                catch { }
+                catch
+                {
+                }
 
                 MainMap.TargetDistance = distM;
                 MainMap.InvalidateVisual();
             }
-            else
-            {
-                // Clear range if no attack point or target
-                try { TextBoxRange.Text = string.Empty; } catch { }
-            }
         }
 
-        private async void UpdateTargetLocationInfo(PointLatLng pos)
+        // Асинхронно визначає найближений населений пункт і адресу цілі.
+        //
+        // Кожен новий виклик скасовує попередній. Додатковий номер версії
+        // не дозволяє старому повільному запиту перезаписати дані нової цілі.
+        private Task UpdateTargetLocationInfoAsync(PointLatLng pos)
         {
-            if (_settingsService.StartSettings.CachedTargetLat.HasValue &&
-                _settingsService.StartSettings.CachedTargetLng.HasValue &&
-                Math.Abs(_settingsService.StartSettings.CachedTargetLat.Value - pos.Lat) < 0.000001 &&
-                Math.Abs(_settingsService.StartSettings.CachedTargetLng.Value - pos.Lng) < 0.000001 &&
-                !string.IsNullOrEmpty(_settingsService.StartSettings.LastTargetLocationName))
-            {
-                LabelTargetLocation.Content = $"{_settingsService.StartSettings.LastTargetLocationName}";
-                LabelTargetAddress.Content = $"{_settingsService.StartSettings.LastTargetAddress}";
-                return;
-            }
-
-            if (_geocodingCts != null)
-            {
-                _geocodingCts.Cancel();
-                _geocodingCts.Dispose();
-            }
-            _geocodingCts = new CancellationTokenSource();
-            var token = _geocodingCts.Token;
-
             try
             {
-                await System.Threading.Tasks.Task.Delay(500, token);
-                Dispatcher.Invoke(() => 
+                var settings = _settingsService.StartSettings;
+
+                ProgressBarTarget.Visibility = Visibility.Collapsed;
+
+                if (PanelTargetInfo != null)
                 {
-                    ProgressBarTarget.Visibility = Visibility.Visible;
-                    if (PanelTargetInfo != null) PanelTargetInfo.Visibility = Visibility.Collapsed;
-                });
-            }
-            catch (System.Threading.Tasks.TaskCanceledException)
-            {
-                return;
-            }
-
-            if (token.IsCancellationRequested) return;
-
-            await System.Threading.Tasks.Task.Run(async () =>
-            {
-                if (token.IsCancellationRequested) return;
-
-                try
-                {
-                    GeocodingProvider provider = GMapProviders.OpenStreetMap as GeocodingProvider;
-                    GeoCoderStatusCode status;
-                    List<Placemark> placemarks = null;
-
-
-                    status = provider.GetPlacemarks(pos, out placemarks);
-
-
-                    bool foundSettlement = false;
-                    if (status == GeoCoderStatusCode.OK && placemarks != null && placemarks.Count > 0)
-                    {
-                        var pm = placemarks[0];
-                        if (!string.IsNullOrEmpty(pm.SubAdministrativeAreaName) || !string.IsNullOrEmpty(pm.LocalityName))
-                            foundSettlement = true;
-                    }
-
-                    if (status != GeoCoderStatusCode.OK || !foundSettlement)
-                    {
-                        var googleProvider = GMapProviders.GoogleMap as GeocodingProvider;
-                        List<Placemark> googlePlacemarks;
-                        var googleStatus = googleProvider.GetPlacemarks(pos, out googlePlacemarks);
-
-
-                        if (googleStatus == GeoCoderStatusCode.OK && googlePlacemarks != null && googlePlacemarks.Count > 0)
-                        {
-                            var gpm = googlePlacemarks[0];
-                            bool googleFound = !string.IsNullOrEmpty(gpm.LocalityName);
-                            if ((!foundSettlement && googleFound) || status != GeoCoderStatusCode.OK)
-                            {
-                                placemarks = googlePlacemarks;
-                                status = googleStatus;
-                                foundSettlement = googleFound;
-                            }
-                        }
-                    }
-
-                    string locality = null;
-                    string fullAddress = null;
-
-                    if (status == GeoCoderStatusCode.OK && placemarks != null && placemarks.Count > 0)
-                    {
-                        var pm = placemarks[0];
-                        if (!string.IsNullOrEmpty(pm.SubAdministrativeAreaName)) locality = pm.SubAdministrativeAreaName;
-                        else if (!string.IsNullOrEmpty(pm.LocalityName)) locality = pm.LocalityName;
-                        else if (!string.IsNullOrEmpty(pm.DistrictName)) locality = pm.DistrictName;
-                        else if (!string.IsNullOrEmpty(pm.AdministrativeAreaName)) locality = pm.AdministrativeAreaName;
-
-                        var addressParts = new List<string>();
-                        if (!string.IsNullOrEmpty(pm.SubAdministrativeAreaName)) addressParts.Add(pm.SubAdministrativeAreaName);
-                        if (!string.IsNullOrEmpty(pm.LocalityName) && pm.LocalityName != pm.SubAdministrativeAreaName) addressParts.Add(pm.LocalityName);
-                        if (!string.IsNullOrEmpty(pm.AdministrativeAreaName)) addressParts.Add(pm.AdministrativeAreaName);
-                        fullAddress = addressParts.Count > 0 ? string.Join(", ", addressParts) : pm.Address;
-                    }
-
-                    if (!foundSettlement)
-                    {
-                        var nearest = await FindNearestSettlementOverpass(pos);
-                        if (nearest != null)
-                        {
-                            locality = nearest.Value.Name;
-                            fullAddress = $"{locality} ({nearest.Value.DistanceKm:F1} км)";
-                            status = GeoCoderStatusCode.OK;
-
-                        }
-                    }
-
-                    if (string.IsNullOrEmpty(locality)) locality = "Невідомо";
-                    if (string.IsNullOrEmpty(fullAddress)) fullAddress = "Не знайдено";
-
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (LabelTargetLocation != null) LabelTargetLocation.Content = $"{locality}";
-                        if (LabelTargetAddress != null) LabelTargetAddress.Content = $"{fullAddress}";
-                        ProgressBarTarget.Visibility = Visibility.Collapsed;
-                        if (PanelTargetInfo != null) PanelTargetInfo.Visibility = Visibility.Visible;
-
-                        _settingsService.StartSettings.CachedTargetLat = pos.Lat;
-                        _settingsService.StartSettings.CachedTargetLng = pos.Lng;
-                        _settingsService.StartSettings.LastTargetLocationName = locality;
-                        _settingsService.StartSettings.LastTargetAddress = fullAddress;
-                        _settingsService.SaveStartSettings();
-                    });
+                    PanelTargetInfo.Visibility = Visibility.Visible;
                 }
-                catch (Exception)
+
+                if (TryFindNearestSettlementFromGeometryCache(pos, out var settlementResult))
                 {
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (LabelTargetLocation != null) LabelTargetLocation.Content = "-";
-                        if (LabelTargetAddress != null) LabelTargetAddress.Content = "";
-                        ProgressBarTarget.Visibility = Visibility.Collapsed;
-                        if (PanelTargetInfo != null) PanelTargetInfo.Visibility = Visibility.Visible;
-                    });
+                    var locality = settlementResult.Name;
+                    var address = BuildSettlementAddressText(settlementResult);
+
+                    LabelTargetLocation.Content = locality;
+                    LabelTargetAddress.Content = address;
+
+                    settings.CachedTargetLat = pos.Lat;
+                    settings.CachedTargetLng = pos.Lng;
+                    settings.LastTargetLocationName = locality;
+                    settings.LastTargetAddress = address;
+
+                    _settingsService.SaveStartSettings();
+
+                    return Task.CompletedTask;
                 }
-            }, token);
+
+                LabelTargetLocation.Content = "-";
+                LabelTargetAddress.Content =
+                    "Список НП робочої області не завантажено";
+
+                settings.CachedTargetLat = pos.Lat;
+                settings.CachedTargetLng = pos.Lng;
+                settings.LastTargetLocationName = string.Empty;
+                settings.LastTargetAddress = string.Empty;
+
+                _settingsService.SaveStartSettings();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TARGET LOCALITY CACHE] {ex}");
+
+                LabelTargetLocation.Content = "-";
+                LabelTargetAddress.Content = string.Empty;
+
+                ProgressBarTarget.Visibility = Visibility.Collapsed;
+
+                if (PanelTargetInfo != null)
+                {
+                    PanelTargetInfo.Visibility = Visibility.Visible;
+                }
+            }
+
+            return Task.CompletedTask;
         }
 
         // State for drag interception
         private System.Windows.Point _lastMousePos;
         private bool _isDragging = false;
 
-        private void MainMap_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            _lastMousePos = e.GetPosition(MainMap);
-            // Default GMap behavior
-        }
-
-        private void MainMap_PreviewMouseMove(object sender, MouseEventArgs e)
-        {
-            // Logic removed implies default GMap behavior
-        }
-
-        private void MainMap_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            // Logic removed implies default GMap behavior
-        }
-
         void MainMap_MouseMove(object sender, MouseEventArgs e)
         {
+            if (MainMap.IsDragging)
+            {
+                return;
+            }
+
             // Update MGRS Cursor
             var pCursor = e.GetPosition(MainMap);
             var cursorLatLng = MainMap.FromLocalToLatLng((int)pCursor.X, (int)pCursor.Y);
@@ -1000,13 +1598,6 @@ namespace MapsWPF
             else
             {
                 LabelMgrsCursorValue.Content = "-";
-            }
-
-            if (e.RightButton == MouseButtonState.Pressed)
-            {
-                var p = e.GetPosition(MainMap);
-                currentMarker.Position = MainMap.FromLocalToLatLng((int)p.X, (int)p.Y);
-                UpdateDistanceDisplay();
             }
 
             if (Keyboard.IsKeyDown(Key.LeftAlt))
@@ -1092,6 +1683,178 @@ namespace MapsWPF
             catch { }
         }
 
+        private void ButtonShowKupianskBoundary_Click(
+    object sender,
+    RoutedEventArgs e)
+        {
+            const string kupianskName = "Куп’янськ";
+
+            ClearSettlementBoundaryRoutes();
+
+            if (_mapService == null)
+            {
+                _notificationService?.Notify(
+                    "Сервіс карти не ініціалізовано",
+                    NotificationType.Warning);
+
+                return;
+            }
+
+            var cache = _settlementGeometryService.CurrentCache;
+
+            var kupiansk = cache.Settlements?
+                .FirstOrDefault(x =>
+                    string.Equals(
+                        x.Name,
+                        kupianskName,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    x.Polygons != null &&
+                    x.Polygons.Any(p =>
+                        !string.IsNullOrWhiteSpace(p)));
+
+            if (kupiansk == null)
+            {
+                _notificationService?.Notify(
+                    "У локальному кеші немає меж Куп’янська",
+                    NotificationType.Warning);
+
+                TextSettlementLoadStateStatus.Text =
+                    "Межі Куп’янська не завантажені.";
+
+                return;
+            }
+
+            var allMapPoints = new List<PointLatLng>();
+
+            foreach (var polygonLine in kupiansk.Polygons)
+            {
+                var utmPoints =
+                    SettlementGeometryService.ParsePolygonLine(polygonLine);
+
+                if (utmPoints.Count < 3)
+                {
+                    continue;
+                }
+
+                var mapPoints = new List<PointLatLng>();
+
+                foreach (var utmPoint in utmPoints)
+                {
+                    if (!_mapService.TryUTMToLatLng(
+                            utmPoint,
+                            out var lat,
+                            out var lng))
+                    {
+                        continue;
+                    }
+
+                    mapPoints.Add(new PointLatLng(lat, lng));
+                }
+
+                if (mapPoints.Count < 3)
+                {
+                    continue;
+                }
+
+                var firstPoint = mapPoints[0];
+                var lastPoint = mapPoints[mapPoints.Count - 1];
+
+                if (firstPoint.Lat != lastPoint.Lat ||
+                    firstPoint.Lng != lastPoint.Lng)
+                {
+                    mapPoints.Add(firstPoint);
+                }
+
+                var route = new GMapRoute(mapPoints)
+                {
+                    Shape = new System.Windows.Shapes.Path
+                    {
+                        Stroke = Brushes.Red,
+                        StrokeThickness = 3,
+                        StrokeLineJoin = PenLineJoin.Round
+                    },
+                    ZIndex = 1000
+                };
+
+                _settlementBoundaryRoutes.Add(route);
+                MainMap.Markers.Add(route);
+
+                allMapPoints.AddRange(mapPoints);
+            }
+
+            if (_settlementBoundaryRoutes.Count == 0)
+            {
+                _notificationService?.Notify(
+                    "Не вдалося перетворити точки меж Куп’янська",
+                    NotificationType.Warning);
+
+                TextSettlementLoadStateStatus.Text =
+                    "Полігон Куп’янська містить некоректні точки.";
+
+                return;
+            }
+
+            ZoomToSettlementBoundary(allMapPoints);
+
+            ButtonClearSettlementBoundaries.IsEnabled = true;
+
+            TextSettlementLoadStateStatus.Text =
+                $"Показано межі Куп’янська: " +
+                $"{_settlementBoundaryRoutes.Count} контур.";
+
+            Debug.WriteLine(
+                $"[SETTLEMENT DISPLAY] Kupiansk: " +
+                $"routes={_settlementBoundaryRoutes.Count}, " +
+                $"points={allMapPoints.Count}");
+        }
+
+        private void ButtonClearSettlementBoundaries_Click(
+    object sender,
+    RoutedEventArgs e)
+        {
+            ClearSettlementBoundaryRoutes();
+
+            TextSettlementLoadStateStatus.Text =
+                "Межі населеного пункту прибрано.";
+        }
+
+        private void ClearSettlementBoundaryRoutes()
+        {
+            foreach (var route in _settlementBoundaryRoutes)
+            {
+                MainMap.Markers.Remove(route);
+            }
+
+            _settlementBoundaryRoutes.Clear();
+
+            ButtonClearSettlementBoundaries.IsEnabled = false;
+
+            Debug.WriteLine(
+                "[SETTLEMENT DISPLAY] Boundary routes cleared");
+        }
+
+        private void ZoomToSettlementBoundary(
+    List<PointLatLng> points)
+        {
+            if (points == null || points.Count == 0)
+            {
+                return;
+            }
+
+            var top = points.Max(p => p.Lat);
+            var bottom = points.Min(p => p.Lat);
+            var left = points.Min(p => p.Lng);
+            var right = points.Max(p => p.Lng);
+
+            var bounds = RectLatLng.FromLTRB(
+                left,
+                top,
+                right,
+                bottom);
+
+            MainMap.SetZoomToFitRect(bounds);
+        }
+
         private CacheStats GetCacheStats()
         {
             long memSize = 0;
@@ -1155,58 +1918,31 @@ namespace MapsWPF
             };
         }
 
-        private void MainMap_OnMapDrag()
-        {
-            // Bounds checking is now handled in Core.Drag() and Core.DragOffset()
-        }
-
         // Updates BoundsOfMap in the map control based on settings
+        // Переносить збережену робочу область у GMapControl.
+        // Метод лише встановлює BoundsOfMap. Корекцію zoom і viewport
+        // виконує сам GMapControl через ApplyBoundsOfMapToViewport().
         private void UpdateBoundsOfMap()
         {
+            var savedBounds = GetSavedWorkAreaBounds();
+
             if (_settingsService.StartSettings.IsMapLimitsEnabled &&
-                _settingsService.StartSettings.LimitTopLeftLat.HasValue &&
-                _settingsService.StartSettings.LimitTopLeftLng.HasValue &&
-                _settingsService.StartSettings.LimitBottomRightLat.HasValue &&
-                _settingsService.StartSettings.LimitBottomRightLng.HasValue)
+                savedBounds.HasValue)
             {
-                var topLat = _settingsService.StartSettings.LimitTopLeftLat.Value;
-                var leftLng = _settingsService.StartSettings.LimitTopLeftLng.Value;
-                var bottomLat = _settingsService.StartSettings.LimitBottomRightLat.Value;
-                var rightLng = _settingsService.StartSettings.LimitBottomRightLng.Value;
-
-
-                MainMap.BoundsOfMap = RectLatLng.FromLTRB(leftLng, topLat, rightLng, bottomLat);
+                MainMap.BoundsOfMap = savedBounds.Value;
             }
             else
             {
                 MainMap.BoundsOfMap = null;
             }
+
+            // Після збереження робоча область не повинна малюватися.
+            MainMap.WorkAreaLimitDebugBounds = null;
+            MainMap.IsWorkAreaLimitDebugVisible = false;
+
+            MainMap.InvalidateVisual(true);
         }
 
-        // Map movement limiting - forces position to stay within bounds
-        private void CheckMapLimits(PointLatLng point)
-        {
-            if (!_settingsService.StartSettings.IsMapLimitsEnabled || MainMap.BoundsOfMap == null)
-                return;
-
-
-            var bounds = MainMap.BoundsOfMap.Value;
-            if (!bounds.Contains(point))
-            {
-                // Clamp position to bounds
-                var clampedLat = Math.Max(bounds.Bottom, Math.Min(bounds.Top, point.Lat));
-                var clampedLng = Math.Max(bounds.Left, Math.Min(bounds.Right, point.Lng));
-
-
-                if (point.Lat != clampedLat || point.Lng != clampedLng)
-                {
-                    MainMap.Position = new PointLatLng(clampedLat, clampedLng);
-                }
-            }
-        }
-
-        // When Map Limits are turned on, ensure the current position is moved INSIDE
-        // the allowed rectangle (slightly inside the boundary to avoid exact lock).
         private void EnsurePositionInsideBoundsOnEnable()
         {
             if (!_settingsService.StartSettings.IsMapLimitsEnabled || MainMap.BoundsOfMap == null)
@@ -1243,7 +1979,6 @@ namespace MapsWPF
 
         void MainMap_OnCurrentPositionChanged(PointLatLng point)
         {
-            CheckMapLimits(point);
 
             LabelLatValue.Content = point.Lat.ToString("F8", CultureInfo.InvariantCulture);
             LabelLngValue.Content = point.Lng.ToString("F8", CultureInfo.InvariantCulture);
@@ -1263,24 +1998,24 @@ namespace MapsWPF
                 LabelMGRSValue.Content = "-";
             }
 
-            LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+            LabelZoomValue.Content = MainMap.Zoom.ToString("F1", CultureInfo.InvariantCulture);
         }
 
         void MainMap_OnMapZoomChanged()
         {
             Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
             {
-                LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
+                LabelZoomValue.Content = MainMap.Zoom.ToString("F1", CultureInfo.InvariantCulture);
             }));
         }
 
-        void MainMap_MouseWheel(object sender, MouseWheelEventArgs e)
-        {
-            Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
-            {
-                LabelZoomValue.Content = MainMap.Zoom.ToString(CultureInfo.InvariantCulture);
-            }));
-        }
+        //void MainMap_MouseWheel(object sender, MouseWheelEventArgs e)
+        //{
+        //    Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        //    {
+        //        LabelZoomValue.Content = MainMap.Zoom.ToString("F1", CultureInfo.InvariantCulture);
+        //    }));
+        //}
 
         private void button1_Click(object sender, RoutedEventArgs e)
         {
@@ -1289,12 +2024,22 @@ namespace MapsWPF
 
         private void checkBoxCurrentMarker_Checked(object sender, RoutedEventArgs e)
         {
-            if (currentMarker != null) MainMap.Markers.Add(currentMarker);
+            if (_isInitializing)
+            {
+                return;
+            }
+
+            _targetMarkerManager.ShowMarker();
         }
 
         private void checkBoxCurrentMarker_Unchecked(object sender, RoutedEventArgs e)
         {
-            if (currentMarker != null) MainMap.Markers.Remove(currentMarker);
+            if (_isInitializing)
+            {
+                return;
+            }
+
+            _targetMarkerManager.HideMarker();
         }
 
         private void checkBoxDragMap_Checked(object sender, RoutedEventArgs e)
@@ -1306,7 +2051,6 @@ namespace MapsWPF
         {
             MainMap.CanDragMap = false;
         }
-
         private void button2_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -1364,10 +2108,9 @@ namespace MapsWPF
                             // Automatically place marker if there isn't one? user didn't request that. 
                             // But usually Go means Go there.
 
-                            if (currentMarker != null)
+                            if (_targetMarkerManager.CurrentMarker != null)
                             {
-                                currentMarker.Position = MainMap.Position;
-                                UpdateTargetLocationInfo(currentMarker.Position);
+                                SetTargetPoint(MainMap.Position);
                             }
                         }
                         else
@@ -1393,12 +2136,12 @@ namespace MapsWPF
 
         private void czuZoomUp_Click(object sender, RoutedEventArgs e)
         {
-            MainMap.Zoom = (int)MainMap.Zoom + 1;
+            MainMap.Zoom = MainMap.Zoom + 1;
         }
 
         private void czuZoomDown_Click(object sender, RoutedEventArgs e)
         {
-            MainMap.Zoom = (int)(MainMap.Zoom + 0.99) - 1;
+            MainMap.Zoom = (MainMap.Zoom + 0.99) - 1;
         }
 
         private void button3_Click(object sender, RoutedEventArgs e)
@@ -1505,54 +2248,116 @@ namespace MapsWPF
             }
         }
 
-        private void MainMap_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private void MainMap_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Allow removal without modifiers if double clicking NEAR the attack point
-            var pos = e.GetPosition(MainMap);
-            var latlng = MainMap.FromLocalToLatLng((int)pos.X, (int)pos.Y);
+            if (_workAreaEditor.IsEditing)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            var mousePosition = e.GetPosition(MainMap);
+            var mapPosition = MainMap.FromLocalToLatLng(
+                (int)mousePosition.X,
+                (int)mousePosition.Y
+            );
+
+            bool isCtrlPressed =
+                Keyboard.IsKeyDown(Key.LeftCtrl) ||
+                Keyboard.IsKeyDown(Key.RightCtrl);
+
+            bool isShiftPressed =
+                Keyboard.IsKeyDown(Key.LeftShift) ||
+                Keyboard.IsKeyDown(Key.RightShift);
+
+            bool isAltPressed =
+                Keyboard.IsKeyDown(Key.LeftAlt) ||
+                Keyboard.IsKeyDown(Key.RightAlt);
 
             var now = DateTime.Now;
-            if ((now - _lastClickTime).TotalMilliseconds <= DoubleClickMaxMs) _clickCount++;
-            else _clickCount = 1;
+
+            if ((now - _lastClickTime).TotalMilliseconds <= DoubleClickMaxMs)
+            {
+                _clickCount++;
+            }
+            else
+            {
+                _clickCount = 1;
+            }
+
             _lastClickTime = now;
 
             if (_clickCount >= 2)
             {
                 _clickCount = 0;
 
-                // Task 5: Remove Attack Ray if double clicked near it
                 if (_settingsService.AttackSettings.IsSet)
                 {
-                    var attackP = new PointLatLng(_settingsService.AttackSettings.Lat, _settingsService.AttackSettings.Lng);
-                    var p1 = MainMap.FromLatLngToLocal(attackP);
-                    var p2 = new GMap.NET.GPoint((long)pos.X, (long)pos.Y);
+                    var attackPoint = new PointLatLng(
+                        _settingsService.AttackSettings.Lat,
+                        _settingsService.AttackSettings.Lng
+                    );
 
+                    var attackPointLocal = MainMap.FromLatLngToLocal(attackPoint);
+                    var clickPointLocal = new GMap.NET.GPoint(
+                        (long)mousePosition.X,
+                        (long)mousePosition.Y
+                    );
 
-                    var dist = Math.Sqrt(Math.Pow(p1.X - p2.X, 2) + Math.Pow(p1.Y - p2.Y, 2));
+                    var distance = Math.Sqrt(
+                        Math.Pow(attackPointLocal.X - clickPointLocal.X, 2) +
+                        Math.Pow(attackPointLocal.Y - clickPointLocal.Y, 2)
+                    );
 
-                    // Threshold in pixels (e.g. 20px radius)
-                    if (dist < 30)
+                    if (distance < 30)
                     {
                         _settingsService.AttackSettings.IsSet = false;
+
                         UpdateMapAttackZone();
                         UpdateDistanceDisplay();
+
                         MainMap.InvalidateVisual();
+                        e.Handled = true;
                         return;
                     }
                 }
 
-                if (Keyboard.IsKeyDown(Key.LeftCtrl) && (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift)))
+                if (isCtrlPressed && isShiftPressed)
                 {
-                    // Task 3: Geo-anchored attack point
-                    _settingsService.AttackSettings.Lat = latlng.Lat;
-                    _settingsService.AttackSettings.Lng = latlng.Lng;
+                    _settingsService.AttackSettings.Lat = mapPosition.Lat;
+                    _settingsService.AttackSettings.Lng = mapPosition.Lng;
                     _settingsService.AttackSettings.IsSet = true;
 
                     UpdateMapAttackZone();
                     UpdateDistanceDisplay();
+
                     MainMap.InvalidateVisual();
+                    e.Handled = true;
+                    return;
                 }
+
+                return;
             }
+
+            if (!isCtrlPressed && !isShiftPressed && !isAltPressed)
+            {
+                SetTargetPoint(mapPosition);
+                e.Handled = true;
+            }
+        }
+
+        private int? GetRequiredMaxZoomForActiveBounds()
+        {
+            if (!_settingsService.StartSettings.IsMapLimitsEnabled ||
+                !MainMap.BoundsOfMap.HasValue ||
+                MainMap.BoundsOfMap.Value.IsEmpty ||
+                MainMap.ActualWidth <= 0 ||
+                MainMap.ActualHeight <= 0)
+            {
+                return null;
+            }
+
+            return MainMap.GetMinimumCompatibleMaxZoom();
         }
 
         private void TextBoxAttackAngle_TextChanged(object sender, TextChangedEventArgs e)
@@ -1592,6 +2397,22 @@ namespace MapsWPF
                 UpdateMapAttackZone();
                 InvalidateThrottled();
             }
+        }
+
+        private List<string> ParseFlightCities(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                return new List<string>();
+            }
+
+            return input
+                .Split(new[] { '\r', '\n', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(c => c.Trim())
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .OrderBy(c => c, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
         }
 
         private void ButtonSetServo_Click(object sender, RoutedEventArgs e)
@@ -1729,12 +2550,6 @@ namespace MapsWPF
                     if (iDx != 0 || iDy != 0)
                     {
                         MainMap.Offset(iDx, iDy);
-                        // Task 4: Enforce limits during WASD
-                        if (_settingsService.StartSettings.IsMapLimitsEnabled)
-                        {
-                            CheckMapLimits(MainMap.Position);
-                        }
-
 
                         _wasdAccumX -= iDx; _wasdAccumY -= iDy;
                     }
@@ -1759,64 +2574,214 @@ namespace MapsWPF
             }
         }
 
-        private async System.Threading.Tasks.Task<(string Name, double DistanceKm)?> FindNearestSettlementOverpass(PointLatLng pos)
-        {
-            try
-            {
-                string latStr = pos.Lat.ToString(CultureInfo.InvariantCulture);
-                string lngStr = pos.Lng.ToString(CultureInfo.InvariantCulture);
-                string query = $"[out:json];(node[\"place\"~\"city|town|village|hamlet\"](around:20000,{latStr},{lngStr}););out;";
-                string url = "https://overpass-api.de/api/interpreter?data=" + Uri.EscapeDataString(query);
-
-                using (var request = new HttpRequestMessage(HttpMethod.Get, url))
-                {
-                    request.Headers.UserAgent.ParseAdd("MapsWPF/1.0");
-                    using (var response = await _httpClient.SendAsync(request))
-                    {
-                        if (!response.IsSuccessStatusCode) return null;
-                        using (var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync()))
-                        {
-                            var root = doc.RootElement;
-                            if (!root.TryGetProperty("elements", out var elements)) return null;
-                            string bestName = null; double minDist = double.MaxValue;
-                            foreach (var el in elements.EnumerateArray())
-                            {
-                                if (el.TryGetProperty("tags", out var tags) && tags.TryGetProperty("name", out var nameProp))
-                                {
-                                    string name = nameProp.GetString();
-                                    if (el.TryGetProperty("lat", out var latProp) && el.TryGetProperty("lon", out var lonProp))
-                                    {
-                                        var nodePos = new PointLatLng(latProp.GetDouble(), lonProp.GetDouble());
-                                        double dist = GMapProviders.EmptyProvider.Projection.GetDistance(pos, nodePos);
-                                        if (dist < minDist) { minDist = dist; bestName = name; }
-                                    }
-                                }
-                            }
-
-                            if (bestName != null) return (bestName, minDist);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { Console.WriteLine($"[OVERPASS] Error: {ex.Message}"); }
-            return null;
-        }
-
         // Map Limits Event Handlers
         private void CheckBoxLimitMap_Checked(object sender, RoutedEventArgs e)
         {
+            if (_isUpdatingMapLimitsUi) return;
+
             _settingsService.StartSettings.IsMapLimitsEnabled = true;
+
             UpdateBoundsOfMap();
-            // When enabling Map Limits, if the current position is outside the bounds,
-            // move the map into the nearest allowed point and slightly inside the boundary
-            // to avoid exact-on-boundary locking.
+            EnsureZoomLimitsCompatibleWithBounds();
             EnsurePositionInsideBoundsOnEnable();
+
+            if (MainMap.BoundsOfMap.HasValue)
+            {
+                MainMap.ApplyBoundsOfMapToViewport();
+            }
         }
 
         private void CheckBoxLimitMap_Unchecked(object sender, RoutedEventArgs e)
         {
+            if (_isUpdatingMapLimitsUi) return;
+
             _settingsService.StartSettings.IsMapLimitsEnabled = false;
             UpdateBoundsOfMap();
+
+        }
+
+        private void ButtonEditWorkArea_Click(object sender, RoutedEventArgs e)
+        {
+            EnterWorkAreaEditMode();
+        }
+
+        private void ButtonCancelWorkArea_Click(object sender, RoutedEventArgs e)
+        {
+            _workAreaEditor.CancelEdit();
+
+            RestoreMapAfterWorkAreaEdit(restoreOldBounds: true);
+
+            ButtonEditWorkArea.IsEnabled = true;
+            ButtonSaveWorkArea.Visibility = Visibility.Collapsed;
+            ButtonCancelWorkArea.Visibility = Visibility.Collapsed;
+        }
+
+        private async void ButtonSaveWorkArea_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_workAreaEditor.DraftBounds.HasValue)
+            {
+                MessageBox.Show(
+                    "Спочатку намалюй робочу область на карті.",
+                    "Робоча область",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+
+                return;
+            }
+
+            var savedBounds = _workAreaEditor.DraftBounds.Value;
+
+            SaveWorkAreaBounds(savedBounds);
+
+            // Тимчасово вимкнено на час тесту relation Куп’янська.
+            // _ = RefreshSettlementGeometryCacheForWorkAreaAsync(savedBounds);
+
+            _workAreaEditor.CompleteEdit();
+
+            RestoreMapAfterWorkAreaEdit(restoreOldBounds: false);
+
+            MainMap.ApplyBoundsOfMapToViewport();
+
+            ButtonEditWorkArea.IsEnabled = true;
+            ButtonSaveWorkArea.Visibility = Visibility.Collapsed;
+            ButtonCancelWorkArea.Visibility = Visibility.Collapsed;
+        }
+
+        private RectLatLng? GetSavedWorkAreaBounds()
+        {
+            if (!_settingsService.StartSettings.LimitTopLeftLat.HasValue ||
+                !_settingsService.StartSettings.LimitTopLeftLng.HasValue ||
+                !_settingsService.StartSettings.LimitBottomRightLat.HasValue ||
+                !_settingsService.StartSettings.LimitBottomRightLng.HasValue)
+            {
+                return null;
+            }
+
+            return CreateNormalizedBounds(
+                _settingsService.StartSettings.LimitTopLeftLat.Value,
+                _settingsService.StartSettings.LimitTopLeftLng.Value,
+                _settingsService.StartSettings.LimitBottomRightLat.Value,
+                _settingsService.StartSettings.LimitBottomRightLng.Value
+            );
+        }
+
+        private void EnterWorkAreaEditMode()
+        {
+            _wasTargetMarkerVisibleBeforeWorkAreaEdit =
+                CheckBoxCurrentMarker.IsChecked == true &&
+                _targetMarkerManager.CurrentMarker != null;
+
+            _wasAttackOverlayVisibleBeforeWorkAreaEdit = MainMap.IsAttackPointSet;
+            _boundsBeforeWorkAreaEdit = MainMap.BoundsOfMap ?? GetSavedWorkAreaBounds();
+
+            if (_wasTargetMarkerVisibleBeforeWorkAreaEdit)
+            {
+                _targetMarkerManager.HideMarker();
+            }
+
+            MainMap.IsAttackPointSet = false;
+            MainMap.BoundsOfMap = null;
+
+            MainMap.InvalidateVisual();
+
+            _workAreaEditor.StartEdit();
+
+            if (_boundsBeforeWorkAreaEdit.HasValue)
+            {
+                _workAreaEditor.LoadDraftBounds(_boundsBeforeWorkAreaEdit.Value);
+            }
+
+            ButtonEditWorkArea.IsEnabled = false;
+            ButtonSaveWorkArea.Visibility = Visibility.Visible;
+            ButtonCancelWorkArea.Visibility = Visibility.Visible;
+        }
+
+        private void RestoreMapAfterWorkAreaEdit(bool restoreOldBounds)
+        {
+            if (restoreOldBounds)
+            {
+                MainMap.BoundsOfMap = _boundsBeforeWorkAreaEdit;
+            }
+
+            if (_wasAttackOverlayVisibleBeforeWorkAreaEdit)
+            {
+                UpdateMapAttackZone();
+            }
+            else
+            {
+                MainMap.IsAttackPointSet = false;
+            }
+
+            if (_wasTargetMarkerVisibleBeforeWorkAreaEdit &&
+                CheckBoxCurrentMarker.IsChecked == true)
+            {
+                _targetMarkerManager.ShowMarker();
+            }
+
+            UpdateDistanceDisplay();
+            MainMap.InvalidateVisual();
+
+            _wasTargetMarkerVisibleBeforeWorkAreaEdit = false;
+            _wasAttackOverlayVisibleBeforeWorkAreaEdit = false;
+            _boundsBeforeWorkAreaEdit = null;
+        }
+
+        private void SaveWorkAreaBounds(RectLatLng bounds)
+        {
+            _isUpdatingMapLimitsUi = true;
+
+            try
+            {
+                _settingsService.StartSettings.LimitTopLeftLat = bounds.Top;
+                _settingsService.StartSettings.LimitTopLeftLng = bounds.Left;
+                _settingsService.StartSettings.LimitBottomRightLat = bounds.Bottom;
+                _settingsService.StartSettings.LimitBottomRightLng = bounds.Right;
+                _settingsService.StartSettings.IsMapLimitsEnabled = true;
+
+                CheckBoxLimitMap.IsChecked = true;
+
+                TextBoxLimitTopLeft.Text = FormatLimitPoint(bounds.Top, bounds.Left);
+                TextBoxLimitBottomRight.Text = FormatLimitPoint(bounds.Bottom, bounds.Right);
+            }
+            finally
+            {
+                _isUpdatingMapLimitsUi = false;
+            }
+
+            _settingsService.SaveStartSettings();
+
+            UpdateBoundsOfMap();
+            EnsureZoomLimitsCompatibleWithBounds();
+            EnsurePositionInsideBoundsOnEnable();
+        }
+
+        private string FormatLimitPoint(double lat, double lng)
+        {
+            try
+            {
+                if (_coordinateConverter.TryLatLngToUTM(
+                        lat,
+                        lng,
+                        out System.Drawing.PointF utm,
+                        out int zone,
+                        out char band))
+                {
+                    return _coordinateConverter.FormatUTM(
+                        utm,
+                        zone,
+                        band
+                    );
+                }
+            }
+            catch
+            {
+            }
+
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"{lat}, {lng}"
+            );
         }
 
         // Robust coordinate parser — supports Lat/Lng fallback and explicit UTM parsing.
@@ -1933,6 +2898,8 @@ namespace MapsWPF
 
         private void TextBoxLimitTopLeft_TextChanged(object sender, TextChangedEventArgs e)
         {
+            if (_isUpdatingMapLimitsUi) return;
+
             // For Map Limits we accept ONLY explicit UTM inputs (zone/band or 'UTM' token)
             if (TryParseLatLng(TextBoxLimitTopLeft.Text, out double lat, out double lng, utmOnly: true))
             {
@@ -1951,6 +2918,8 @@ namespace MapsWPF
 
         private void TextBoxLimitBottomRight_TextChanged(object sender, TextChangedEventArgs e)
         {
+            if (_isUpdatingMapLimitsUi) return;
+
             // For Map Limits we accept ONLY explicit UTM inputs (zone/band or 'UTM' token)
             if (TryParseLatLng(TextBoxLimitBottomRight.Text, out double lat, out double lng, utmOnly: true))
             {
@@ -1964,14 +2933,6 @@ namespace MapsWPF
             {
                 TextBoxLimitBottomRight.BorderBrush = System.Windows.Media.Brushes.Red;
                 TextBoxLimitBottomRight.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
-            }
-        }
-
-        private void ButtonResetFlyDirections_Click(object sender, RoutedEventArgs e)
-        {
-            if (ListBoxFlyDirections != null)
-            {
-                ListBoxFlyDirections.SelectedItems.Clear();
             }
         }
 
@@ -2074,19 +3035,166 @@ namespace MapsWPF
             try { CacheStatsUpdateTimer_Tick(null, EventArgs.Empty); } catch { }
         }
 
-        private void ColumnSplitter_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+        private void ColumnSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
         {
             try
             {
-                // Store current right panel column width
-                var width = RightColumn.ActualWidth;
-                if (_settingsService != null && width > 0)
-                {
-                    _settingsService.StartSettings.RightPanelWidth = width;
-                    _settingsService.SaveStartSettings();
-                }
+                MainMap.IsViewportResizeBoundsCorrectionSuspended = false;
+
+                var width = ClampRightPanelWidth(GetCurrentRightPanelWidth());
+
+                SetRightPanelWidth(width);
+
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Render,
+                    new Action(() =>
+                    {
+                        if (_settingsService.StartSettings.IsMapLimitsEnabled &&
+                            MainMap.BoundsOfMap.HasValue)
+                        {
+                            EnsureZoomLimitsCompatibleWithBounds();
+
+                            MainMap.ApplyBoundsOfMapToViewport();
+                        }
+
+                        if (_settingsService != null)
+                        {
+                            _settingsService.StartSettings.RightPanelWidth = width;
+                            _settingsService.SaveStartSettings();
+                        }
+
+                        DebugSplitterState("SPLITTER DRAG COMPLETED AFTER LAYOUT");
+                    })
+                );
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SPLITTER] ERROR: {ex}");
+            }
+        }
+
+        private double GetMaxAllowedRightPanelWidth()
+        {
+            var availableWidth = MainLayoutGrid.ActualWidth;
+
+            if (availableWidth <= 0)
+            {
+                return MaxRightPanelWidth;
+            }
+
+            var maxByMapWidth = availableWidth - SplitterColumn.ActualWidth - MinMapWidth;
+
+            return Math.Max(
+                MinRightPanelWidth,
+                Math.Min(MaxRightPanelWidth, maxByMapWidth)
+            );
+        }
+
+        private double ClampRightPanelWidth(double requestedWidth)
+        {
+            var maxAllowedWidth = GetMaxAllowedRightPanelWidth();
+
+            return Math.Max(
+                MinRightPanelWidth,
+                Math.Min(maxAllowedWidth, requestedWidth)
+            );
+        }
+
+        private void SetRightPanelWidth(double width)
+        {
+            var clampedWidth = ClampRightPanelWidth(width);
+
+            RightColumn.Width = new GridLength(
+                clampedWidth,
+                GridUnitType.Pixel
+            );
+        }
+
+        private void ColumnSplitter_DragDelta(object sender, DragDeltaEventArgs e)
+        {
+            try
+            {
+                var currentWidth = GetCurrentRightPanelWidth();
+
+                var requestedWidth = currentWidth - e.HorizontalChange;
+                var clampedWidth = ClampRightPanelWidth(requestedWidth);
+
+                if (Math.Abs(clampedWidth - currentWidth) < 0.1)
+                {
+                    e.Handled = true;
+                    return;
+                }
+
+                var futureMapWidth = MainLayoutGrid.ActualWidth -
+                                     SplitterColumn.ActualWidth -
+                                     clampedWidth;
+
+                futureMapWidth = Math.Max(
+                    MinMapWidth,
+                    futureMapWidth
+                );
+
+                DebugSplitterState(
+                    "SPLITTER DRAG DELTA BEFORE SET WIDTH",
+                    e.HorizontalChange,
+                    currentWidth,
+                    requestedWidth,
+                    clampedWidth,
+                    futureMapWidth
+                );
+
+                SetRightPanelWidth(clampedWidth);
+
+                DebugSplitterState(
+                    "SPLITTER DRAG DELTA AFTER SET WIDTH IMMEDIATE",
+                    e.HorizontalChange,
+                    currentWidth,
+                    requestedWidth,
+                    clampedWidth,
+                    futureMapWidth
+                );
+
+                Dispatcher.BeginInvoke(
+    DispatcherPriority.Render,
+    new Action(() =>
+    {
+        EnsureZoomLimitsCompatibleWithBounds();
+
+        DebugSplitterState(
+            "SPLITTER DRAG DELTA AFTER LAYOUT",
+            e.HorizontalChange,
+            currentWidth,
+            requestedWidth,
+            clampedWidth,
+            futureMapWidth
+        );
+    })
+);
+
+                e.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SPLITTER] ERROR: {ex}");
+            }
+        }
+
+        private void ColumnSplitter_DragStarted(object sender, DragStartedEventArgs e)
+        {
+            MainMap.IsViewportResizeBoundsCorrectionSuspended = false;
+
+            DebugSplitterState("SPLITTER DRAG STARTED");
+        }
+
+        private double GetCurrentRightPanelWidth()
+        {
+            if (RightColumn.Width.GridUnitType == GridUnitType.Pixel &&
+                RightColumn.Width.Value > 0)
+            {
+                return RightColumn.Width.Value;
+            }
+
+            return RightColumn.ActualWidth;
         }
 
         private void ResetCacheCounters()
@@ -2098,36 +3206,8 @@ namespace MapsWPF
                 GMaps.Instance.TilesFromSQLiteCache = 0;
                 GMaps.Instance.TilesFromNetwork = 0;
 
-                // Reset local heuristic counters (in case they were used elsewhere)
-                _tilesLoadedFromRam = 0;
-                _tilesLoadedFromDisk = 0;
-                _tilesLoadedFromNet = 0;
             }
             catch { }
-        }
-
-
-        public static bool PingNetwork(string hostNameOrAddress)
-        {
-            bool pingStatus;
-
-            using (var p = new Ping())
-            {
-                byte[] buffer = Encoding.ASCII.GetBytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-                int timeout = 5000; // 5sg
-
-                try
-                {
-                    var reply = p.Send(hostNameOrAddress, timeout, buffer);
-                    pingStatus = reply.Status == IPStatus.Success;
-                }
-                catch (Exception)
-                {
-                    pingStatus = false;
-                }
-            }
-
-            return pingStatus;
         }
 
         private void CheckBoxZoomLimits_Checked(object sender, RoutedEventArgs e)
@@ -2154,46 +3234,123 @@ namespace MapsWPF
 
         private void ValidateAndApplyZoomLimits()
         {
-            if (!IsLoaded) return;
-
-            bool minOk = int.TryParse(TextBoxMinZoom.Text, out int minZ);
-            bool maxOk = int.TryParse(TextBoxMaxZoom.Text, out int maxZ);
-
-            bool minValid = minOk && minZ >= 1 && minZ <= 24;
-            bool maxValid = maxOk && maxZ >= 1 && maxZ <= 24;
-
-            if (minValid)
+            if (!IsLoaded || _isUpdatingZoomLimitsUi)
             {
-                TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Gray;
-            }
-            else
-            {
-                TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+                return;
             }
 
-            if (maxValid)
+            var minParsed = int.TryParse(TextBoxMinZoom.Text, out var minZoom);
+            var maxParsed = int.TryParse(TextBoxMaxZoom.Text, out var maxZoom);
+
+            var minValid =
+                minParsed &&
+                minZoom >= TechnicalMinZoom &&
+                minZoom <= TechnicalMaxZoom;
+
+            var maxValid =
+                maxParsed &&
+                maxZoom >= TechnicalMinZoom &&
+                maxZoom <= TechnicalMaxZoom;
+
+            TextBoxMinZoom.BorderBrush = minValid
+                ? Brushes.Gray
+                : Brushes.Red;
+
+            TextBoxMaxZoom.BorderBrush = maxValid
+                ? Brushes.Gray
+                : Brushes.Red;
+
+            TextBoxMinZoom.ToolTip = null;
+            TextBoxMaxZoom.ToolTip = null;
+
+            if (!minValid || !maxValid)
             {
-                TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Gray;
-            }
-            else
-            {
-                TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Red;
+                return;
             }
 
-            if (minValid && maxValid)
+            if (minZoom > maxZoom)
             {
-                if (minZ <= maxZ)
-                {
-                    _settingsService.StartSettings.MinZoom = minZ;
-                    _settingsService.StartSettings.MaxZoom = maxZ;
-                    ApplyZoomLimits();
-                }
-                else
-                {
-                    TextBoxMinZoom.BorderBrush = System.Windows.Media.Brushes.Red;
-                    TextBoxMaxZoom.BorderBrush = System.Windows.Media.Brushes.Red;
-                }
+                TextBoxMinZoom.BorderBrush = Brushes.Red;
+                TextBoxMaxZoom.BorderBrush = Brushes.Red;
+
+                TextBoxMaxZoom.ToolTip =
+                    "Максимальний zoom не може бути меншим за мінімальний.";
+
+                return;
             }
+
+            var requiredMaxZoom = GetRequiredMaxZoomForActiveBounds();
+
+            if (requiredMaxZoom.HasValue &&
+                maxZoom < requiredMaxZoom.Value)
+            {
+                TextBoxMaxZoom.BorderBrush = Brushes.Red;
+
+                TextBoxMaxZoom.ToolTip =
+                    $"Для поточної робочої області потрібен MaxZoom не менше {requiredMaxZoom.Value}.";
+
+                return;
+            }
+
+            _settingsService.StartSettings.MinZoom = minZoom;
+            _settingsService.StartSettings.MaxZoom = maxZoom;
+
+            ApplyZoomLimits();
+        }
+
+        // Перевіряє, чи поточний користувацький MaxZoom дозволяє
+        // виконати BoundsOfMap після зміни розміру viewport.
+        //
+        // Якщо MaxZoom став недостатнім через resize карти,
+        // він автоматично піднімається до найменшого сумісного значення.
+        private void EnsureZoomLimitsCompatibleWithBounds()
+        {
+            if (!_settingsService.StartSettings.IsZoomLimitsEnabled)
+            {
+                return;
+            }
+
+            var requiredMaxZoom = GetRequiredMaxZoomForActiveBounds();
+
+            if (!requiredMaxZoom.HasValue ||
+                requiredMaxZoom.Value <= _settingsService.StartSettings.MaxZoom)
+            {
+                return;
+            }
+
+            if (requiredMaxZoom.Value > TechnicalMaxZoom)
+            {
+                TextBoxMaxZoom.BorderBrush = Brushes.Red;
+                TextBoxMaxZoom.ToolTip =
+                    "Робоча область надто мала для поточного розміру карти навіть при MaxZoom 24.";
+
+                return;
+            }
+
+            _isUpdatingZoomLimitsUi = true;
+
+            try
+            {
+                _settingsService.StartSettings.MaxZoom = requiredMaxZoom.Value;
+
+                MainMap.MaxZoom = requiredMaxZoom.Value;
+
+                TextBoxMaxZoom.Text = requiredMaxZoom.Value.ToString(
+                    CultureInfo.InvariantCulture
+                );
+
+                TextBoxMaxZoom.BorderBrush = Brushes.Gray;
+                TextBoxMaxZoom.ToolTip =
+                    $"MaxZoom автоматично піднято до {requiredMaxZoom.Value}, щоб робоча область залишалась коректною.";
+            }
+            finally
+            {
+                _isUpdatingZoomLimitsUi = false;
+            }
+
+            _settingsService.SaveStartSettings();
+
+            MainMap.ApplyBoundsOfMapToViewport();
         }
 
         private void ApplyZoomLimits()
@@ -2246,6 +3403,33 @@ namespace MapsWPF
             catch { }
         }
 
+        private void UpdateFlightCitiesList()
+        {
+            var input = TextBoxFlightDirection?.Text ?? string.Empty;
+            var cities = ParseFlightCities(input);
+
+            ListBoxFlightCities.ItemsSource = cities.Count > 0
+                ? cities
+                : null;
+        }
+
+        private void RemoveInvalidSelectedFlightCities()
+        {
+            var input = TextBoxFlightDirection?.Text ?? string.Empty;
+            var availableCities = ParseFlightCities(input);
+
+            var selected = _settingsService.StartSettings.SelectedFlightCities
+                ?? new List<string>();
+
+            var validSelected = selected
+                .Where(x => availableCities.Contains(x, StringComparer.CurrentCultureIgnoreCase))
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+
+            _settingsService.StartSettings.SelectedFlightCities = validSelected;
+            _lastSavedSelectedCities = new List<string>(validSelected);
+        }
+
         private void ButtonStartOfWork_Click(object sender, RoutedEventArgs e)
         {
             if (_reportService != null)
@@ -2286,54 +3470,100 @@ namespace MapsWPF
             }
         }
 
+        private double GetDistanceFromLabel()
+        {
+            try
+            {
+                if (LabelDistanceValue.Content is string text && !string.IsNullOrWhiteSpace(text))
+                {
+                    // Очікуємо формат "X.X km"
+                    string numberPart = text.Replace("km", "").Trim();
+                    if (double.TryParse(numberPart, NumberStyles.Any, CultureInfo.InvariantCulture, out double km))
+                        return km;
+                }
+            }
+            catch { }
+            return 0;
+        }
+
         // Minimal IReportContext implementation to start migration
         public string GetSelectedPosition() => ComboBoxPosition?.Text ?? string.Empty;
         public string GetSelectedPilot() => ComboBoxPilot?.Text ?? string.Empty;
         public string GetSelectedDrone() => ComboBoxDroneBy?.Text ?? string.Empty;
-        public IEnumerable<string> GetLocalCities() => _templateService?.LocalCiti ?? new List<string>();
+
         public string GetShootingTarget() => ComboBoxTargetType?.Text ?? string.Empty;
         public string GetHeightText() => TextBoxHeight?.Text ?? string.Empty;
         public int GetSelectedRange()
         {
             try
             {
-                if (int.TryParse(TextBoxRange?.Text ?? string.Empty, System.Globalization.NumberStyles.Integer, CultureInfo.InvariantCulture, out int r))
-                    return r;
+                // LabelDistanceValue.Content містить рядок формату "X.X km"
+                if (LabelDistanceValue.Content is string text && !string.IsNullOrWhiteSpace(text))
+                {
+                    // Відрізаємо " km" і пробіли
+                    string numberPart = text.Replace("km", "").Trim();
+
+                    // Спочатку парсимо як double, потім округлюємо до int
+                    if (double.TryParse(numberPart, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out double km))
+                        return (int)Math.Round(km);
+                }
             }
             catch { }
             return 0;
         }
 
-        public bool TryGetUTM(out System.Drawing.PointF utm)
+        private bool TryGetTargetMarkerUtm(out System.Drawing.PointF utm)
         {
             utm = System.Drawing.PointF.Empty;
+
+            var targetMarker = _targetMarkerManager.CurrentMarker;
+
+            if (targetMarker == null)
+            {
+                return false;
+            }
+
+            var position = targetMarker.Position;
+
             try
             {
-                if (currentMarker != null)
+                if (_mapService != null &&
+                    _mapService.TryLatLngToUTM(
+                        position.Lat,
+                        position.Lng,
+                        out var result,
+                        out var zone,
+                        out var band))
                 {
-                    if (_mapService != null)
-                    {
-                        if (_mapService.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var result, out var zone, out var band))
-                        {
-                            utm = result;
-                            _lastUtmZone = zone;
-                            _lastUtmBand = band;
-                            return true;
-                        }
-                    }
+                    utm = result;
+                    _lastUtmZone = zone;
+                    _lastUtmBand = band;
+                    return true;
+                }
 
-                    // fallback to direct converter
-                    if (_coordinateConverter.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var fallback, out var fzone, out var fband))
-                    {
-                        utm = fallback;
-                        _lastUtmZone = fzone;
-                        _lastUtmBand = fband;
-                        return true;
-                    }
+                if (_coordinateConverter.TryLatLngToUTM(
+                        position.Lat,
+                        position.Lng,
+                        out var fallback,
+                        out var fallbackZone,
+                        out var fallbackBand))
+                {
+                    utm = fallback;
+                    _lastUtmZone = fallbackZone;
+                    _lastUtmBand = fallbackBand;
+                    return true;
                 }
             }
-            catch { }
+            catch
+            {
+            }
+
             return false;
+        }
+
+        public bool TryGetUTM(out System.Drawing.PointF utm)
+        {
+            return TryGetTargetMarkerUtm(out utm);
         }
 
         public string FormatShortMGRSFromUTM(System.Drawing.PointF utm)
@@ -2346,32 +3576,30 @@ namespace MapsWPF
             return "-";
         }
 
-        public IEnumerable<string> GetSelectedFlyDirections()
-        {
-            if (ListBoxFlyDirections == null || ListBoxFlyDirections.SelectedItems == null) return new List<string>();
-            return ListBoxFlyDirections.SelectedItems.Cast<string>();
-        }
-
         public string FindClosestLocality(System.Drawing.PointF utm)
         {
-            // Reuse existing reverse geocoding based on lat/lng
             if (_coordinateConverter.TryUTMToLatLng(utm, out double lat, out double lng))
             {
-                var latlng = new GMap.NET.PointLatLng(lat, lng);
+                var latlng = new PointLatLng(lat, lng);
                 return FindNearestLocality(latlng);
             }
-            return "Невідомо";
+
+            return string.Empty;
         }
 
         public bool TryGetClickedLatLng(out PointLatLng latlng)
         {
             latlng = PointLatLng.Empty;
-            if (currentMarker != null)
+
+            var targetMarker = _targetMarkerManager.CurrentMarker;
+
+            if (targetMarker == null)
             {
-                latlng = currentMarker.Position;
-                return true;
+                return false;
             }
-            return false;
+
+            latlng = targetMarker.Position;
+            return true;
         }
 
         public string FormatShortMGRSFromLatLng(PointLatLng latlng)
@@ -2388,14 +3616,230 @@ namespace MapsWPF
             return FindNearestLocality(latlng);
         }
 
-        public string GetTargetType() => ComboBoxTargetType?.Text ?? "-";
+        public string GetTargetType()
+        {
+            return ComboBoxTargetType?.Text ?? string.Empty;
+        }
 
         private string FindNearestLocality(PointLatLng latlng)
         {
-            // Return last cached locality if available, otherwise placeholder
-            if (!string.IsNullOrEmpty(_settingsService?.StartSettings?.LastTargetLocationName))
-                return _settingsService.StartSettings.LastTargetLocationName;
-            return "Невідомо";
+            if (TryFindNearestSettlementFromGeometryCache(latlng, out var settlementResult))
+            {
+                return settlementResult.Name;
+            }
+
+            if (_settingsService?.StartSettings == null)
+            {
+                return string.Empty;
+            }
+
+            var settings = _settingsService.StartSettings;
+
+            if (!settings.CachedTargetLat.HasValue ||
+                !settings.CachedTargetLng.HasValue)
+            {
+                return string.Empty;
+            }
+
+            var cachedPoint = new PointLatLng(
+                settings.CachedTargetLat.Value,
+                settings.CachedTargetLng.Value
+            );
+
+            if (!AreSamePoint(cachedPoint, latlng))
+            {
+                return string.Empty;
+            }
+
+            var cachedLocality = NormalizeLocalityName(settings.LastTargetLocationName);
+
+            return IsUsableSettlementName(cachedLocality)
+                ? cachedLocality
+                : string.Empty;
+        }
+
+        private bool TryFindNearestSettlementFromGeometryCache(
+    PointLatLng latlng,
+    out SettlementSearchResult result)
+        {
+            result = new SettlementSearchResult();
+
+            if (_settlementGeometryService == null ||
+                !_settlementGeometryService.HasSettlements)
+            {
+                return false;
+            }
+
+            if (!TryConvertLatLngToUtm(latlng, out var utm))
+            {
+                return false;
+            }
+
+            if (!_settlementGeometryService.TryFindSettlement(utm, out var found))
+            {
+                return false;
+            }
+
+            var name = NormalizeLocalityName(found.Name);
+
+            if (!IsUsableSettlementName(name))
+            {
+                return false;
+            }
+
+            found.Name = name;
+            result = found;
+
+            return true;
+        }
+
+        private bool TryConvertLatLngToUtm(
+            PointLatLng latlng,
+            out System.Drawing.PointF utm)
+        {
+            utm = System.Drawing.PointF.Empty;
+
+            try
+            {
+                if (_mapService != null &&
+                    _mapService.TryLatLngToUTM(
+                        latlng.Lat,
+                        latlng.Lng,
+                        out var mapServiceUtm,
+                        out var mapServiceZone,
+                        out var mapServiceBand))
+                {
+                    utm = mapServiceUtm;
+                    _lastUtmZone = mapServiceZone;
+                    _lastUtmBand = mapServiceBand;
+                    return true;
+                }
+
+                if (_coordinateConverter.TryLatLngToUTM(
+                        latlng.Lat,
+                        latlng.Lng,
+                        out var converterUtm,
+                        out var converterZone,
+                        out var converterBand))
+                {
+                    utm = converterUtm;
+                    _lastUtmZone = converterZone;
+                    _lastUtmBand = converterBand;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static string BuildSettlementAddressText(SettlementSearchResult result)
+        {
+            if (result == null || string.IsNullOrWhiteSpace(result.Name))
+            {
+                return string.Empty;
+            }
+
+            if (result.IsInsidePolygon)
+            {
+                return "точка в межах НП";
+            }
+
+            var distanceKm = result.DistanceMeters / 1000.0;
+
+            return "до межі НП: " +
+                   distanceKm.ToString("F1", CultureInfo.InvariantCulture) +
+                   " км";
+        }
+
+        private static bool AreSamePoint(PointLatLng a, PointLatLng b)
+        {
+            return Math.Abs(a.Lat - b.Lat) < 0.000001 &&
+                   Math.Abs(a.Lng - b.Lng) < 0.000001;
+        }
+
+        private static string NormalizeLocalityName(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.Trim();
+        }
+
+        private static bool IsUsableSettlementName(string? value)
+        {
+            var name = NormalizeLocalityName(value);
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            var lower = name.ToLower(new CultureInfo("uk-UA"));
+
+            string[] blockedWords =
+            {
+        "область",
+        "район",
+        "територіальна громада",
+        "міська громада",
+        "селищна громада",
+        "сільська громада",
+        "громада",
+        "україна",
+        "ukraine",
+        "невідомо",
+        "не знайдено"
+    };
+
+            if (blockedWords.Any(lower.Contains))
+            {
+                return false;
+            }
+
+            string[] addressObjectWords =
+            {
+        "вулиця",
+        "вул.",
+        "площа",
+        "проспект",
+        "пр-т",
+        "провулок",
+        "узвіз",
+        "бульвар",
+        "набережна",
+        "дорога",
+        "шосе",
+        "траса",
+        "станція",
+        "зупинка",
+        "стадіон",
+        "ринок",
+        "парк",
+        "кладовище",
+        "урочище",
+        "мікрорайон",
+
+        "улица",
+        "площадь",
+        "проспект",
+        "переулок",
+        "дорога",
+        "шоссе",
+        "станция",
+        "остановка",
+        "стадион",
+        "рынок",
+        "парк"
+    };
+
+            if (addressObjectWords.Any(lower.Contains))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private DateTime _reportStartTime = DateTime.MinValue;
@@ -2407,7 +3851,19 @@ namespace MapsWPF
 
         public string GetCurrentTimeString() => DateTime.Now.ToString("HH.mm");
 
-        public TemplateService GetShablon() => _templateService ?? (_templateService = new TemplateService());
+        public TemplateService GetShablon()
+        {
+            if (_templateService != null)
+                return _templateService;
+
+            if (_reportService?.TemplateService != null)
+            {
+                _templateService = _reportService.TemplateService;
+                return _templateService;
+            }
+
+            throw new InvalidOperationException("TemplateService не ініціалізовано.");
+        }
 
         public bool IsTargetDestroyed() => CheckBoxTargetDestroyed.IsChecked == true;
         public bool IsTargetBoardLost() => CheckBoxTargetBoard.IsChecked != true;
@@ -2443,25 +3899,11 @@ namespace MapsWPF
 
         public System.Drawing.PointF? GetClickedPoint()
         {
-            if (currentMarker != null)
+            if (TryGetTargetMarkerUtm(out var utm))
             {
-                if (_mapService != null)
-                {
-                    if (_mapService.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var utm, out var zone, out var band))
-                    {
-                        _lastUtmZone = zone;
-                        _lastUtmBand = band;
-                        return utm;
-                    }
-                }
-
-                if (_coordinateConverter.TryLatLngToUTM(currentMarker.Position.Lat, currentMarker.Position.Lng, out var fallbackUtm, out var fzone, out var fband))
-                {
-                    _lastUtmZone = fzone;
-                    _lastUtmBand = fband;
-                    return fallbackUtm;
-                }
+                return utm;
             }
+
             return null;
         }
 
@@ -2493,6 +3935,18 @@ namespace MapsWPF
             return System.Drawing.PointF.Empty;
         }
 
+        private void SaveSelectedFlightCities()
+        {
+            try
+            {
+                var selected = ListBoxFlightCities.SelectedItems.Cast<string>().ToList();
+                _settingsService.StartSettings.SelectedFlightCities = selected;
+                _settingsService.SaveStartSettings();
+                _lastSavedSelectedCities = new List<string>(selected);
+            }
+            catch { }
+        }
+
         public string GetLabelScaleText()
         {
             return LabelAngleValue?.Content?.ToString() ?? "-";
@@ -2513,41 +3967,50 @@ namespace MapsWPF
         {
             try
             {
-                var names = (_templateService?.Templates != null && _templateService.Templates.Count > 0) ? _templateService.Templates.Keys.OrderBy(k => k).ToList() : new List<string> { "Report", "StartWork", "EndWork" }; // use named templates from JSON if available
-
-                Dispatcher.Invoke(() =>
-                {
-                    try
-                    {
-                        // ComboBoxTemplateSelect.ItemsSource is bound in XAML to TemplateEditorViewModel.TemplateNames
-                        // Preserve selection across refreshes: if user had a selection, restore it when templates reload; otherwise keep current.
-                        var prev = ComboBoxTemplateSelect.SelectedItem as string;
-                        if (!string.IsNullOrWhiteSpace(prev) && names.Contains(prev))
-                        {
-                            ComboBoxTemplateSelect.SelectedItem = prev;
-                        }
-                        else if (ComboBoxTemplateSelect.SelectedItem == null && names.Count > 0)
-                        {
-                            // Only select default when nothing was selected at all
-                            ComboBoxTemplateSelect.SelectedItem = names.First();
-                        }
-                        // ComboBoxUnitName is bound to TemplateEditorViewModel.UnitsHistory and TemplateEditorViewModel.CustomUnit (keep binding in XAML)
-                        // ComboBoxLaunchArea is bound to TemplateEditorViewModel.LaunchAreasHistory and TemplateEditorViewModel.LaunchArea (keep binding in XAML)
-                        // ComboBoxTargetType is bound to TemplateEditorViewModel.Targets and SelectedTarget (keep binding in XAML)
-                    }
-                    catch { }
-                });
+                // Після переходу на 3 окремі кнопки генерації
+                // у вкладці "Звіти" більше немає ComboBoxTemplateSelect.
+                //
+                // Списки шаблонів, позицій, пілотів, дронів і цілей
+                // оновлює TemplateEditorViewModel через binding.
+                //
+                // ComboBox редактора шаблонів залишився окремо:
+                // ComboBoxTemplateSelectSettings.
             }
-            catch { }
+            catch
+            {
+            }
         }
 
         // Allow external injection of TemplateService (so DI can provide singleton instance)
         public void SetTemplateService(Services.TemplateService templateService)
         {
-            if (templateService == null) throw new ArgumentNullException(nameof(templateService));
+            if (templateService == null)
+            {
+                throw new ArgumentNullException(nameof(templateService));
+            }
+
+            if (_reportService != null &&
+                !ReferenceEquals(_reportService.TemplateService, templateService))
+            {
+                templateService = _reportService.TemplateService;
+            }
+
             _templateService = templateService;
-            try { _templateService.LoadAllData(); } catch { }
-            try { RefreshTemplatesAndHistories(); } catch { }
+
+            try
+            {
+                _templateService.LoadAllData();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TemplateService load failed: {ex.Message}");
+            }
+
+            try
+            {
+                RefreshTemplatesAndHistories();
+            }
+            catch { }
         }
 
         private void ComboBoxTemplateSelectSettings_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2570,10 +4033,10 @@ namespace MapsWPF
             // No diagnostic logging (exceptions only)
         }
 
-        private void ComboBoxTemplateSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            // Auto-generation removed as per request
-        }
+        //private void ComboBoxTemplateSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        //{
+        //    // Auto-generation removed as per request
+        //}
 
         // Allow external injection of NotificationService (subscribe handler) and ClipboardService
         public void SetNotificationService(Services.NotificationService notificationService)
@@ -2593,31 +4056,69 @@ namespace MapsWPF
         // Initialize ReportService and set up ReportViewModel + TemplateEditorViewModel
         public void InitializeReportService(ReportService reportService)
         {
-            if (reportService == null) throw new ArgumentNullException(nameof(reportService));
+            if (reportService == null)
+            {
+                throw new ArgumentNullException(nameof(reportService));
+            }
+
             _reportService = reportService;
 
-            // Report VM
-            var reportVm = new ViewModels.ReportViewModel(_reportService, _clipboardService, _notificationService);
+            // Важливо: редактор шаблонів і ReportService мають використовувати один TemplateService.
+            _templateService = _reportService.TemplateService;
+
+            try
+            {
+                _templateService.LoadAllData();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TemplateService load failed: {ex.Message}");
+            }
+
+            var reportVm = new ViewModels.ReportViewModel(
+                _reportService,
+                _clipboardService,
+                _notificationService
+            );
+
             this.DataContext = reportVm;
-            // Ensure default selection exists for reports combo
-            if (string.IsNullOrWhiteSpace(reportVm.SelectedReportTemplate)) reportVm.SelectedReportTemplate = "Report";
 
-            // Template editor VM uses ReportService to generate text
+            if (string.IsNullOrWhiteSpace(reportVm.SelectedReportTemplate))
+            {
+                reportVm.SelectedReportTemplate = "Report";
+            }
 
-            var templateVm = new ViewModels.TemplateEditorViewModel(_templateService, _notificationService, _statisticsService,
-                lines => _reportService != null ? _reportService.GenerateTextFromTemplate(lines) : string.Empty,
-                generated => { SetReportText(generated); _notificationService?.Notify("Згенеровано звіт", NotificationType.Info); });
-            try { TemplateEditorGroup.DataContext = templateVm; } catch { }
+            var templateVm = new ViewModels.TemplateEditorViewModel(
+                _templateService,
+                _notificationService,
+                _statisticsService,
+                (templateName, lines) => _reportService != null
+                    ? _reportService.GenerateTextFromTemplateEditor(templateName, lines)
+                    : string.Empty,
+                generated =>
+                {
+                    if (string.IsNullOrWhiteSpace(generated))
+                    {
+                        return;
+                    }
 
-            try { RefreshTemplatesAndHistories(); } catch { }
+                    SetReportText(generated);
+                    _notificationService?.Notify("Згенеровано звіт", NotificationType.Info);
+                }
+            );
+
+            try
+            {
+                TemplateEditorGroup.DataContext = templateVm;
+            }
+            catch { }
+
+            try
+            {
+                RefreshTemplatesAndHistories();
+            }
+            catch { }
         }
     }
 
-    public class MapValidationRule : ValidationRule
-    {
-        public override ValidationResult Validate(object value, CultureInfo cultureInfo)
-        {
-            return new ValidationResult(true, null);
-        }
-    }
 }

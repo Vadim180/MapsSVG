@@ -1,9 +1,10 @@
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Runtime.CompilerServices;
-using Newtonsoft.Json;
 
 namespace MapsWPF.Models
 {
@@ -11,7 +12,10 @@ namespace MapsWPF.Models
     {
         public double Lat { get; set; } = 50.4501;
         public double Lng { get; set; } = 30.52001953125;
-        public int Zoom { get; set; } = 11;
+        public double Zoom { get; set; } = 6.2;
+
+        public string FlightDirectionCities { get; set; } = string.Empty;
+        public List<string> SelectedFlightCities { get; set; } = new List<string>();
 
         // Map Provider
         public string MapProviderName { get; set; } = "GoogleHybridMap";
@@ -34,19 +38,20 @@ namespace MapsWPF.Models
 
         // UI Settings
         public bool ShowGrid { get; set; } = false;
-        public bool ShowCoordinates { get; set; } = false;
+        public bool ShowCoordinates { get; set; } = true;
 
         // Expander States
         public bool IsCoordinatesExpanded { get; set; } = true;
-        public bool IsGmapExpanded { get; set; } = true;
-        public bool IsCacheExpanded { get; set; } = true;
-        public bool IsGoExpanded { get; set; } = true;
-        public bool IsRayExpanded { get; set; } = true;
+        public bool IsGmapExpanded { get; set; } = false;
+        public bool IsCacheExpanded { get; set; } = false;
+        public bool IsGoExpanded { get; set; } = false;
+        public bool IsRayExpanded { get; set; } = false;
         public bool IsTargetExpanded { get; set; } = true;
         public bool IsMapLimitsExpanded { get; set; } = true;
+        public bool IsFlightDirectionExpanded { get; set; } = false;
 
         // Selected tab index in the right panel (nullable for backward compatibility)
-        public int? SelectedRightTabIndex { get; set; }
+        public int? SelectedRightTabIndex { get; set; } = 1;
 
         // Map Limits
         public bool IsMapLimitsEnabled { get; set; } = false;

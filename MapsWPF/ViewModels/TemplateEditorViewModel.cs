@@ -16,11 +16,9 @@ namespace MapsWPF.ViewModels
 
         private string _templateText = string.Empty;
         private string _selectedTemplate = string.Empty;
-        private string _customUnit = string.Empty;
-        private string _launchArea = string.Empty;
         private bool _templatesInitialized = false;
 
-        public TemplateEditorViewModel(TemplateService templateService, NotificationService? notificationService, StatisticsService? statisticsService, Func<System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
+        public TemplateEditorViewModel(TemplateService templateService, NotificationService? notificationService, StatisticsService? statisticsService, Func<string, System.Collections.Generic.List<string>, string>? generateFunc = null, Action<string>? onGenerated = null)
         {
             _templateService = templateService ?? throw new ArgumentNullException(nameof(templateService));
             _notificationService = notificationService;
@@ -31,8 +29,6 @@ namespace MapsWPF.ViewModels
             SaveCommand = new RelayCommand(_ => ExecuteSave());
             ResetCommand = new RelayCommand(_ => ExecuteReset());
             LoadDefaultCommand = new RelayCommand(_ => ExecuteLoadDefault());
-            SaveLaunchAreaCommand = new RelayCommand(_ => ExecuteSaveLaunchArea());
-            SetUnitNameCommand = new RelayCommand(_ => ExecuteSetUnitName());
             GenerateCommand = new RelayCommand(_ => ExecuteGenerate());
 
 
@@ -41,24 +37,16 @@ namespace MapsWPF.ViewModels
 
             // Placeholders for UI
             Placeholders = new[] {
-                "{height}", "{Frequencies}", "{Purpose}", "{Direction}", "{LaunchArea}", "{UnitName}", "{MGRS_Short}", "{CurrentCoordMGRS}", "{CurrentCoordUTM}", "{azimyth}", "{range}", "{Time}", "{Position}", "{Pilot}", "{DroneBy}", "{ShootingTarget}", "{TargetType}", "{TargetStatus}", "{Expenses}", "{AdditionalInfo}"
+                "{height}", "{Frequencies}", "{Purpose}", "{Direction}", "{UnitName}", "{MGRS_Short}", "{CurrentCoordMGRS}", "{CurrentCoordUTM}", "{azimyth}", "{range}", "{Time}", "{Position}", "{Pilot}", "{DroneBy}", "{ShootingTarget}", "{TargetType}", "{TargetStatus}", "{Expenses}", "{AdditionalInfo}"
             };
 
             // Initialize from service (RefreshLists will set initial SelectedTemplate to first template loaded)
             RefreshLists();
-            CustomUnit = _templateService.CustomUnit;
-            LaunchArea = _templateService.LaunchArea;
 
             // Load persisted last values (do not override user-selected defaults unless present)
             LastHeight = _templateService.LastHeight ?? string.Empty;
             Frequencies = _templateService.Frequencies ?? string.Empty;
             Purpose = _templateService.Purpose ?? string.Empty;
-            // Load fly directions if present
-            if (_templateService.FlyDirectionList != null && _templateService.FlyDirectionList.Count > 0)
-            {
-                FlyDirectionList.Clear();
-                foreach (var fd in _templateService.FlyDirectionList) FlyDirectionList.Add(fd);
-            }
 
             // report defaults
             DefaultTargetStatus = _templateService.DefaultTargetStatus ?? "Ціль знищено.";
@@ -75,25 +63,19 @@ namespace MapsWPF.ViewModels
         public ICommand SaveCommand { get; }
         public ICommand ResetCommand { get; }
         public ICommand LoadDefaultCommand { get; }
-        public ICommand SaveLaunchAreaCommand { get; }
-        public ICommand SetUnitNameCommand { get; }
         public ICommand GenerateCommand { get; }
-        
 
-        private readonly Func<System.Collections.Generic.List<string>, string>? _generateFunc;
+
+        private readonly Func<string, System.Collections.Generic.List<string>, string>? _generateFunc;
         private readonly Action<string>? _onGenerated;
 
         public string[] Placeholders { get; private set; }
 
         public ObservableCollection<string> TemplateNames { get; private set; } = new();
         public ObservableCollection<string> Targets { get; private set; } = new();
-        public ObservableCollection<string> UnitsHistory { get; private set; } = new();
-        public ObservableCollection<string> LaunchAreasHistory { get; private set; } = new();
         public ObservableCollection<string> PositionNames { get; private set; } = new();
         public ObservableCollection<string> Pilots { get; private set; } = new();
         public ObservableCollection<string> Drones { get; private set; } = new();
-
-        public ObservableCollection<string> FlyDirectionList { get; private set; } = new();
 
         public ObservableCollection<MapsWPF.Models.StatisticRecord>? Records => _statisticsService?.Records;
 
@@ -289,34 +271,6 @@ namespace MapsWPF.ViewModels
             }
         }
 
-        public string CustomUnit
-        {
-            get => _customUnit;
-            set
-            {
-                if (_customUnit != value)
-                {
-                    _customUnit = value ?? string.Empty;
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomUnit)));
-                    try { _templateService.SaveCustomUnit(_customUnit); } catch { }
-                }
-            }
-        }
-
-        public string LaunchArea
-        {
-            get => _launchArea;
-            set
-            {
-                if (_launchArea != value)
-                {
-                    _launchArea = value ?? string.Empty;
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LaunchArea)));
-                    try { _templateService.SaveLaunchArea(_launchArea); } catch { }
-                }
-            }
-        }
-
         private bool _rotateAfterGenerate = false;
         public bool RotateAfterGenerate
         {
@@ -338,6 +292,16 @@ namespace MapsWPF.ViewModels
             {
                 var lines = TemplateText?.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(l => l.Trim()).Where(l => !string.IsNullOrEmpty(l)).ToList() ?? new System.Collections.Generic.List<string>();
+
+                if (lines.Count == 0)
+                {
+                    _notificationService?.Notify(
+                        "Неможливо зберегти порожній шаблон.",
+                        NotificationType.Warning
+                    );
+
+                    return;
+                }
 
                 // Save current template by selected name
                 var name = string.IsNullOrWhiteSpace(SelectedTemplate) ? "Report" : SelectedTemplate;
@@ -381,48 +345,6 @@ namespace MapsWPF.ViewModels
             }
         }
 
-        private void ExecuteSaveLaunchArea()
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(LaunchArea))
-                {
-                    _templateService.SaveLaunchArea(LaunchArea);
-                    RefreshLists();
-                    _notificationService?.Notify("LaunchArea збережено", NotificationType.Info);
-                }
-                else
-                {
-                    _notificationService?.Notify("Введіть LaunchArea", NotificationType.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                _notificationService?.Notify($"Помилка: {ex.Message}", NotificationType.Error);
-            }
-        }
-
-        private void ExecuteSetUnitName()
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(CustomUnit))
-                {
-                    _templateService.SaveCustomUnit(CustomUnit);
-                    RefreshLists();
-                    _notificationService?.Notify("Ім'я підрозділу встановлено", NotificationType.Info);
-                }
-                else
-                {
-                    _notificationService?.Notify("Введіть ім'я підрозділу", NotificationType.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                _notificationService?.Notify($"Помилка: {ex.Message}", NotificationType.Error);
-            }
-        }
-
         private async void ExecuteGenerate()
         {
             try
@@ -436,8 +358,6 @@ namespace MapsWPF.ViewModels
                 var prevDrone = SelectedDrone;
                 var prevTarget = SelectedTarget;
                 var prevTemplate = SelectedTemplate;
-                var prevUnit = CustomUnit;
-                var prevLaunchArea = LaunchArea;
 
                 // If user entered a target text manually, DO NOT persist it automatically to targets.json.
                 // New targets remain transient for generation; persist targets only by editing targets.json manually.
@@ -445,38 +365,6 @@ namespace MapsWPF.ViewModels
                 if (!string.IsNullOrEmpty(currentTarget))
                 {
                     // Keep SelectedTarget as-is for generation; do not modify _templateService.Targets or write to disk.
-                }
-
-                // If LaunchArea was edited manually, persist it so it appears in history and JSON
-                var la = LaunchArea?.Trim();
-                if (!string.IsNullOrEmpty(la) && _templateService != null)
-                {
-                    if (_templateService.LaunchAreasHistory == null) _templateService.LaunchAreasHistory = new System.Collections.Generic.List<string>();
-                    if (!_templateService.LaunchAreasHistory.Contains(la))
-                    {
-                        _templateService.SaveLaunchArea(la);
-                        var laMsg = $"ExecuteGenerate: Saved LaunchArea '{la}' to { _templateService.SettingsFolderPath }";
-                        Console.WriteLine(laMsg);
-                        // update local LaunchAreasHistory collection without refreshing all lists (preserve template selection)
-                        LaunchAreasHistory.Clear();
-                        if (_templateService.LaunchAreasHistory != null) foreach (var x in _templateService.LaunchAreasHistory) LaunchAreasHistory.Add(x);
-                    }
-                }
-
-                // If Unit name was edited manually, persist it as well
-                var unit = CustomUnit?.Trim();
-                if (!string.IsNullOrEmpty(unit) && _templateService != null)
-                {
-                    if (_templateService.UnitsHistory == null) _templateService.UnitsHistory = new System.Collections.Generic.List<string>();
-                    if (!_templateService.UnitsHistory.Contains(unit))
-                    {
-                        _templateService.SaveCustomUnit(unit);
-                        var unitMsg = $"ExecuteGenerate: Saved CustomUnit '{unit}' to { _templateService.SettingsFolderPath }";
-                        Console.WriteLine(unitMsg);
-                        // update local UnitsHistory collection without refreshing all lists
-                        UnitsHistory.Clear();
-                        if (_templateService.UnitsHistory != null) foreach (var x in _templateService.UnitsHistory) UnitsHistory.Add(x);
-                    }
                 }
 
                 var lines = TemplateText?.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
@@ -488,28 +376,6 @@ namespace MapsWPF.ViewModels
                     return;
                 }
 
-                // Statistics Logic
-                if (_statisticsService != null)
-                {
-                    var record = new MapsWPF.Models.StatisticRecord
-                    {
-                        Date = DateTime.Now,
-                        Position = SelectedPosition,
-                        Drone = SelectedDrone,
-                        Pilot = SelectedPilot,
-                        Distance = Distance,
-                        TemplateName = SelectedTemplate,
-                        IsTargetDestroyed = IsTargetDestroyed,
-                        IsBoardReturned = IsTargetReturned
-                    };
-
-                    var (success, msg) = _statisticsService.TryAddRecord(record);
-                    if (!success)
-                    {
-                        _notificationService?.Notify(msg, NotificationType.Warning);
-                    }
-                }
-
                 // Use the UI dispatcher to execute generation code that depends on UI-owned objects. We use InvokeAsync so the work is queued on UI thread without deadlocking.
                 try
                 {
@@ -517,13 +383,45 @@ namespace MapsWPF.ViewModels
                     {
                         try
                         {
-                            return _generateFunc(lines);
+                            return _generateFunc(SelectedTemplate, lines);
                         }
                         catch (Exception ex)
                         {
                             return "__GENERATE_ERROR__:" + ex.ToString();
                         }
                     });
+
+                    if (string.IsNullOrWhiteSpace(result))
+                    {
+                        return;
+                    }
+
+                    if (result.StartsWith("__GENERATE_ERROR__:", StringComparison.Ordinal))
+                    {
+                        _notificationService?.Notify("Помилка генерації шаблону.", NotificationType.Error);
+                        return;
+                    }
+
+                    if (_statisticsService != null)
+                    {
+                        var record = new MapsWPF.Models.StatisticRecord
+                        {
+                            Date = DateTime.Now,
+                            Position = SelectedPosition,
+                            Drone = SelectedDrone,
+                            Pilot = SelectedPilot,
+                            Distance = Distance,
+                            TemplateName = SelectedTemplate,
+                            IsTargetDestroyed = IsTargetDestroyed,
+                            IsBoardReturned = IsTargetReturned
+                        };
+
+                        var (success, msg) = _statisticsService.TryAddRecord(record);
+                        if (!success)
+                        {
+                            _notificationService?.Notify(msg, NotificationType.Warning);
+                        }
+                    }
 
                     // We're back on UI thread (because of await), so we can safely update UI
                     try
@@ -547,14 +445,6 @@ namespace MapsWPF.ViewModels
                         }
                         if (!string.IsNullOrWhiteSpace(prevTarget) && Targets.Contains(prevTarget)) SelectedTarget = prevTarget;
 
-                        if (!string.IsNullOrWhiteSpace(prevLaunchArea))
-                        {
-                            LaunchArea = prevLaunchArea;
-                            // ensure it appears in history
-                            if (_templateService.LaunchAreasHistory == null) _templateService.LaunchAreasHistory = new System.Collections.Generic.List<string>();
-                            if (!_templateService.LaunchAreasHistory.Contains(prevLaunchArea)) _templateService.SaveLaunchArea(prevLaunchArea);
-                        }
-
                         if (!string.IsNullOrWhiteSpace(prevTemplate))
                         {
                             var match = TemplateNames.FirstOrDefault(t => string.Equals(t?.Trim(), prevTemplate.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -572,24 +462,6 @@ namespace MapsWPF.ViewModels
                             SelectedTemplate = TemplateNames.First();
                         }
 
-                        if (RotateAfterGenerate && TemplateNames.Count > 0)
-                        {
-                            var cur = SelectedTemplate;
-                            int idx = TemplateNames.IndexOf(cur);
-                            if (idx < 0) idx = 0;
-                            int next = (idx + 1) % TemplateNames.Count;
-                            SelectedTemplate = TemplateNames[next];
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(prevUnit))
-                        {
-                            CustomUnit = prevUnit;
-                            if (!UnitsHistory.Contains(prevUnit))
-                            {
-                                UnitsHistory.Insert(0, prevUnit);
-                                try { if (_templateService != null && _templateService.UnitsHistory != null && !_templateService.UnitsHistory.Contains(prevUnit)) _templateService.UnitsHistory.Insert(0, prevUnit); } catch { }
-                            }
-                        }
                     }
                     catch (Exception ex)
                     {
@@ -626,15 +498,9 @@ namespace MapsWPF.ViewModels
                         SelectedTemplate = TemplateNames.First();
                         _templatesInitialized = true;
                     }
-                    // targets, units, launch areas, positions
-                    Targets.Clear();
+                    // targets, positions
+                     Targets.Clear();
                     if (_templateService.Targets != null) foreach (var t in _templateService.Targets) Targets.Add(t);
-
-                    UnitsHistory.Clear();
-                    if (_templateService.UnitsHistory != null) foreach (var u in _templateService.UnitsHistory) UnitsHistory.Add(u);
-
-                    LaunchAreasHistory.Clear();
-                    if (_templateService.LaunchAreasHistory != null) foreach (var la in _templateService.LaunchAreasHistory) LaunchAreasHistory.Add(la);
 
                     PositionNames.Clear();
                     if (_templateService.Position_Point != null) foreach (var p in _templateService.Position_Point.Keys.OrderBy(k => k)) PositionNames.Add(p);
@@ -652,7 +518,7 @@ namespace MapsWPF.ViewModels
                     update();
                 }
 
-                var msg = $"RefreshLists: TemplateNames={TemplateNames.Count}, Targets={Targets.Count}, Units={UnitsHistory.Count}, LaunchAreas={LaunchAreasHistory.Count}, Positions={PositionNames.Count}, Pilots={Pilots.Count}, Drones={Drones.Count}, SettingsFolder={_templateService.SettingsFolderPath}";
+                var msg = $"RefreshLists: TemplateNames={TemplateNames.Count}, Targets={Targets.Count}, Positions={PositionNames.Count}";
                 Console.WriteLine(msg);
             }
             catch (Exception ex)
@@ -662,8 +528,6 @@ namespace MapsWPF.ViewModels
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TemplateNames)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Targets)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UnitsHistory)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LaunchAreasHistory)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PositionNames)));
         }
 

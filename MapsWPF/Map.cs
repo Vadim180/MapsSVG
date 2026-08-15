@@ -83,12 +83,25 @@ namespace MapsWPF
 
             _overlayTextBrush = new SolidColorBrush(Colors.White);
             _overlayTextBrush.Freeze();
+
+            _workAreaEditFillBrush = new SolidColorBrush(Color.FromArgb(45, 0, 191, 255));
+            _workAreaEditFillBrush.Freeze();
+
+            var workAreaStrokeBrush = new SolidColorBrush(Color.FromArgb(255, 0, 191, 255));
+            workAreaStrokeBrush.Freeze();
+
+            _workAreaEditPen = new Pen(workAreaStrokeBrush, 2);
+            _workAreaEditPen.Freeze();
+                       
         }
 
         // Overlay drawing resources
         private static readonly SolidColorBrush _overlayBackground;
         private static readonly Pen _overlayBorder;
         private static readonly SolidColorBrush _overlayTextBrush;
+
+        private static readonly SolidColorBrush _workAreaEditFillBrush;
+        private static readonly Pen _workAreaEditPen;
 
         /// <summary>
         /// Optional provider that given a lat/lng returns additional coordinate strings (UTM, MGRS, etc.).
@@ -101,6 +114,16 @@ namespace MapsWPF
         /// </summary>
         public bool ShowCoordinates { get; set; } = true;
 
+        public bool IsWorkAreaEditVisible { get; set; }
+
+        public bool IsWorkAreaEditFillVisible { get; set; } = true;
+
+        public RectLatLng? WorkAreaEditBounds { get; set; }
+
+        public bool IsWorkAreaLimitDebugVisible { get; set; }
+
+        public RectLatLng? WorkAreaLimitDebugBounds { get; set; }
+
         /// <summary>
         ///     any custom drawing here
         /// </summary>
@@ -111,6 +134,9 @@ namespace MapsWPF
             _stopwatch.Start();
 
             base.OnRender(drawingContext);
+
+            DrawWorkAreaLimitDebugBounds(drawingContext);
+            DrawWorkAreaEditBounds(drawingContext);
 
             // Draw attack zone if attack point is set
             if (IsAttackPointSet)
@@ -139,6 +165,94 @@ namespace MapsWPF
 
             // Правий нижній кут карти з відступом 10 пікселів
             drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 20));
+        }
+
+        private void DrawWorkAreaEditBounds(DrawingContext dc)
+        {
+            if (!IsWorkAreaEditVisible || !WorkAreaEditBounds.HasValue)
+            {
+                return;
+            }
+
+            var bounds = WorkAreaEditBounds.Value;
+
+            var topLeft = new PointLatLng(bounds.Top, bounds.Left);
+            var bottomRight = new PointLatLng(bounds.Bottom, bounds.Right);
+
+            var topLeftLocal = FromLatLngToLocal(topLeft);
+            var bottomRightLocal = FromLatLngToLocal(bottomRight);
+
+            var left = Math.Min(topLeftLocal.X, bottomRightLocal.X);
+            var top = Math.Min(topLeftLocal.Y, bottomRightLocal.Y);
+            var right = Math.Max(topLeftLocal.X, bottomRightLocal.X);
+            var bottom = Math.Max(topLeftLocal.Y, bottomRightLocal.Y);
+
+            var width = right - left;
+            var height = bottom - top;
+
+            if (width < 1 || height < 1)
+            {
+                return;
+            }
+
+            var rect = new Rect(
+                left,
+                top,
+                width,
+                height
+            );
+
+            var fill = IsWorkAreaEditFillVisible
+                ? _workAreaEditFillBrush
+                : null;
+
+            dc.DrawRectangle(
+                fill,
+                _workAreaEditPen,
+                rect
+            );
+        }
+
+        private void DrawWorkAreaLimitDebugBounds(DrawingContext dc)
+        {
+            if (!IsWorkAreaLimitDebugVisible || !WorkAreaLimitDebugBounds.HasValue)
+            {
+                return;
+            }
+
+            var bounds = WorkAreaLimitDebugBounds.Value;
+
+            var topLeft = new PointLatLng(bounds.Top, bounds.Left);
+            var bottomRight = new PointLatLng(bounds.Bottom, bounds.Right);
+
+            var topLeftLocal = FromLatLngToLocal(topLeft);
+            var bottomRightLocal = FromLatLngToLocal(bottomRight);
+
+            var left = Math.Min(topLeftLocal.X, bottomRightLocal.X);
+            var top = Math.Min(topLeftLocal.Y, bottomRightLocal.Y);
+            var right = Math.Max(topLeftLocal.X, bottomRightLocal.X);
+            var bottom = Math.Max(topLeftLocal.Y, bottomRightLocal.Y);
+
+            var width = right - left;
+            var height = bottom - top;
+
+            if (width < 1 || height < 1)
+            {
+                return;
+            }
+
+            var rect = new Rect(
+                left,
+                top,
+                width,
+                height
+            );
+
+            dc.DrawRectangle(
+                null,
+                _workAreaEditPen,
+                rect
+            );
         }
 
         private void DrawAttackZone(DrawingContext dc)
