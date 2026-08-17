@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ namespace MapsWPF.Services.Settlements
     public sealed class SettlementExternalGeometryLoader
     {
         private const int RequestTimeoutSeconds = 30;
+        private const int MaximumRequestAttempts = 3;
 
         private readonly HttpClient _httpClient = new();
         private readonly TryConvertLatLngToUtmDelegate _tryConvertLatLngToUtm;
@@ -122,14 +124,32 @@ namespace MapsWPF.Services.Settlements
             SettlementGeometryItem sourceSettlement,
             SettlementProviderOptions options,
             IEnumerable<GMapProvider>? mapProviders,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool forceRefresh = false)
         {
             var settlement = SettlementGeometryMerger.CloneSettlementItem(
                 sourceSettlement);
             var availability = GetAvailability(options, mapProviders);
             var states = new List<string>();
             var results = new List<ProviderLookupResult>();
-            var center = TryGetAnchorLatLng(settlement);
+            var previousAnchor = TryGetAnchorLatLng(settlement);
+
+            if (forceRefresh)
+            {
+                foreach (var provider in availability.ActiveProviders)
+                {
+                    SettlementGeometryMerger.RemoveProviderCandidates(
+                        settlement,
+                        provider,
+                        removeCenters: true,
+                        removePolygons: true);
+                }
+            }
+
+            // Під час force refresh старі кандидати видаляються з робочої
+            // копії, але їхній центр ще потрібен як пошуковий anchor. Без
+            // цього polygon-only провайдер не зміг би оновити сам себе.
+            var center = TryGetAnchorLatLng(settlement) ?? previousAnchor;
 
             var centerTasks = CreateCenterTasks(
                 bounds,
@@ -137,14 +157,16 @@ namespace MapsWPF.Services.Settlements
                 options,
                 mapProviders,
                 center,
-                cancellationToken);
+                cancellationToken,
+                forceRefresh);
 
             var polygonTasks = center.HasValue
                 ? CreatePolygonTasks(
                     settlement,
                     options,
                     center.Value,
-                    cancellationToken)
+                    cancellationToken,
+                    forceRefresh)
                 : new List<Task<ProviderLookupResult>>();
 
             if (centerTasks.Count > 0 || polygonTasks.Count > 0)
@@ -164,7 +186,8 @@ namespace MapsWPF.Services.Settlements
                         settlement,
                         options,
                         center.Value,
-                        cancellationToken);
+                        cancellationToken,
+                        forceRefresh);
 
                     if (secondWave.Count > 0)
                     {
@@ -188,6 +211,33 @@ namespace MapsWPF.Services.Settlements
                 AttemptedProviderCount = results.Count(x => x.Attempted),
                 PolygonProviderCount = results.Count(x => x.Polygons.Count > 0),
                 CenterProviderCount = results.Count(x => x.Center.HasValue),
+                HadTransientPolygonFailure = results.Any(x =>
+                    x.IsPolygonLookup &&
+                    x.Outcome == ProviderLookupOutcome.TransientFailure),
+                PolygonLookupAttempted = results.Any(x =>
+                    x.IsPolygonLookup && x.Attempted),
+                PolygonLookupDefinitivelyEmpty =
+                    results.Any(x => x.IsPolygonLookup && x.Attempted) &&
+                    results
+                        .Where(x => x.IsPolygonLookup && x.Attempted)
+                        .All(x =>
+                            x.Outcome == ProviderLookupOutcome.NotFound),
+                RefreshedPolygonProviders = results
+                    .Where(x =>
+                        x.IsPolygonLookup &&
+                        x.Outcome is ProviderLookupOutcome.Success or
+                            ProviderLookupOutcome.NotFound)
+                    .Select(x => x.Provider)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                RefreshedCenterProviders = results
+                    .Where(x =>
+                        !x.IsPolygonLookup &&
+                        x.Outcome is ProviderLookupOutcome.Success or
+                            ProviderLookupOutcome.NotFound)
+                    .Select(x => x.Provider)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
                 ProviderStates = states.Count > 0
                     ? states
                     : availability.ActiveProviders.Count == 0
@@ -208,7 +258,8 @@ namespace MapsWPF.Services.Settlements
             SettlementGeometryItem settlement,
             SettlementProviderOptions options,
             PointLatLng center,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool forceRefresh)
         {
             var tasks = new List<Task<ProviderLookupResult>>();
 
@@ -218,9 +269,10 @@ namespace MapsWPF.Services.Settlements
             }
 
             if (!string.IsNullOrWhiteSpace(options.GeoapifyApiKey) &&
-                !SettlementGeometryMerger.HasPolygonsFromProvider(
+                (forceRefresh ||
+                 !SettlementGeometryMerger.HasPolygonsFromProvider(
                     settlement,
-                    SettlementDataSources.GeoapifyBoundaries))
+                    SettlementDataSources.GeoapifyBoundaries)))
             {
                 tasks.Add(LoadGeoapifyBoundaryAsync(
                     settlement,
@@ -230,9 +282,10 @@ namespace MapsWPF.Services.Settlements
             }
 
             if (!string.IsNullOrWhiteSpace(options.AzureMapsSubscriptionKey) &&
-                !SettlementGeometryMerger.HasPolygonsFromProvider(
+                (forceRefresh ||
+                 !SettlementGeometryMerger.HasPolygonsFromProvider(
                     settlement,
-                    SettlementDataSources.AzureMapsPolygon))
+                    SettlementDataSources.AzureMapsPolygon)))
             {
                 tasks.Add(LoadAzureMapsPolygonAsync(
                     center,
@@ -249,7 +302,8 @@ namespace MapsWPF.Services.Settlements
             SettlementProviderOptions options,
             IEnumerable<GMapProvider>? mapProviders,
             PointLatLng? anchor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool forceRefresh)
         {
             var tasks = new List<Task<ProviderLookupResult>>();
 
@@ -259,11 +313,12 @@ namespace MapsWPF.Services.Settlements
             }
 
             var families = GetGMapGeocoderFamilies(mapProviders);
-            var query = settlement.Name.Trim();
+            var query = BuildSettlementSearchQuery(settlement);
 
             if (families.Contains("Google") &&
                 !string.IsNullOrWhiteSpace(options.GoogleGeocodingApiKey) &&
-                !HasCenterFromProvider(settlement, SettlementDataSources.GoogleGeocoding))
+                (forceRefresh ||
+                 !HasCenterFromProvider(settlement, SettlementDataSources.GoogleGeocoding)))
             {
                 tasks.Add(LoadGoogleCenterAsync(
                     query,
@@ -275,7 +330,8 @@ namespace MapsWPF.Services.Settlements
 
             if (families.Contains("Bing") &&
                 !string.IsNullOrWhiteSpace(options.BingMapsApiKey) &&
-                !HasCenterFromProvider(settlement, SettlementDataSources.BingMapsLocations))
+                (forceRefresh ||
+                 !HasCenterFromProvider(settlement, SettlementDataSources.BingMapsLocations)))
             {
                 tasks.Add(LoadBingCenterAsync(
                     query,
@@ -287,7 +343,8 @@ namespace MapsWPF.Services.Settlements
 
             if (families.Contains("GraphHopper") &&
                 !string.IsNullOrWhiteSpace(options.GraphHopperApiKey) &&
-                !HasCenterFromProvider(settlement, SettlementDataSources.GraphHopperGeocoding))
+                (forceRefresh ||
+                 !HasCenterFromProvider(settlement, SettlementDataSources.GraphHopperGeocoding)))
             {
                 tasks.Add(LoadGraphHopperCenterAsync(
                     query,
@@ -307,9 +364,22 @@ namespace MapsWPF.Services.Settlements
             string apiKey,
             CancellationToken cancellationToken)
         {
+            var south = Math.Min(bounds.Top, bounds.Bottom);
+            var north = Math.Max(bounds.Top, bounds.Bottom);
+            var west = Math.Min(bounds.Left, bounds.Right);
+            var east = Math.Max(bounds.Left, bounds.Right);
             var uri =
                 "https://maps.googleapis.com/maps/api/geocode/json?address=" +
                 Uri.EscapeDataString(query) +
+                "&bounds=" +
+                Uri.EscapeDataString(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0:R},{1:R}|{2:R},{3:R}",
+                    south,
+                    west,
+                    north,
+                    east)) +
+                "&language=uk" +
                 "&key=" +
                 Uri.EscapeDataString(apiKey);
 
@@ -346,16 +416,20 @@ namespace MapsWPF.Services.Settlements
                     Uri.EscapeDataString(apiKey));
 
                 var root = await GetJsonAsync(uri, null, cancellationToken);
-                var feature = SelectBestGeoapifyFeature(root, settlement);
+                var feature = SelectBestGeoapifyFeature(
+                    root,
+                    settlement,
+                    center);
 
                 if (feature == null)
                 {
                     return ProviderLookupResult.Empty(
                         provider,
-                        "відповідну межу міста не знайдено");
+                        "відповідну межу міста не знайдено",
+                        isPolygonLookup: true);
                 }
 
-                var lines = SettlementGeoJsonGeometryReader.ReadPolygonLines(
+                var polygons = SettlementGeoJsonGeometryReader.ReadPolygons(
                     feature["geometry"],
                     TryConvertForGeoJson);
                 var externalId =
@@ -367,9 +441,13 @@ namespace MapsWPF.Services.Settlements
                     provider,
                     externalId,
                     SettlementDataSources.GeoapifyBoundaryPriority,
-                    lines,
+                    polygons,
                     null,
-                    lines.Count > 0 ? "контур отримано" : "повернуто лише точку");
+                    polygons.Count > 0 ? "контур отримано" : "повернуто лише точку",
+                    isPolygonLookup: true,
+                    outcome: polygons.Count > 0
+                        ? ProviderLookupOutcome.Success
+                        : ProviderLookupOutcome.NotFound);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -378,7 +456,11 @@ namespace MapsWPF.Services.Settlements
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SETTLEMENT PROVIDER] {provider}: {ex.Message}");
-                return ProviderLookupResult.Empty(provider, "помилка API");
+                return ProviderLookupResult.Empty(
+                    provider,
+                    "тимчасова помилка API",
+                    isPolygonLookup: true,
+                    GetFailureOutcome(ex));
             }
         }
 
@@ -401,7 +483,7 @@ namespace MapsWPF.Services.Settlements
                     ["subscription-key"] = subscriptionKey
                 };
                 var root = await GetJsonAsync(uri, headers, cancellationToken);
-                var lines = SettlementGeoJsonGeometryReader.ReadPolygonLines(
+                var polygons = SettlementGeoJsonGeometryReader.ReadPolygons(
                     root,
                     TryConvertForGeoJson);
 
@@ -409,9 +491,13 @@ namespace MapsWPF.Services.Settlements
                     provider,
                     root["id"]?.Value<string>() ?? CreateCoordinateId(center),
                     SettlementDataSources.AzureMapsPolygonPriority,
-                    lines,
+                    polygons,
                     null,
-                    lines.Count > 0 ? "контур отримано" : "контур не знайдено");
+                    polygons.Count > 0 ? "контур отримано" : "контур не знайдено",
+                    isPolygonLookup: true,
+                    outcome: polygons.Count > 0
+                        ? ProviderLookupOutcome.Success
+                        : ProviderLookupOutcome.NotFound);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -420,7 +506,11 @@ namespace MapsWPF.Services.Settlements
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SETTLEMENT PROVIDER] {provider}: {ex.Message}");
-                return ProviderLookupResult.Empty(provider, "помилка API");
+                return ProviderLookupResult.Empty(
+                    provider,
+                    "тимчасова помилка API",
+                    isPolygonLookup: true,
+                    GetFailureOutcome(ex));
             }
         }
 
@@ -431,10 +521,23 @@ namespace MapsWPF.Services.Settlements
             string apiKey,
             CancellationToken cancellationToken)
         {
+            var south = Math.Min(bounds.Top, bounds.Bottom);
+            var north = Math.Max(bounds.Top, bounds.Bottom);
+            var west = Math.Min(bounds.Left, bounds.Right);
+            var east = Math.Max(bounds.Left, bounds.Right);
             var uri =
                 "https://dev.virtualearth.net/REST/v1/Locations?q=" +
                 Uri.EscapeDataString(query) +
-                "&maxResults=5&key=" +
+                "&maxResults=5&culture=uk-UA&userIp=127.0.0.1" +
+                "&userMapView=" +
+                Uri.EscapeDataString(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0:R},{1:R},{2:R},{3:R}",
+                    south,
+                    west,
+                    north,
+                    east)) +
+                "&key=" +
                 Uri.EscapeDataString(apiKey);
 
             return LoadCenterFromJsonAsync(
@@ -461,10 +564,19 @@ namespace MapsWPF.Services.Settlements
             string apiKey,
             CancellationToken cancellationToken)
         {
+            var pointBias = anchor.HasValue
+                ? "&point=" + Uri.EscapeDataString(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0:R},{1:R}",
+                    anchor.Value.Lat,
+                    anchor.Value.Lng))
+                : string.Empty;
             var uri =
                 "https://graphhopper.com/api/1/geocode?q=" +
                 Uri.EscapeDataString(query) +
-                "&limit=5&locale=uk&key=" +
+                "&limit=5&locale=uk" +
+                pointBias +
+                "&key=" +
                 Uri.EscapeDataString(apiKey);
 
             return LoadCenterFromJsonAsync(
@@ -516,9 +628,11 @@ namespace MapsWPF.Services.Settlements
                     provider,
                     selected.ExternalId,
                     priority,
-                    Array.Empty<string>(),
+                    Array.Empty<SettlementPolygonGeometry>(),
                     selected.Point,
-                    "центр отримано");
+                    "центр отримано",
+                    isPolygonLookup: false,
+                    outcome: ProviderLookupOutcome.Success);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -527,7 +641,11 @@ namespace MapsWPF.Services.Settlements
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SETTLEMENT PROVIDER] {provider}: {ex.Message}");
-                return ProviderLookupResult.Empty(provider, "помилка API");
+                return ProviderLookupResult.Empty(
+                    provider,
+                    "тимчасова помилка API",
+                    isPolygonLookup: false,
+                    GetFailureOutcome(ex));
             }
         }
 
@@ -536,28 +654,122 @@ namespace MapsWPF.Services.Settlements
             IReadOnlyDictionary<string, string>? headers,
             CancellationToken cancellationToken)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            Exception? lastException = null;
 
-            if (headers != null)
+            for (var attempt = 1; attempt <= MaximumRequestAttempts; attempt++)
             {
-                foreach (var header in headers)
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+
+                if (headers != null)
                 {
-                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    foreach (var header in headers)
+                    {
+                        request.Headers.TryAddWithoutValidation(
+                            header.Key,
+                            header.Value);
+                    }
+                }
+
+                using var timeoutCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+                timeoutCts.CancelAfter(
+                    TimeSpan.FromSeconds(RequestTimeoutSeconds));
+
+                try
+                {
+                    using var response = await _httpClient.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        timeoutCts.Token);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var exception = new HttpRequestException(
+                            $"HTTP {(int)response.StatusCode}",
+                            null,
+                            response.StatusCode);
+
+                        if (!IsTransientStatusCode(response.StatusCode) ||
+                            attempt == MaximumRequestAttempts)
+                        {
+                            throw exception;
+                        }
+
+                        lastException = exception;
+                        await Task.Delay(
+                            GetRetryDelay(response, attempt),
+                            cancellationToken);
+                        continue;
+                    }
+
+                    var json = await response.Content.ReadAsStringAsync(
+                        timeoutCts.Token);
+                    return JObject.Parse(json);
+                }
+                catch (OperationCanceledException) when (
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    lastException = new TimeoutException(
+                        "API не відповів у відведений час.");
+                }
+                catch (HttpRequestException ex) when (
+                    !ex.StatusCode.HasValue ||
+                    IsTransientStatusCode(ex.StatusCode.Value))
+                {
+                    lastException = ex;
+                }
+
+                if (attempt < MaximumRequestAttempts)
+                {
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(500 * attempt * attempt),
+                        cancellationToken);
                 }
             }
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(RequestTimeoutSeconds));
+            throw lastException ??
+                  new HttpRequestException("API не відповів після повторних спроб.");
+        }
 
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                timeoutCts.Token);
-            response.EnsureSuccessStatusCode();
+        private static bool IsTransientStatusCode(HttpStatusCode statusCode)
+        {
+            var value = (int)statusCode;
+            return statusCode == HttpStatusCode.RequestTimeout ||
+                   statusCode == HttpStatusCode.TooManyRequests ||
+                   value >= 500;
+        }
 
-            var json = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-            return JObject.Parse(json);
+        private static TimeSpan GetRetryDelay(
+            HttpResponseMessage response,
+            int attempt)
+        {
+            if (response.Headers.RetryAfter?.Delta is { } retryAfter &&
+                retryAfter <= TimeSpan.FromSeconds(15))
+            {
+                return retryAfter;
+            }
+
+            return TimeSpan.FromMilliseconds(500 * attempt * attempt);
+        }
+
+        private static ProviderLookupOutcome GetFailureOutcome(Exception ex)
+        {
+            if (ex is TimeoutException || ex is TaskCanceledException)
+            {
+                return ProviderLookupOutcome.TransientFailure;
+            }
+
+            if (ex is HttpRequestException httpException &&
+                (!httpException.StatusCode.HasValue ||
+                 IsTransientStatusCode(httpException.StatusCode.Value)))
+            {
+                return ProviderLookupOutcome.TransientFailure;
+            }
+
+            return ProviderLookupOutcome.PermanentFailure;
         }
 
         private void ApplyResults(
@@ -571,8 +783,8 @@ namespace MapsWPF.Services.Settlements
                         result.Center.Value.Lat,
                         result.Center.Value.Lng,
                         out var utm,
-                        out _,
-                        out _))
+                        out var zone,
+                        out var band))
                 {
                     SettlementGeometryMerger.AddProviderReference(
                         settlement,
@@ -581,7 +793,13 @@ namespace MapsWPF.Services.Settlements
                         "center");
                     SettlementGeometryMerger.AddCenterCandidate(
                         settlement,
-                        new SettlementPoint(utm.X, utm.Y),
+                        new SettlementPoint(
+                            utm.X,
+                            utm.Y,
+                            zone,
+                            band,
+                            result.Center.Value.Lat,
+                            result.Center.Value.Lng),
                         result.Provider,
                         result.ExternalId,
                         result.Priority);
@@ -599,7 +817,9 @@ namespace MapsWPF.Services.Settlements
                         polygon,
                         result.Provider,
                         result.ExternalId,
-                        result.Priority);
+                        result.Priority,
+                        settlement.Boundary,
+                        settlement.AdminLevel);
                 }
             }
 
@@ -608,7 +828,8 @@ namespace MapsWPF.Services.Settlements
 
         private JToken? SelectBestGeoapifyFeature(
             JObject root,
-            SettlementGeometryItem settlement)
+            SettlementGeometryItem settlement,
+            PointLatLng center)
         {
             var targetName = NormalizeName(settlement.Name);
             var osmIds = new HashSet<string>(
@@ -620,7 +841,18 @@ namespace MapsWPF.Services.Settlements
                     .Select(x => x.ExternalId),
                 StringComparer.OrdinalIgnoreCase);
 
-            return (root["features"] as JArray ?? new JArray())
+            var features = (root["features"] as JArray ?? new JArray())
+                .ToList();
+            var typedFeatures = features
+                .Where(feature => IsGeoapifySettlementFeature(
+                    feature,
+                    settlement.Place))
+                .ToList();
+            var candidateFeatures = typedFeatures.Count > 0
+                ? typedFeatures
+                : features;
+
+            return candidateFeatures
                 .Select(feature => new
                 {
                     Feature = feature,
@@ -628,7 +860,8 @@ namespace MapsWPF.Services.Settlements
                         feature,
                         targetName,
                         settlement.Place,
-                        osmIds)
+                        osmIds,
+                        center)
                 })
                 .Where(x => x.Score >= 50)
                 .OrderByDescending(x => x.Score)
@@ -636,15 +869,61 @@ namespace MapsWPF.Services.Settlements
                 .FirstOrDefault();
         }
 
+        private static bool IsGeoapifySettlementFeature(
+            JToken feature,
+            string settlementPlace)
+        {
+            var categories = feature["properties"]?["categories"]?.ToString() ??
+                              string.Empty;
+
+            if (string.IsNullOrWhiteSpace(categories) ||
+                string.IsNullOrWhiteSpace(settlementPlace))
+            {
+                return true;
+            }
+
+            var place = settlementPlace.Trim().ToLowerInvariant();
+            return categories.Contains(
+                       $"administrative.{place}",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   categories.Contains(
+                       $"place.{place}",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
         private static int GetGeoapifyFeatureMatchScore(
             JToken feature,
             string targetName,
             string settlementPlace,
-            HashSet<string> osmIds)
+            HashSet<string> osmIds,
+            PointLatLng center)
         {
             var properties = feature["properties"];
             var score = 0;
             var rawOsmId = properties?["datasource"]?["raw"]?["osm_id"]?.ToString();
+
+            var featureLat = properties?["lat"]?.Value<double?>();
+            var featureLng = properties?["lon"]?.Value<double?>();
+
+            if (featureLat.HasValue && featureLng.HasValue)
+            {
+                var distance = GetDistanceMeters(
+                    center,
+                    new PointLatLng(featureLat.Value, featureLng.Value));
+
+                if (distance <= 3000.0)
+                {
+                    score += 100;
+                }
+                else if (distance <= 15000.0)
+                {
+                    score += 35;
+                }
+                else if (distance > 30000.0)
+                {
+                    score -= 100;
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(rawOsmId) && osmIds.Contains(rawOsmId))
             {
@@ -670,11 +949,21 @@ namespace MapsWPF.Services.Settlements
 
             var categories = properties?["categories"]?.ToString() ?? string.Empty;
 
-            if (categories.Contains("administrative.city", StringComparison.OrdinalIgnoreCase) ||
+            var isSettlementCategory =
+                categories.Contains("administrative.city", StringComparison.OrdinalIgnoreCase) ||
                 categories.Contains("administrative.town", StringComparison.OrdinalIgnoreCase) ||
-                categories.Contains("administrative.village", StringComparison.OrdinalIgnoreCase))
+                categories.Contains("administrative.village", StringComparison.OrdinalIgnoreCase) ||
+                categories.Contains("administrative.hamlet", StringComparison.OrdinalIgnoreCase);
+
+            if (isSettlementCategory)
             {
                 score += 50;
+            }
+            else if (!string.IsNullOrWhiteSpace(settlementPlace))
+            {
+                // Назва сама по собі недостатня: район або область можуть
+                // мати таку саму назву, але не бути контуром цього НП.
+                score -= 80;
             }
 
             if (!string.IsNullOrWhiteSpace(settlementPlace) &&
@@ -689,20 +978,33 @@ namespace MapsWPF.Services.Settlements
         private PointLatLng? TryGetAnchorLatLng(SettlementGeometryItem settlement)
         {
             if (settlement.FallbackPoint != null &&
-                _tryConvertUtmToLatLng(
-                    new PointF(
-                        settlement.FallbackPoint.X,
-                        settlement.FallbackPoint.Y),
+                SettlementUtmProjection.TryToLatLng(
+                    settlement.FallbackPoint,
                     out var centerLat,
                     out var centerLng))
             {
                 return new PointLatLng(centerLat, centerLng);
             }
 
-            var polygonPoints = SettlementGeometryMerger
-                .GetPreferredPolygonLines(settlement)
-                .SelectMany(SettlementGeometryService.ParsePolygonLine)
-                .ToList();
+            if (settlement.FallbackPoint != null &&
+                _tryConvertUtmToLatLng(
+                    new PointF(
+                        settlement.FallbackPoint.X,
+                        settlement.FallbackPoint.Y),
+                    out centerLat,
+                    out centerLng))
+            {
+                return new PointLatLng(centerLat, centerLng);
+            }
+
+            var polygonCandidate = SettlementGeometryQualitySelector
+                .GetPreferredPolygonCandidates(settlement)
+                .FirstOrDefault();
+
+            var polygonPoints = polygonCandidate == null
+                ? new List<PointF>()
+                : SettlementGeometryService.ParsePolygonLine(
+                    polygonCandidate.Polygon);
 
             if (polygonPoints.Count == 0)
             {
@@ -713,8 +1015,25 @@ namespace MapsWPF.Services.Settlements
                 (float)polygonPoints.Average(x => x.X),
                 (float)polygonPoints.Average(x => x.Y));
 
-            return _tryConvertUtmToLatLng(average, out var lat, out var lng)
-                ? new PointLatLng(lat, lng)
+            if (polygonCandidate != null)
+            {
+                var averagePoint = new SettlementPoint(
+                    average.X,
+                    average.Y,
+                    polygonCandidate.UtmZone,
+                    polygonCandidate.UtmBand);
+
+                if (SettlementUtmProjection.TryToLatLng(
+                        averagePoint,
+                        out var lat,
+                        out var lng))
+                {
+                    return new PointLatLng(lat, lng);
+                }
+            }
+
+            return _tryConvertUtmToLatLng(average, out var fallbackLat, out var fallbackLng)
+                ? new PointLatLng(fallbackLat, fallbackLng)
                 : null;
         }
 
@@ -850,6 +1169,23 @@ namespace MapsWPF.Services.Settlements
                    Math.Atan2(Math.Sqrt(a), Math.Sqrt(1.0 - a));
         }
 
+        private static string BuildSettlementSearchQuery(
+            SettlementGeometryItem settlement)
+        {
+            return string.Join(
+                ", ",
+                new[]
+                {
+                    settlement.Name,
+                    settlement.District,
+                    settlement.Region,
+                    settlement.CountryCode
+                }
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
         private static string NormalizeName(string? value)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -904,21 +1240,28 @@ namespace MapsWPF.Services.Settlements
                 string provider,
                 string externalId,
                 int priority,
-                IEnumerable<string> polygons,
+                IEnumerable<SettlementPolygonGeometry> polygons,
                 PointLatLng? center,
                 string state,
+                bool isPolygonLookup,
+                ProviderLookupOutcome outcome,
                 bool attempted = true)
             {
                 Provider = provider;
                 ExternalId = externalId;
                 Priority = priority;
                 Polygons = polygons
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(x => !string.IsNullOrWhiteSpace(x.OuterRing))
+                    .GroupBy(
+                        x => x.OuterRing,
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.First())
                     .ToList();
                 Center = center;
                 State = state;
                 Attempted = attempted;
+                IsPolygonLookup = isPolygonLookup;
+                Outcome = outcome;
             }
 
             public string Provider { get; }
@@ -927,7 +1270,7 @@ namespace MapsWPF.Services.Settlements
 
             public int Priority { get; }
 
-            public IReadOnlyList<string> Polygons { get; }
+            public IReadOnlyList<SettlementPolygonGeometry> Polygons { get; }
 
             public PointLatLng? Center { get; }
 
@@ -935,18 +1278,34 @@ namespace MapsWPF.Services.Settlements
 
             public bool Attempted { get; }
 
+            public bool IsPolygonLookup { get; }
+
+            public ProviderLookupOutcome Outcome { get; }
+
             public static ProviderLookupResult Empty(
                 string provider,
-                string state)
+                string state,
+                bool isPolygonLookup = false,
+                ProviderLookupOutcome outcome = ProviderLookupOutcome.NotFound)
             {
                 return new ProviderLookupResult(
                     provider,
                     string.Empty,
                     SettlementDataSources.GetDefaultPriority(provider),
-                    Array.Empty<string>(),
+                    Array.Empty<SettlementPolygonGeometry>(),
                     null,
-                    state);
+                    state,
+                    isPolygonLookup,
+                    outcome);
             }
+        }
+
+        private enum ProviderLookupOutcome
+        {
+            Success,
+            NotFound,
+            TransientFailure,
+            PermanentFailure
         }
     }
 }

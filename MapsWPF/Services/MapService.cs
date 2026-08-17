@@ -24,6 +24,21 @@ namespace MapsWPF.Services
             return _converter.TryUTMToLatLng(utm, out lat, out lng);
         }
 
+        public bool TryUTMToLatLng(
+            PointF utm,
+            int utmZone,
+            char band,
+            out double lat,
+            out double lng)
+        {
+            return _converter.TryUTMToLatLng(
+                utm,
+                utmZone,
+                band,
+                out lat,
+                out lng);
+        }
+
         public string FormatShortMGRSFromUTM(PointF utm, int utmZone, char bandLetter)
         {
             return _converter.FormatShortMGRSFromUTM(utm, utmZone, bandLetter);

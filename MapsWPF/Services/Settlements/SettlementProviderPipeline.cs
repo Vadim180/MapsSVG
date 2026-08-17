@@ -29,7 +29,8 @@ namespace MapsWPF.Services.Settlements
             SettlementProviderOptions options,
             CancellationToken cancellationToken,
             Action<SettlementGeometryCache>? onSnapshotReady = null,
-            Action<SettlementContourLoadProgress>? onProgress = null)
+            Action<SettlementContourLoadProgress>? onProgress = null,
+            bool forceRefresh = false)
         {
             options ??= new SettlementProviderOptions();
             var providers = mapProviders?.ToList() ?? new List<GMapProvider>();
@@ -59,7 +60,8 @@ namespace MapsWPF.Services.Settlements
                     activeProviders,
                     cancellationToken,
                     onSnapshotReady,
-                    onProgress);
+                    onProgress,
+                    forceRefresh);
             }
 
             Func<SettlementGeometryItem, CancellationToken,
@@ -74,7 +76,8 @@ namespace MapsWPF.Services.Settlements
                         settlement,
                         options,
                         providers,
-                        token);
+                        token,
+                        forceRefresh);
             }
 
             return await _overpassLoader.LoadContoursAsync(
@@ -84,7 +87,8 @@ namespace MapsWPF.Services.Settlements
                 progress => onProgress?.Invoke(
                     WrapProgress(progress, activeProviders)),
                 existingCache,
-                enrichSettlement);
+                enrichSettlement,
+                forceRefresh);
         }
 
         private async Task<SettlementGeometryCache> EnrichExistingCacheAsync(
@@ -95,7 +99,8 @@ namespace MapsWPF.Services.Settlements
             IReadOnlyList<string> activeProviders,
             CancellationToken cancellationToken,
             Action<SettlementGeometryCache>? onSnapshotReady,
-            Action<SettlementContourLoadProgress>? onProgress)
+            Action<SettlementContourLoadProgress>? onProgress,
+            bool forceRefresh)
         {
             var working = SettlementGeometryMerger.CloneCache(existingCache);
             SettlementGeometryMerger.Normalize(working);
@@ -112,6 +117,8 @@ namespace MapsWPF.Services.Settlements
                     "У кеші немає населених пунктів цієї області. " +
                     "Увімкніть OpenStreetMap/Overpass для формування черги.");
             }
+
+            var retryTargets = new List<SettlementGeometryItem>();
 
             for (var index = 0; index < targets.Count; index++)
             {
@@ -133,12 +140,33 @@ namespace MapsWPF.Services.Settlements
                     settlement,
                     options,
                     mapProviders,
-                    cancellationToken);
+                    cancellationToken,
+                    forceRefresh);
 
-                SettlementGeometryMerger.MergeSettlementCandidates(
-                    settlement,
-                    result.Settlement);
-                SettlementGeometryQualitySelector.Recalculate(settlement);
+                if (forceRefresh)
+                {
+                    SettlementGeometryMerger
+                        .MergeSettlementCandidatesReplacingProviders(
+                            settlement,
+                            result.Settlement,
+                            result.RefreshedCenterProviders,
+                            result.RefreshedPolygonProviders);
+                }
+                else
+                {
+                    SettlementGeometryMerger.MergeSettlementCandidates(
+                        settlement,
+                        result.Settlement);
+                }
+                SettlementGeometryQualitySelector.RecalculateAll(
+                    working.Settlements);
+
+                if ((forceRefresh ||
+                     !SettlementGeometryMerger.HasUsablePolygons(settlement)) &&
+                    result.HadTransientPolygonFailure)
+                {
+                    retryTargets.Add(settlement);
+                }
 
                 onSnapshotReady?.Invoke(
                     SettlementGeometryMerger.CloneCache(working));
@@ -146,9 +174,14 @@ namespace MapsWPF.Services.Settlements
                 var preferredProvider =
                     SettlementGeometryQualitySelector.GetPreferredPolygonProvider(
                         settlement);
+                var rejectionReason = SettlementGeometryQualitySelector
+                    .GetPreferredRejectionReason(settlement);
                 var state = string.IsNullOrWhiteSpace(preferredProvider)
                     ? settlement.FallbackPoint != null
-                        ? "Контур не знайдено, вибрано найкращий центр"
+                        ? !string.IsNullOrWhiteSpace(rejectionReason)
+                            ? $"Контур відкинуто: {rejectionReason}; " +
+                              "показано центр"
+                            : "Контур не знайдено, вибрано найкращий центр"
                         : "Геометрію не знайдено"
                     : $"Вибрано контур: {preferredProvider}";
 
@@ -161,7 +194,90 @@ namespace MapsWPF.Services.Settlements
                         State = state,
                         HasPolygon = SettlementGeometryMerger.HasUsablePolygons(
                             settlement),
-                        HasFallbackCenter = settlement.FallbackPoint != null
+                        HasFallbackCenter = settlement.FallbackPoint != null,
+                        OverallPercent = targets.Count <= 0
+                            ? 90.0
+                            : (index + 1) * 90.0 / targets.Count
+                    },
+                    activeProviders));
+            }
+
+            for (var retryIndex = 0;
+                 retryIndex < retryTargets.Count;
+                 retryIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var settlement = retryTargets[retryIndex];
+
+                onProgress?.Invoke(WrapProgress(
+                    new SettlementContourLoadProgress
+                    {
+                        Completed = retryIndex,
+                        Total = retryTargets.Count,
+                        CurrentSettlementName = settlement.Name,
+                        State = "Повторна спроба після тимчасової помилки...",
+                        OverallPercent = 90.0 +
+                            retryIndex * 10.0 / retryTargets.Count
+                    },
+                    activeProviders));
+
+                var result = await _externalLoader.EnrichSettlementAsync(
+                    bounds,
+                    settlement,
+                    options,
+                    mapProviders,
+                    cancellationToken,
+                    forceRefresh);
+
+                if (forceRefresh)
+                {
+                    SettlementGeometryMerger
+                        .MergeSettlementCandidatesReplacingProviders(
+                            settlement,
+                            result.Settlement,
+                            result.RefreshedCenterProviders,
+                            result.RefreshedPolygonProviders);
+                }
+                else
+                {
+                    SettlementGeometryMerger.MergeSettlementCandidates(
+                        settlement,
+                        result.Settlement);
+                }
+
+                SettlementGeometryQualitySelector.RecalculateAll(
+                    working.Settlements);
+                onSnapshotReady?.Invoke(
+                    SettlementGeometryMerger.CloneCache(working));
+
+                onProgress?.Invoke(WrapProgress(
+                    new SettlementContourLoadProgress
+                    {
+                        Completed = retryIndex + 1,
+                        Total = retryTargets.Count,
+                        CurrentSettlementName = settlement.Name,
+                        State = SettlementGeometryMerger.HasUsablePolygons(
+                            settlement)
+                            ? "Контур отримано з повторної спроби"
+                            : "Повторна спроба не дала полігон; залишено центр",
+                        HasPolygon = SettlementGeometryMerger.HasUsablePolygons(
+                            settlement),
+                        HasFallbackCenter = settlement.FallbackPoint != null,
+                        OverallPercent = 90.0 +
+                            (retryIndex + 1) * 10.0 / retryTargets.Count
+                    },
+                    activeProviders));
+            }
+
+            if (retryTargets.Count == 0)
+            {
+                onProgress?.Invoke(WrapProgress(
+                    new SettlementContourLoadProgress
+                    {
+                        Completed = targets.Count,
+                        Total = targets.Count,
+                        State = "Завантаження завершено; повторних спроб не потрібно",
+                        OverallPercent = 100.0
                     },
                     activeProviders));
             }
@@ -194,7 +310,7 @@ namespace MapsWPF.Services.Settlements
                 ProviderName = providerName,
                 ProviderIndex = 1,
                 ProviderCount = activeProviders.Count,
-                OverallPercent = fraction * 100.0
+                OverallPercent = progress.OverallPercent ?? fraction * 100.0
             };
         }
     }

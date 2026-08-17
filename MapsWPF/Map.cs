@@ -33,11 +33,12 @@ namespace MapsWPF
         public float AttackSectorWidth { get; set; } = 30f;
         public double TargetDistance { get; set; } = -1; // Distance to target in meters
 
-#if DEBUG
-
-        readonly Typeface _tf = new("GenericSansSerif");
         readonly FlowDirection fd = new FlowDirection();
+
+#if DEBUG
+        readonly Typeface _tf = new("GenericSansSerif");
         public static readonly Stopwatch _stopwatch = new();
+#endif
 
         // Cache для геометрії сектору (оптимізація!)
         private PathGeometry _cachedSectorGeometry;
@@ -125,6 +126,12 @@ namespace MapsWPF
         /// </summary>
         public bool ShowCoordinates { get; set; } = true;
 
+        /// <summary>
+        /// Raised after the map has rendered so the independent HUD overlay can
+        /// refresh without drawing the HUD inside the map itself.
+        /// </summary>
+        public event EventHandler HudInvalidated;
+
         public bool IsWorkAreaEditVisible { get; set; }
 
         public bool IsWorkAreaEditFillVisible { get; set; } = true;
@@ -145,8 +152,10 @@ namespace MapsWPF
         /// <param name="drawingContext"></param>
         protected override void OnRender(DrawingContext drawingContext)
         {
+#if DEBUG
             _stopwatch.Reset();
             _stopwatch.Start();
+#endif
 
             base.OnRender(drawingContext);
 
@@ -160,12 +169,12 @@ namespace MapsWPF
                 DrawAttackZone(drawingContext);
             }
 
-            // Draw coordinates overlay (top-right corner) using WinForms style (black text on semi-transparent background)
-            if (ShowCoordinates)
-            {
-                DrawCoordinatesOverlay(drawingContext);
-            }
+            // The coordinate/servo HUD is rendered by MapHudOverlay, which is
+            // a separate WPF visual placed above this map in MainWindow.xaml.
+            // Notify it after map updates instead of drawing the HUD here.
+            HudInvalidated?.Invoke(this, EventArgs.Empty);
 
+#if DEBUG
             _stopwatch.Stop();
 
             // Draw elapsed time in milliseconds (debug)
@@ -181,6 +190,7 @@ namespace MapsWPF
 
             // Правий нижній кут карти з відступом 10 пікселів
             drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 20));
+#endif
         }
 
         private void DrawWorkAreaEditBounds(DrawingContext dc)
@@ -433,7 +443,7 @@ namespace MapsWPF
         public string AzimuthText { get; set; } = string.Empty;
         public PointLatLng? MousePositionLatLng { get; set; } = null;
 
-        private void DrawCoordinatesOverlay(DrawingContext dc)
+        internal void DrawCoordinatesOverlay(DrawingContext dc)
         {
             try
             {
@@ -574,6 +584,6 @@ namespace MapsWPF
             }
             catch { }
         }
-#endif
+
     }
 }

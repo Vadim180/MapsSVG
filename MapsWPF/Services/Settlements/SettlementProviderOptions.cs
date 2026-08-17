@@ -32,6 +32,18 @@ namespace MapsWPF.Services.Settlements
 
         public IReadOnlyList<string> ProviderStates { get; init; } =
             Array.Empty<string>();
+
+        public bool HadTransientPolygonFailure { get; init; }
+
+        public bool PolygonLookupAttempted { get; init; }
+
+        public bool PolygonLookupDefinitivelyEmpty { get; init; }
+
+        public IReadOnlyList<string> RefreshedPolygonProviders { get; init; } =
+            Array.Empty<string>();
+
+        public IReadOnlyList<string> RefreshedCenterProviders { get; init; } =
+            Array.Empty<string>();
     }
 
     public sealed class SettlementProviderAvailability

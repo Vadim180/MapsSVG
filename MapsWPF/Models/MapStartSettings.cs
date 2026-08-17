@@ -60,7 +60,7 @@ namespace MapsWPF.Models
         public double? LimitBottomRightLat { get; set; }
         public double? LimitBottomRightLng { get; set; }
         public double SettlementContourPaddingKm { get; set; } = 1.0;
-        public bool ShowSettlementContours { get; set; } = true;
+        public bool ShowSettlementContours { get; set; } = false;
         public bool UseOpenStreetMapSettlementSource { get; set; } = true;
         public bool UseSelectedMapProviderSettlementCenters { get; set; } = true;
         public bool UseAllAvailableSettlementProviders { get; set; } = true;

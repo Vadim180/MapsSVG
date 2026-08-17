@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MapsWPF", "MapsWPF\MapsWPF.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GMap.NET.WindowsPresentation", "GMap.NET\GMap.NET.WindowsPresentation\GMap.NET.WindowsPresentation.csproj", "{CC2DF5F4-5590-AF74-DE67-809B455102AA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MapsWPF.Tests", "MapsWPF.Tests\MapsWPF.Tests.csproj", "{A2F763A4-65CE-4D2C-95B1-D2458EF019C3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,6 +31,10 @@ Global
 		{CC2DF5F4-5590-AF74-DE67-809B455102AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CC2DF5F4-5590-AF74-DE67-809B455102AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{CC2DF5F4-5590-AF74-DE67-809B455102AA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A2F763A4-65CE-4D2C-95B1-D2458EF019C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A2F763A4-65CE-4D2C-95B1-D2458EF019C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A2F763A4-65CE-4D2C-95B1-D2458EF019C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A2F763A4-65CE-4D2C-95B1-D2458EF019C3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

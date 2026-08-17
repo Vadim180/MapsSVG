@@ -7,8 +7,6 @@ namespace MapsWPF.Services.Settlements
 {
     public static class SettlementGeometryMerger
     {
-        private const double MaxNameMatchDistanceMeters = 15000.0;
-
         public static SettlementGeometryCache Merge(
             SettlementGeometryCache? existingCache,
             SettlementGeometryCache? incomingCache)
@@ -60,8 +58,65 @@ namespace MapsWPF.Services.Settlements
                 ? "multi-provider"
                 : merged.Sources.FirstOrDefault() ?? "local";
 
+            SettlementGeometryQualitySelector.RecalculateAll(
+                merged.Settlements);
+
             merged.CreatedAt = DateTime.Now;
 
+            return merged;
+        }
+
+        public static SettlementGeometryCache MergeReplacingProviders(
+            SettlementGeometryCache? existingCache,
+            SettlementGeometryCache? incomingCache,
+            IEnumerable<string>? providersToReplace)
+        {
+            var merged = CloneCache(existingCache ?? new SettlementGeometryCache());
+            var incoming = CloneCache(incomingCache ?? new SettlementGeometryCache());
+            var providers = new HashSet<string>(
+                providersToReplace ?? Array.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
+
+            Normalize(merged);
+            Normalize(incoming);
+
+            if (incoming.Bounds != null)
+            {
+                merged.Bounds = CloneBounds(incoming.Bounds);
+            }
+
+            AddSources(merged.Sources, incoming.Sources);
+
+            foreach (var incomingSettlement in incoming.Settlements)
+            {
+                var target = FindMatchingSettlement(
+                    merged.Settlements,
+                    incomingSettlement);
+
+                if (target == null)
+                {
+                    merged.Settlements.Add(CloneSettlement(incomingSettlement));
+                    continue;
+                }
+
+                foreach (var provider in providers)
+                {
+                    RemoveProviderCandidates(
+                        target,
+                        provider,
+                        removeCenters: true,
+                        removePolygons: true);
+                }
+
+                MergeSettlement(target, incomingSettlement);
+            }
+
+            SettlementGeometryQualitySelector.RecalculateAll(
+                merged.Settlements);
+            merged.Source = merged.Sources.Count > 1
+                ? "multi-provider"
+                : merged.Sources.FirstOrDefault() ?? "local";
+            merged.CreatedAt = DateTime.Now;
             return merged;
         }
 
@@ -75,6 +130,7 @@ namespace MapsWPF.Services.Settlements
 
             return new SettlementGeometryCache
             {
+                SchemaVersion = cache.SchemaVersion,
                 CreatedAt = cache.CreatedAt,
                 Source = cache.Source ?? "local",
                 Sources = cache.Sources?.ToList() ?? new List<string>(),
@@ -92,6 +148,7 @@ namespace MapsWPF.Services.Settlements
 
         public static void Normalize(SettlementGeometryCache cache)
         {
+            cache.SchemaVersion = SettlementGeometryCache.CurrentSchemaVersion;
             cache.Sources ??= new List<string>();
             cache.Settlements ??= new List<SettlementGeometryItem>();
 
@@ -113,7 +170,11 @@ namespace MapsWPF.Services.Settlements
 
             foreach (var settlement in cache.Settlements)
             {
-                NormalizeSettlement(settlement, itemDefaultSource);
+                NormalizeSettlement(
+                    settlement,
+                    itemDefaultSource,
+                    cache.UtmZone,
+                    cache.UtmBand);
 
                 foreach (var reference in settlement.ProviderReferences)
                 {
@@ -130,6 +191,9 @@ namespace MapsWPF.Services.Settlements
                     AddSource(cache.Sources, polygon.Provider);
                 }
             }
+
+            SettlementGeometryQualitySelector.RecalculateAll(
+                cache.Settlements);
 
             cache.Source = cache.Sources.Count > 1
                 ? "multi-provider"
@@ -212,7 +276,13 @@ namespace MapsWPF.Services.Settlements
             string polygon,
             string provider,
             string externalId,
-            int priority)
+            int priority,
+            int utmZone = 0,
+            string? utmBand = null,
+            IEnumerable<string>? interiorRings = null,
+            string? boundary = null,
+            string? adminLevel = null,
+            bool hasExplicitSettlementLink = false)
         {
             if (settlement == null || string.IsNullOrWhiteSpace(polygon))
             {
@@ -239,7 +309,16 @@ namespace MapsWPF.Services.Settlements
                     ExternalId = externalId,
                     Priority = priority,
                     UpdatedAt = DateTime.Now,
-                    Polygon = polygon
+                    Polygon = polygon,
+                    UtmZone = utmZone,
+                    UtmBand = utmBand ?? string.Empty,
+                    InteriorRings = interiorRings?
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList() ?? new List<string>(),
+                    Boundary = boundary ?? string.Empty,
+                    AdminLevel = adminLevel ?? string.Empty,
+                    HasExplicitSettlementLink = hasExplicitSettlementLink
                 });
             }
             else
@@ -247,8 +326,62 @@ namespace MapsWPF.Services.Settlements
                 existing.ExternalId = externalId;
                 existing.Priority = priority;
                 existing.QualityScore = 0;
+                existing.ContainedSettlementCount = 0;
+                existing.RejectedBySettlementContainmentGuard = false;
+                existing.RejectedByGeometryGuard = false;
+                existing.RejectionReason = string.Empty;
+                existing.HasExplicitSettlementLink =
+                    existing.HasExplicitSettlementLink ||
+                    hasExplicitSettlementLink;
+                existing.CenterDistanceMeters = null;
+                existing.AcceptedByExplicitSettlementLink = false;
+                existing.UtmZone = utmZone > 0
+                    ? utmZone
+                    : existing.UtmZone;
+                existing.UtmBand = !string.IsNullOrWhiteSpace(utmBand)
+                    ? utmBand
+                    : existing.UtmBand;
+                existing.InteriorRings = interiorRings?
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList() ?? existing.InteriorRings ?? new List<string>();
+                existing.Boundary = !string.IsNullOrWhiteSpace(boundary)
+                    ? boundary
+                    : existing.Boundary;
+                existing.AdminLevel = !string.IsNullOrWhiteSpace(adminLevel)
+                    ? adminLevel
+                    : existing.AdminLevel;
                 existing.UpdatedAt = DateTime.Now;
             }
+        }
+
+        public static void AddPolygonCandidate(
+            SettlementGeometryItem settlement,
+            SettlementPolygonGeometry geometry,
+            string provider,
+            string externalId,
+            int priority,
+            string? boundary = null,
+            string? adminLevel = null,
+            bool hasExplicitSettlementLink = false)
+        {
+            if (geometry == null)
+            {
+                return;
+            }
+
+            AddPolygonCandidate(
+                settlement,
+                geometry.OuterRing,
+                provider,
+                externalId,
+                priority,
+                geometry.UtmZone,
+                geometry.UtmBand,
+                geometry.InteriorRings,
+                boundary,
+                adminLevel,
+                hasExplicitSettlementLink);
         }
 
         public static IReadOnlyList<string> GetPreferredPolygonLines(
@@ -263,24 +396,26 @@ namespace MapsWPF.Services.Settlements
             settlement.PolygonCandidates ??= new List<SettlementPolygonCandidate>();
 
             var validCandidates = settlement.PolygonCandidates
-                .Where(x => !string.IsNullOrWhiteSpace(x.Polygon))
+                .Where(SettlementGeometryQualitySelector.IsUsablePolygonCandidate)
                 .ToList();
 
             if (validCandidates.Count == 0)
             {
+                // Якщо metadata кандидатів уже є, але всі вони відкинуті
+                // guard-ом, не повертаємо старий сирий список Polygons.
+                if (settlement.PolygonCandidates.Count > 0)
+                {
+                    return Array.Empty<string>();
+                }
+
                 return settlement.Polygons
                     .Where(x => !string.IsNullOrWhiteSpace(x))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
             }
 
-            var priority = validCandidates.Max(
-                SettlementGeometryQualitySelector.GetEffectivePolygonScore);
-
-            return validCandidates
-                .Where(x =>
-                    SettlementGeometryQualitySelector.GetEffectivePolygonScore(x) ==
-                    priority)
+            return SettlementGeometryQualitySelector
+                .GetPreferredPolygonCandidates(settlement)
                 .Select(x => x.Polygon)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -298,25 +433,160 @@ namespace MapsWPF.Services.Settlements
         {
             return settlement?.PolygonCandidates != null &&
                    settlement.PolygonCandidates.Any(x =>
-                       !string.IsNullOrWhiteSpace(x.Polygon) &&
+                        SettlementGeometryQualitySelector.IsUsablePolygonCandidate(x) &&
                        string.Equals(
                            x.Provider,
                            provider,
                            StringComparison.OrdinalIgnoreCase));
         }
 
+        public static void RemoveProviderCandidates(
+            SettlementGeometryItem settlement,
+            string provider,
+            bool removeCenters,
+            bool removePolygons)
+        {
+            if (settlement == null || string.IsNullOrWhiteSpace(provider))
+            {
+                return;
+            }
+
+            settlement.CenterCandidates ??= new List<SettlementCenterCandidate>();
+            settlement.PolygonCandidates ??= new List<SettlementPolygonCandidate>();
+            settlement.ProviderReferences ??= new List<SettlementProviderReference>();
+
+            if (removeCenters)
+            {
+                settlement.CenterCandidates.RemoveAll(x =>
+                    string.Equals(
+                        x.Provider,
+                        provider,
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (removePolygons)
+            {
+                settlement.PolygonCandidates.RemoveAll(x =>
+                    string.Equals(
+                        x.Provider,
+                        provider,
+                        StringComparison.OrdinalIgnoreCase));
+                settlement.Polygons = settlement.PolygonCandidates
+                    .Select(x => x.Polygon)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            settlement.ProviderReferences.RemoveAll(x =>
+                string.Equals(x.Provider, provider, StringComparison.OrdinalIgnoreCase) &&
+                ((removeCenters && string.Equals(
+                      x.FeatureType,
+                      "center",
+                      StringComparison.OrdinalIgnoreCase)) ||
+                 (removePolygons &&
+                  (string.Equals(
+                       x.FeatureType,
+                       "polygon",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(
+                       x.FeatureType,
+                       "relation",
+                       StringComparison.OrdinalIgnoreCase)))));
+
+            SelectPreferredCenter(settlement);
+
+            if (settlement.CenterCandidates.Count == 0)
+            {
+                settlement.FallbackPoint = null;
+            }
+        }
+
+        public static void MergeSettlementCandidatesReplacingProviders(
+            SettlementGeometryItem target,
+            SettlementGeometryItem incoming,
+            IEnumerable<string>? refreshedCenterProviders,
+            IEnumerable<string>? refreshedPolygonProviders)
+        {
+            foreach (var provider in refreshedCenterProviders ?? Array.Empty<string>())
+            {
+                RemoveProviderCandidates(
+                    target,
+                    provider,
+                    removeCenters: true,
+                    removePolygons: false);
+            }
+
+            foreach (var provider in refreshedPolygonProviders ?? Array.Empty<string>())
+            {
+                RemoveProviderCandidates(
+                    target,
+                    provider,
+                    removeCenters: false,
+                    removePolygons: true);
+            }
+
+            MergeSettlementCandidates(target, incoming);
+        }
+
         private static void NormalizeSettlement(
             SettlementGeometryItem settlement,
-            string cacheSource)
+            string cacheSource,
+            int legacyUtmZone = 0,
+            string? legacyUtmBand = null)
         {
             settlement.Name ??= string.Empty;
+            settlement.NameAliases ??= new List<string>();
             settlement.Place ??= string.Empty;
+            settlement.Boundary ??= string.Empty;
+            settlement.AdminLevel ??= string.Empty;
+            settlement.CountryCode ??= string.Empty;
+            settlement.Region ??= string.Empty;
+            settlement.District ??= string.Empty;
             settlement.OsmType ??= string.Empty;
             settlement.GeometrySourceOsmType ??= string.Empty;
             settlement.Polygons ??= new List<string>();
             settlement.ProviderReferences ??= new List<SettlementProviderReference>();
             settlement.CenterCandidates ??= new List<SettlementCenterCandidate>();
             settlement.PolygonCandidates ??= new List<SettlementPolygonCandidate>();
+
+            AddAlias(settlement.NameAliases, settlement.Name);
+
+            if (settlement.FallbackPoint != null)
+            {
+                EnsurePointCoordinateMetadata(
+                    settlement.FallbackPoint,
+                    legacyUtmZone,
+                    legacyUtmBand);
+            }
+
+            foreach (var center in settlement.CenterCandidates)
+            {
+                center.Point ??= new SettlementPoint();
+                EnsurePointCoordinateMetadata(
+                    center.Point,
+                    legacyUtmZone,
+                    legacyUtmBand);
+            }
+
+            foreach (var candidate in settlement.PolygonCandidates)
+            {
+                candidate.InteriorRings ??= new List<string>();
+                candidate.UtmBand ??= string.Empty;
+                candidate.Boundary ??= string.Empty;
+                candidate.AdminLevel ??= string.Empty;
+                candidate.RejectionReason ??= string.Empty;
+
+                if (candidate.UtmZone <= 0)
+                {
+                    candidate.UtmZone = legacyUtmZone;
+                }
+
+                if (string.IsNullOrWhiteSpace(candidate.UtmBand))
+                {
+                    candidate.UtmBand = legacyUtmBand ?? string.Empty;
+                }
+            }
 
             var inferredSource = settlement.OsmId > 0 ||
                                  settlement.GeometrySourceOsmId > 0
@@ -375,7 +645,12 @@ namespace MapsWPF.Services.Settlements
                     polygon,
                     polygonProvider,
                     polygonExternalId,
-                    SettlementDataSources.GetDefaultPriority(polygonProvider));
+                    SettlementDataSources.GetDefaultPriority(polygonProvider),
+                    legacyUtmZone,
+                    legacyUtmBand,
+                    null,
+                    settlement.Boundary,
+                    settlement.AdminLevel);
             }
 
             SettlementGeometryQualitySelector.Recalculate(settlement);
@@ -385,6 +660,10 @@ namespace MapsWPF.Services.Settlements
             SettlementGeometryItem target,
             SettlementGeometryItem incoming)
         {
+            MergeAliases(target.NameAliases, incoming.NameAliases);
+            AddAlias(target.NameAliases, target.Name);
+            AddAlias(target.NameAliases, incoming.Name);
+
             if (string.IsNullOrWhiteSpace(target.Name))
             {
                 target.Name = incoming.Name;
@@ -394,6 +673,12 @@ namespace MapsWPF.Services.Settlements
             {
                 target.Place = incoming.Place;
             }
+
+            target.Boundary = PreferExisting(target.Boundary, incoming.Boundary);
+            target.AdminLevel = PreferExisting(target.AdminLevel, incoming.AdminLevel);
+            target.CountryCode = PreferExisting(target.CountryCode, incoming.CountryCode);
+            target.Region = PreferExisting(target.Region, incoming.Region);
+            target.District = PreferExisting(target.District, incoming.District);
 
             if (target.OsmId <= 0 && incoming.OsmId > 0)
             {
@@ -445,7 +730,13 @@ namespace MapsWPF.Services.Settlements
                     polygon.Polygon,
                     polygon.Provider,
                     polygon.ExternalId,
-                    polygon.Priority);
+                    polygon.Priority,
+                    polygon.UtmZone,
+                    polygon.UtmBand,
+                    polygon.InteriorRings,
+                    polygon.Boundary,
+                    polygon.AdminLevel,
+                    polygon.HasExplicitSettlementLink);
             }
 
             foreach (var polygon in incoming.Polygons)
@@ -490,14 +781,9 @@ namespace MapsWPF.Services.Settlements
             {
                 var exact = settlements.FirstOrDefault(candidate =>
                     candidate.ProviderReferences.Any(existingReference =>
-                        string.Equals(
-                            existingReference.Provider,
-                            reference.Provider,
-                            StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(
-                            existingReference.ExternalId,
-                            reference.ExternalId,
-                            StringComparison.OrdinalIgnoreCase)));
+                        AreSameProviderEntity(
+                            existingReference,
+                            reference)));
 
                 if (exact != null)
                 {
@@ -517,15 +803,15 @@ namespace MapsWPF.Services.Settlements
                 }
             }
 
-            var nameKey = NormalizeName(incoming.Name);
+            var incomingNames = GetNormalizedNames(incoming);
 
-            if (string.IsNullOrWhiteSpace(nameKey))
+            if (incomingNames.Count == 0)
             {
                 return null;
             }
 
             var candidates = settlements
-                .Where(x => NormalizeName(x.Name) == nameKey)
+                .Where(x => GetNormalizedNames(x).Overlaps(incomingNames))
                 .ToList();
 
             if (candidates.Count == 0)
@@ -546,7 +832,16 @@ namespace MapsWPF.Services.Settlements
 
             if (incoming.FallbackPoint != null)
             {
-                var closest = candidates
+                var exactContextCandidates = candidates
+                    .Where(x => HasSameAdministrativeContext(x, incoming))
+                    .ToList();
+
+                if (exactContextCandidates.Count == 1)
+                {
+                    candidates = exactContextCandidates;
+                }
+
+                var ranked = candidates
                     .Where(x => x.FallbackPoint != null)
                     .Select(x => new
                     {
@@ -556,17 +851,29 @@ namespace MapsWPF.Services.Settlements
                             x.FallbackPoint!)
                     })
                     .OrderBy(x => x.Distance)
-                    .FirstOrDefault();
+                    .ToList();
+                var closest = ranked.FirstOrDefault();
 
                 if (closest != null &&
-                    closest.Distance <= MaxNameMatchDistanceMeters)
+                    closest.Distance <= GetMaximumIdentityDistanceMeters(
+                        incoming.Place) &&
+                    IsNearestMatchUnambiguous(ranked.Select(x => x.Distance)))
                 {
                     return closest.Settlement;
                 }
+
+                return null;
             }
 
-            return candidates.Count == 1
-                ? candidates[0]
+            // Без координат назви недостатньо: дві сусідні Ковалівки мають
+            // залишатися окремими записами. Дозволяємо name-only merge лише
+            // коли повністю збігається адміністративний контекст.
+            var contextMatches = candidates
+                .Where(x => HasSameAdministrativeContext(x, incoming))
+                .ToList();
+
+            return contextMatches.Count == 1
+                ? contextMatches[0]
                 : null;
         }
 
@@ -619,7 +926,13 @@ namespace MapsWPF.Services.Settlements
             return new SettlementGeometryItem
             {
                 Name = source.Name ?? string.Empty,
+                NameAliases = source.NameAliases?.ToList() ?? new List<string>(),
                 Place = source.Place ?? string.Empty,
+                Boundary = source.Boundary ?? string.Empty,
+                AdminLevel = source.AdminLevel ?? string.Empty,
+                CountryCode = source.CountryCode ?? string.Empty,
+                Region = source.Region ?? string.Empty,
+                District = source.District ?? string.Empty,
                 OsmType = source.OsmType ?? string.Empty,
                 OsmId = source.OsmId,
                 GeometrySourceOsmType = source.GeometrySourceOsmType ?? string.Empty,
@@ -658,6 +971,21 @@ namespace MapsWPF.Services.Settlements
                         AreaSquareKilometers = x.AreaSquareKilometers,
                         VertexCount = x.VertexCount,
                         ContainsCenter = x.ContainsCenter,
+                        HasExplicitSettlementLink =
+                            x.HasExplicitSettlementLink,
+                        CenterDistanceMeters = x.CenterDistanceMeters,
+                        AcceptedByExplicitSettlementLink =
+                            x.AcceptedByExplicitSettlementLink,
+                        ContainedSettlementCount = x.ContainedSettlementCount,
+                        RejectedBySettlementContainmentGuard =
+                            x.RejectedBySettlementContainmentGuard,
+                        RejectedByGeometryGuard = x.RejectedByGeometryGuard,
+                        RejectionReason = x.RejectionReason ?? string.Empty,
+                        UtmZone = x.UtmZone,
+                        UtmBand = x.UtmBand ?? string.Empty,
+                        InteriorRings = x.InteriorRings?.ToList() ?? new List<string>(),
+                        Boundary = x.Boundary ?? string.Empty,
+                        AdminLevel = x.AdminLevel ?? string.Empty,
                         UpdatedAt = x.UpdatedAt,
                         Polygon = x.Polygon ?? string.Empty
                     })
@@ -679,12 +1007,19 @@ namespace MapsWPF.Services.Settlements
 
         private static SettlementPoint ClonePoint(SettlementPoint source)
         {
-            return new SettlementPoint(source.X, source.Y);
+            return new SettlementPoint(
+                source.X,
+                source.Y,
+                source.UtmZone,
+                source.UtmBand,
+                source.Latitude,
+                source.Longitude);
         }
 
         private static string CreatePointExternalId(SettlementPoint point)
         {
-            return $"{point.X:0.###},{point.Y:0.###}";
+            return $"{point.UtmZone}{point.UtmBand}:" +
+                   $"{point.X:0.###},{point.Y:0.###}";
         }
 
         private static string NormalizeName(string? value)
@@ -706,10 +1041,181 @@ namespace MapsWPF.Services.Settlements
             SettlementPoint first,
             SettlementPoint second)
         {
-            var dx = first.X - second.X;
-            var dy = first.Y - second.Y;
+            return SettlementUtmProjection.GetDistanceMeters(first, second);
+        }
 
-            return Math.Sqrt(dx * dx + dy * dy);
+        private static void EnsurePointCoordinateMetadata(
+            SettlementPoint point,
+            int legacyUtmZone,
+            string? legacyUtmBand)
+        {
+            if (point.UtmZone <= 0)
+            {
+                point.UtmZone = legacyUtmZone;
+            }
+
+            if (string.IsNullOrWhiteSpace(point.UtmBand))
+            {
+                point.UtmBand = legacyUtmBand ?? string.Empty;
+            }
+
+            if ((!point.Latitude.HasValue || !point.Longitude.HasValue) &&
+                SettlementUtmProjection.TryToLatLng(
+                    point,
+                    out var latitude,
+                    out var longitude))
+            {
+                point.Latitude = latitude;
+                point.Longitude = longitude;
+            }
+        }
+
+        private static HashSet<string> GetNormalizedNames(
+            SettlementGeometryItem settlement)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddNormalizedName(result, settlement.Name);
+
+            foreach (var alias in settlement.NameAliases ?? new List<string>())
+            {
+                AddNormalizedName(result, alias);
+            }
+
+            return result;
+        }
+
+        private static void AddNormalizedName(
+            HashSet<string> target,
+            string? value)
+        {
+            var normalized = NormalizeName(value);
+
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                target.Add(normalized);
+            }
+        }
+
+        private static void MergeAliases(
+            List<string> target,
+            IEnumerable<string>? aliases)
+        {
+            if (aliases == null)
+            {
+                return;
+            }
+
+            foreach (var alias in aliases)
+            {
+                AddAlias(target, alias);
+            }
+        }
+
+        private static void AddAlias(List<string> target, string? alias)
+        {
+            if (string.IsNullOrWhiteSpace(alias) ||
+                target.Contains(alias.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            target.Add(alias.Trim());
+        }
+
+        private static double GetMaximumIdentityDistanceMeters(string? place)
+        {
+            return place?.Trim().ToLowerInvariant() switch
+            {
+                "city" => 8000.0,
+                "town" => 5000.0,
+                "village" => 2500.0,
+                "hamlet" => 1500.0,
+                "isolated_dwelling" => 800.0,
+                _ => 2000.0
+            };
+        }
+
+        private static bool IsNearestMatchUnambiguous(
+            IEnumerable<double> orderedDistances)
+        {
+            var distances = orderedDistances.Take(2).ToList();
+
+            if (distances.Count < 2 || distances[0] <= 250.0)
+            {
+                return true;
+            }
+
+            // Якщо два однойменні НП майже однаково близькі, координати самі
+            // по собі не є достатнім доказом. Краще залишити окремий запис,
+            // ніж приклеїти контур до сусідньої Ковалівки.
+            return distances[1] - distances[0] >= 500.0;
+        }
+
+        private static bool AreSameProviderEntity(
+            SettlementProviderReference first,
+            SettlementProviderReference second)
+        {
+            if (!string.Equals(
+                    first.Provider,
+                    second.Provider,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    first.ExternalId,
+                    second.ExternalId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!string.Equals(
+                    first.Provider,
+                    SettlementDataSources.OpenStreetMapOverpass,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // ID node/way/relation належать різним просторам OSM і можуть
+            // випадково мати однакове число.
+            return string.Equals(
+                first.FeatureType,
+                second.FeatureType,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasSameAdministrativeContext(
+            SettlementGeometryItem first,
+            SettlementGeometryItem second)
+        {
+            var hasContext =
+                !string.IsNullOrWhiteSpace(first.Region) ||
+                !string.IsNullOrWhiteSpace(first.District) ||
+                !string.IsNullOrWhiteSpace(second.Region) ||
+                !string.IsNullOrWhiteSpace(second.District);
+
+            return hasContext &&
+                   string.Equals(
+                       first.Region,
+                       second.Region,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(
+                       first.District,
+                       second.District,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(
+                       first.Place,
+                       second.Place,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string PreferExisting(string? target, string? incoming)
+        {
+            if (!string.IsNullOrWhiteSpace(target))
+            {
+                return target;
+            }
+
+            return incoming ?? string.Empty;
         }
     }
 }
