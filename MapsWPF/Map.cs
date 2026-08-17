@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
@@ -21,33 +20,60 @@ namespace MapsWPF
         public PointLatLng AttackPoint { get; set; } = PointLatLng.Empty;
         public bool IsAttackPointSet { get; set; } = false;
 
-        public float AttackAngle { get; set; } = 0f;
+        private float _attackAngle;
+        public float AttackAngle
+        {
+            get => _attackAngle;
+            set
+            {
+                if (_attackAngle.Equals(value)) return;
+                _attackAngle = value;
+                InvalidateHud();
+            }
+        }
 
         // Computed display angle for servo overlay (angle to show next to "СЕРВА")
-        public float ServoAngleDisplay { get; set; } = float.NaN;
+        private float _servoAngleDisplay = float.NaN;
+        public float ServoAngleDisplay
+        {
+            get => _servoAngleDisplay;
+            set
+            {
+                if (_servoAngleDisplay.Equals(value)) return;
+                _servoAngleDisplay = value;
+                InvalidateHud();
+            }
+        }
 
         // Dimensions in METERS now, not pixels
         public double AttackRayLengthMeters { get; set; } = 5000;
         public double AttackSectorRadiusMeters { get; set; } = 5000;
 
         public float AttackSectorWidth { get; set; } = 30f;
-        public double TargetDistance { get; set; } = -1; // Distance to target in meters
+        private double _targetDistance = -1;
+        public double TargetDistance
+        {
+            get => _targetDistance;
+            set
+            {
+                if (_targetDistance.Equals(value)) return;
+                _targetDistance = value;
+                InvalidateHud();
+            }
+        } // Distance to target in meters
 
         readonly FlowDirection fd = new FlowDirection();
-
-#if DEBUG
-        readonly Typeface _tf = new("GenericSansSerif");
-        public static readonly Stopwatch _stopwatch = new();
-#endif
 
         // Cache для геометрії сектору (оптимізація!)
         private PathGeometry _cachedSectorGeometry;
         private float _lastCachedAngle = float.MinValue;
         private float _lastCachedWidth = float.MinValue;
         private double _lastCachedRadiusMeters = double.MinValue;
+        private double _lastCachedRayLengthMeters = double.MinValue;
         private PointLatLng _lastCachedPoint = PointLatLng.Empty;
         private double _lastCachedZoom = -1;
-        private Point _lastCachedCenter = new Point(double.MinValue, double.MinValue);
+        private double _cachedPixelRadius;
+        private double _cachedPixelRayLength;
 
         // Статичні ресурси (створюються один раз)
         private static readonly SolidColorBrush _sectorBrush;
@@ -124,13 +150,27 @@ namespace MapsWPF
         /// <summary>
         /// Show coordinates overlay
         /// </summary>
-        public bool ShowCoordinates { get; set; } = true;
+        private bool _showCoordinates = true;
+        public bool ShowCoordinates
+        {
+            get => _showCoordinates;
+            set
+            {
+                if (_showCoordinates == value) return;
+                _showCoordinates = value;
+                InvalidateHud();
+            }
+        }
 
         /// <summary>
-        /// Raised after the map has rendered so the independent HUD overlay can
-        /// refresh without drawing the HUD inside the map itself.
+        /// Raised when the independent HUD overlay needs to refresh.
         /// </summary>
         public event EventHandler HudInvalidated;
+
+        public void InvalidateHud()
+        {
+            HudInvalidated?.Invoke(this, EventArgs.Empty);
+        }
 
         public bool IsWorkAreaEditVisible { get; set; }
 
@@ -152,11 +192,6 @@ namespace MapsWPF
         /// <param name="drawingContext"></param>
         protected override void OnRender(DrawingContext drawingContext)
         {
-#if DEBUG
-            _stopwatch.Reset();
-            _stopwatch.Start();
-#endif
-
             base.OnRender(drawingContext);
 
             DrawWorkAreaLimitDebugBounds(drawingContext);
@@ -168,29 +203,6 @@ namespace MapsWPF
             {
                 DrawAttackZone(drawingContext);
             }
-
-            // The coordinate/servo HUD is rendered by MapHudOverlay, which is
-            // a separate WPF visual placed above this map in MainWindow.xaml.
-            // Notify it after map updates instead of drawing the HUD here.
-            HudInvalidated?.Invoke(this, EventArgs.Empty);
-
-#if DEBUG
-            _stopwatch.Stop();
-
-            // Draw elapsed time in milliseconds (debug)
-            var text = new FormattedText(
-                _stopwatch.ElapsedMilliseconds +
-                "ms",
-                CultureInfo.InvariantCulture,
-                fd,
-                _tf,
-                12,
-                Brushes.Red,
-                VisualTreeHelper.GetDpi(this).PixelsPerDip);
-
-            // Правий нижній кут карти з відступом 10 пікселів
-            drawingContext.DrawText(text, new Point(ActualWidth - text.Width - 10, ActualHeight - text.Height - 20));
-#endif
         }
 
         private void DrawWorkAreaEditBounds(DrawingContext dc)
@@ -321,29 +333,25 @@ namespace MapsWPF
             var gCenter = FromLatLngToLocal(AttackPoint);
             var center = new Point(gCenter.X, gCenter.Y);
 
-            // Calculate radius in pixels based on zoom level
-            // We take a point at distance X North and measure pixel distance
-            // This is an approximation but good enough for visual
-            // Better: use MapProvider projection
-
-            var pxRadius = GetPixelDistance(AttackPoint, AttackSectorRadiusMeters);
-            var pxRayLength = GetPixelDistance(AttackPoint, AttackRayLengthMeters);
-
             // Перевіряємо чи змінилися параметри (якщо ні - використовуємо кеш!)
             bool needsUpdate = _cachedSectorGeometry == null ||
                               _lastCachedAngle != AttackAngle ||
                               _lastCachedWidth != AttackSectorWidth ||
                               Math.Abs(_lastCachedRadiusMeters - AttackSectorRadiusMeters) > 0.001 ||
+                              Math.Abs(_lastCachedRayLengthMeters - AttackRayLengthMeters) > 0.001 ||
                               _lastCachedPoint != AttackPoint ||
-                              Math.Abs(_lastCachedZoom - Zoom) > 0.01 ||
-                              _lastCachedCenter != center;
+                              Math.Abs(_lastCachedZoom - Zoom) > 0.01;
 
             if (needsUpdate)
             {
+                // Calculate pixel lengths only when the attack/zoom parameters
+                // change. During a pan the whole zone only translates.
+                _cachedPixelRadius = GetPixelDistance(AttackPoint, AttackSectorRadiusMeters);
+                _cachedPixelRayLength = GetPixelDistance(AttackPoint, AttackRayLengthMeters);
+
                 // Тільки якщо змінилося - перестворюємо геометрію
                 float drawAngle = AttackAngle - 90f;
-                // Use calculated pixel radius
-                var radius = pxRadius;
+                var radius = _cachedPixelRadius;
 
                 var startAngle = drawAngle - (AttackSectorWidth / 2);
                 var endAngle = drawAngle + (AttackSectorWidth / 2);
@@ -352,25 +360,25 @@ namespace MapsWPF
                 var endRad = endAngle * System.Math.PI / 180.0;
 
                 var startPoint = new Point(
-                    center.X + radius * System.Math.Cos(startRad),
-                    center.Y + radius * System.Math.Sin(startRad));
+                    radius * System.Math.Cos(startRad),
+                    radius * System.Math.Sin(startRad));
 
                 var endPoint = new Point(
-                    center.X + radius * System.Math.Cos(endRad),
-                    center.Y + radius * System.Math.Sin(endRad));
+                    radius * System.Math.Cos(endRad),
+                    radius * System.Math.Sin(endRad));
 
                 // Створюємо нову геометрію
                 var pathGeometry = new PathGeometry();
                 var pathFigure = new PathFigure
                 {
-                    StartPoint = center,
+                    StartPoint = new Point(0, 0),
                     IsClosed = true
                 };
 
                 pathFigure.Segments.Add(new LineSegment(startPoint, true));
                 pathFigure.Segments.Add(new ArcSegment(endPoint, new Size(radius, radius), 0,
                     AttackSectorWidth > 180, SweepDirection.Clockwise, true));
-                pathFigure.Segments.Add(new LineSegment(center, true));
+                pathFigure.Segments.Add(new LineSegment(new Point(0, 0), true));
 
                 pathGeometry.Figures.Add(pathFigure);
                 pathGeometry.Freeze(); // Заморожуємо для швидкості
@@ -380,25 +388,28 @@ namespace MapsWPF
                 _lastCachedAngle = AttackAngle;
                 _lastCachedWidth = AttackSectorWidth;
                 _lastCachedRadiusMeters = AttackSectorRadiusMeters;
+                _lastCachedRayLengthMeters = AttackRayLengthMeters;
                 _lastCachedPoint = AttackPoint;
                 _lastCachedZoom = Zoom;
-                _lastCachedCenter = center;
             }
 
-            // Малюємо сектор з кешу (швидко!)
+            // Малюємо сектор з кешу (швидко!), зміщуючи його до поточного
+            // екранного положення точки атаки. Геометрія не перебудовується
+            // під час кожного перетягування карти.
+            dc.PushTransform(new TranslateTransform(center.X, center.Y));
             dc.DrawGeometry(_sectorBrush, _sectorPen, _cachedSectorGeometry);
 
             // Малюємо промінь (центральна лінія)
             float drawAngleForRay = AttackAngle - 90f;
             float rad = (float)(drawAngleForRay * System.Math.PI / 180.0);
 
-            // Use calculated pixel len
-            float endX = (float)(center.X + System.Math.Cos(rad) * pxRayLength);
-            float endY = (float)(center.Y + System.Math.Sin(rad) * pxRayLength);
-            dc.DrawLine(_rayPen, center, new Point(endX, endY));
+            float endX = (float)(System.Math.Cos(rad) * _cachedPixelRayLength);
+            float endY = (float)(System.Math.Sin(rad) * _cachedPixelRayLength);
+            dc.DrawLine(_rayPen, new Point(0, 0), new Point(endX, endY));
 
             // Малюємо центральний маркер (червоне коло)
-            dc.DrawEllipse(Brushes.Red, null, center, 3, 3);
+            dc.DrawEllipse(Brushes.Red, null, new Point(0, 0), 3, 3);
+            dc.Pop();
         }
 
         private double GetPixelDistance(PointLatLng centerInfo, double meters)
@@ -440,8 +451,30 @@ namespace MapsWPF
             return new PointLatLng(lat2 * 180d / System.Math.PI, lon2 * 180d / System.Math.PI);
         }
 
-        public string AzimuthText { get; set; } = string.Empty;
-        public PointLatLng? MousePositionLatLng { get; set; } = null;
+        private string _azimuthText = string.Empty;
+        public string AzimuthText
+        {
+            get => _azimuthText;
+            set
+            {
+                var next = value ?? string.Empty;
+                if (string.Equals(_azimuthText, next, StringComparison.Ordinal)) return;
+                _azimuthText = next;
+                InvalidateHud();
+            }
+        }
+
+        private PointLatLng? _mousePositionLatLng;
+        public PointLatLng? MousePositionLatLng
+        {
+            get => _mousePositionLatLng;
+            set
+            {
+                if (Nullable.Equals(_mousePositionLatLng, value)) return;
+                _mousePositionLatLng = value;
+                InvalidateHud();
+            }
+        }
 
         internal void DrawCoordinatesOverlay(DrawingContext dc)
         {
@@ -499,10 +532,10 @@ namespace MapsWPF
 
                 double maxLabelWidth = 0;
                 double maxValueWidth = 0;
+                var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
                 foreach (var row in rows)
                 {
-                    var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
                     var lft = new FormattedText(row.Label, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush, pixelsPerDip);
                     var vft = new FormattedText(row.Value, CultureInfo.InvariantCulture, fd, textTypeFace, 14, _overlayTextBrush, pixelsPerDip);
                     labelFts.Add(lft);

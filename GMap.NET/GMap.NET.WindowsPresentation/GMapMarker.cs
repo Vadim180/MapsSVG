@@ -231,7 +231,12 @@ namespace GMap.NET.WindowsPresentation
             if (Map != null)
             {
                 var p = Map.FromLatLngToLocal(Position);
-                p.Offset(-(long)Map.MapTranslateTransform.X, -(long)Map.MapTranslateTransform.Y);
+                // Subtract the transform actually applied to the marker Canvas.
+                // For fractional zoom it contains the scaled render offset;
+                // using the raw tile offset makes markers float over the map.
+                p.Offset(
+                    -(long)Map.MapOverlayTranslateTransform.X,
+                    -(long)Map.MapOverlayTranslateTransform.Y);
 
                 LocalPositionX = (int)(p.X + (long)Offset.X);
                 LocalPositionY = (int)(p.Y + (long)Offset.Y);
