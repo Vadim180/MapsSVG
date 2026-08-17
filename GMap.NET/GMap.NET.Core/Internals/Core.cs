@@ -30,21 +30,18 @@ namespace GMap.NET.Internals
         private GPoint _centerTileXYLocationLast;
         private GPoint _dragPoint;
 
-        /// <summary>
-        /// Throttling mechanism for UpdateBounds during drag operations.
-        /// Prevents excessive tile recalculations which cause lag during map panning.
-        /// UpdateBounds is expensive (~140ms) so we limit it to once per 150ms during drag.
-        /// Any pending updates are executed when drag ends (EndDrag).
-        /// </summary>
-        private DateTime _lastUpdateBoundsTime = DateTime.MinValue;
-        private const int UPDATE_BOUNDS_THROTTLE_MS = 150; // Optimal balance between responsiveness and performance
+        // _sizeOfMapArea already contains one tile of safety padding. Load one
+        // additional ring so ordinary panning stays entirely on prepared tiles.
+        private const int AdditionalPrefetchTileMargin = 1;
 
-        private bool _hasPendingCenterTileUpdate = false;
+        private readonly object _tileViewUpdateSync = new object();
+        private readonly object _tileViewCommitSync = new object();
+        private TileViewUpdateRequest _pendingTileViewUpdate;
+        private bool _tileViewUpdateWorkerRunning;
+        private int _tileViewGeneration;
 
         private TaskCompletionSource<bool> _reloadCompletionSource;
         private bool _isReloading = false;
-
-        private GPoint _pendingCenterTileUpdate = GPoint.Empty;
 
         internal GPoint CompensationOffset;
 
@@ -80,6 +77,10 @@ namespace GMap.NET.Internals
 
 #if !NETFRAMEWORK
         public readonly Stack<LoadTask> TileLoadQueue = new Stack<LoadTask>();
+        private readonly HashSet<LoadTask> _tileLoadsInProgress =
+            new HashSet<LoadTask>(new LoadTaskComparer());
+        private int _tileLoadBatchId;
+        private int _completedTileLoadBatchId;
 #endif
 
         static readonly int GThreadPoolSize = 4;
@@ -108,19 +109,6 @@ namespace GMap.NET.Internals
         ///     is user dragging map
         /// </summary>
         public bool IsDragging;
-
-        /// <summary>
-        /// Gets or sets the throttle interval (in milliseconds) for UpdateBounds during drag operations.
-        /// Lower values = more responsive but more CPU usage. Higher values = smoother but may skip tiles.
-        /// Default: 150ms (optimal for most scenarios)
-        /// Range: 50-500ms recommended
-        /// </summary>
-        public int UpdateBoundsThrottleMs
-        {
-            get => _updateBoundsThrottleMs;
-            set => _updateBoundsThrottleMs = Math.Max(50, Math.Min(500, value)); // Clamp to reasonable range
-        }
-        private int _updateBoundsThrottleMs = UPDATE_BOUNDS_THROTTLE_MS;
 
         public Core()
         {
@@ -632,18 +620,6 @@ namespace GMap.NET.Internals
             IsDragging = false;
             MouseDown = GPoint.Empty;
 
-            // If there's a pending UpdateBounds from throttling, execute it now
-            if (_hasPendingCenterTileUpdate && _pendingCenterTileUpdate != _centerTileXYLocationLast)
-            {
-#if DEBUG
-                Debug.WriteLine($"  [THROTTLE] EndDrag: Executing pending UpdateBounds for tile {_pendingCenterTileUpdate}");
-#endif
-                _centerTileXYLocationLast = _pendingCenterTileUpdate;
-                _hasPendingCenterTileUpdate = false;
-                _pendingCenterTileUpdate = GPoint.Empty;
-                UpdateBounds();
-            }
-
             Refresh.Set();
         }
 
@@ -769,7 +745,7 @@ namespace GMap.NET.Internals
             if (CenterTileXYLocation != _centerTileXYLocationLast)
             {
                 _centerTileXYLocationLast = CenterTileXYLocation;
-                UpdateBounds();
+                QueueBoundsUpdate();
             }
 
             {
@@ -807,44 +783,19 @@ namespace GMap.NET.Internals
 
             if (CenterTileXYLocation != _centerTileXYLocationLast)
             {
-                // Throttle потрібен тільки під час реального перетягування мишкою.
-                // Для zoom / fit / програмного Position потрібно оновлювати тайли одразу,
-                // інакше TileDrawingList може не покрити весь екран.
+                _centerTileXYLocationLast = CenterTileXYLocation;
+
+                // Mouse input must never wait for tile-list or queue work.
+                // During a drag, coalesce requests on a worker and keep moving
+                // the already prepared tile window. Programmatic positioning
+                // still updates synchronously so callers see a ready viewport.
                 if (!IsDragging)
                 {
-                    _centerTileXYLocationLast = CenterTileXYLocation;
-                    _pendingCenterTileUpdate = GPoint.Empty;
-                    _lastUpdateBoundsTime = DateTime.Now;
-
                     UpdateBounds();
                 }
                 else
                 {
-                    var now = DateTime.Now;
-                    var timeSinceLastUpdate = (now - _lastUpdateBoundsTime).TotalMilliseconds;
-
-                    if (timeSinceLastUpdate >= _updateBoundsThrottleMs)
-                    {
-                        _centerTileXYLocationLast = CenterTileXYLocation;
-                        _hasPendingCenterTileUpdate = false;
-
-                        _pendingCenterTileUpdate = GPoint.Empty;
-                        _lastUpdateBoundsTime = now;
-
-                        UpdateBounds();
-
-#if DEBUG
-                        Debug.WriteLine($"  [THROTTLE] UpdateBounds executed (interval: {timeSinceLastUpdate:F0}ms)");
-#endif
-                    }
-                    else
-                    {
-                        _hasPendingCenterTileUpdate = true;
-                        _pendingCenterTileUpdate = CenterTileXYLocation;
-#if DEBUG
-                        Debug.WriteLine($"  [THROTTLE] UpdateBounds skipped (next in {_updateBoundsThrottleMs - timeSinceLastUpdate:F0}ms)");
-#endif
-                    }
+                    QueueBoundsUpdate();
                 }
             }
 
@@ -865,6 +816,13 @@ namespace GMap.NET.Internals
         /// </summary>
         public void CancelAsyncTasks()
         {
+            Interlocked.Increment(ref _tileViewGeneration);
+
+            lock (_tileViewUpdateSync)
+            {
+                _pendingTileViewUpdate = null;
+            }
+
             if (IsStarted)
             {
 #if NETFRAMEWORK
@@ -946,8 +904,6 @@ namespace GMap.NET.Internals
             TileLoadQueue4.Add(t);
         }
 #else
-        byte _loadWaitCount = 0;
-
         void TileLoadThread()
         {
             LoadTask? task = null;
@@ -964,14 +920,6 @@ namespace GMap.NET.Internals
                 {
                     while (TileLoadQueue.Count == 0)
                     {
-                        Debug.WriteLine(ctid + " - Wait " + _loadWaitCount + " - " + DateTime.Now.TimeOfDay);
-
-                        if (++_loadWaitCount >= GThreadPoolSize)
-                        {
-                            _loadWaitCount = 0;
-                            OnLoadComplete(ctid);
-                        }
-
                         if (!IsStarted || false == Monitor.Wait(TileLoadQueue, WaitForTileLoadThreadTimeout, false) || !IsStarted)
                         {
                             stop = true;
@@ -979,9 +927,10 @@ namespace GMap.NET.Internals
                         }
                     }
 
-                    if (IsStarted && !stop || TileLoadQueue.Count > 0)
+                    if (IsStarted && !stop && TileLoadQueue.Count > 0)
                     {
                         task = TileLoadQueue.Pop();
+                        _tileLoadsInProgress.Add(task.Value);
                     }
                 }
                 finally
@@ -989,9 +938,46 @@ namespace GMap.NET.Internals
                     Monitor.Exit(TileLoadQueue);
                 }
 
-                if (task.HasValue && IsStarted)
+                if (task.HasValue)
                 {
-                    ProcessLoadTask(task.Value, ctid);
+                    try
+                    {
+                        if (IsStarted)
+                        {
+                            ProcessLoadTask(task.Value, ctid);
+                        }
+                    }
+                    finally
+                    {
+                        var completedBatchId = 0;
+
+                        Monitor.Enter(TileLoadQueue);
+                        try
+                        {
+                            _tileLoadsInProgress.Remove(task.Value);
+
+                            if (TileLoadQueue.Count == 0 &&
+                                _tileLoadsInProgress.Count == 0 &&
+                                _completedTileLoadBatchId !=
+                                _tileLoadBatchId)
+                            {
+                                _completedTileLoadBatchId =
+                                    _tileLoadBatchId;
+                                completedBatchId = _tileLoadBatchId;
+                            }
+                        }
+                        finally
+                        {
+                            Monitor.Exit(TileLoadQueue);
+                        }
+
+                        if (completedBatchId > 0 &&
+                            IsStarted &&
+                            IsTileLoadBatchStillComplete(completedBatchId))
+                        {
+                            OnLoadComplete(ctid);
+                        }
+                    }
                 }
             }
 
@@ -1026,8 +1012,6 @@ namespace GMap.NET.Internals
                 var m = task.Core.Matrix.GetTileWithReadLock(task.Zoom, task.Pos);
                 if (!m.NotEmpty)
                 {
-                    Debug.WriteLine(ctid + " - try load: " + task);
-
                     var t = new Tile(task.Zoom, task.Pos);
 
                     foreach (var tl in task.Core._provider.Overlays)
@@ -1117,7 +1101,6 @@ namespace GMap.NET.Internals
 
                             if (img != null)
                             {
-                                Debug.WriteLine(ctid + " - tile loaded: " + img.Data.Length / 1024 + "KB, " + task);
                                 {
                                     t.AddOverlay(img);
                                 }
@@ -1147,8 +1130,6 @@ namespace GMap.NET.Internals
 
                                 if (task.Core.RetryLoadTile > 0)
                                 {
-                                    Debug.WriteLine(ctid + " - ProcessLoadTask: " + task + " -> empty tile, retry " +
-                                                    retry);
                                     {
                                         Thread.Sleep(1111);
                                     }
@@ -1189,18 +1170,23 @@ namespace GMap.NET.Internals
 
             #region -- clear stuff--
 
-            if (IsStarted)
+            lock (_tileViewCommitSync)
             {
-                GMaps.Instance.MemoryCache.RemoveOverload();
+                if (IsStarted && Matrix != null)
+                {
+                    GMaps.Instance.MemoryCache.RemoveOverload();
 
-                TileDrawingListLock.AcquireReaderLock();
-                try
-                {
-                    Matrix.ClearLevelAndPointsNotIn(Zoom, TileDrawingList);
-                }
-                finally
-                {
-                    TileDrawingListLock.ReleaseReaderLock();
+                    TileDrawingListLock.AcquireReaderLock();
+                    try
+                    {
+                        Matrix.ClearLevelAndPointsNotIn(
+                            Zoom,
+                            TileDrawingList);
+                    }
+                    finally
+                    {
+                        TileDrawingListLock.ReleaseReaderLock();
+                    }
                 }
             }
 
@@ -1212,9 +1198,6 @@ namespace GMap.NET.Internals
             GC.WaitForPendingFinalizers();
             GC.Collect();
 #endif
-            Debug.WriteLine(ctid + " - OnTileLoadComplete: " + lastTileLoadTimeMs + "ms, MemoryCacheSize: " +
-                            GMaps.Instance.MemoryCache.Size + "MB");
-
             if (OnTileLoadComplete != null)
             {
                 OnTileLoadComplete(lastTileLoadTimeMs);
@@ -1232,6 +1215,21 @@ namespace GMap.NET.Internals
 
         public bool UpdatingBounds;
 
+        private sealed class TileViewUpdateRequest
+        {
+            public int Generation;
+            public int Zoom;
+            public GPoint CenterTile;
+            public GSize MapArea;
+            public GSize MinimumTile;
+            public GSize MaximumTile;
+            public long TileWidth;
+            public long TileHeight;
+            public double ScaleX;
+            public double ScaleY;
+            public GMapProvider Provider;
+        }
+
         /// <summary>
         ///     updates map bounds
         /// </summary>
@@ -1242,155 +1240,302 @@ namespace GMap.NET.Internals
                 return;
             }
 
+            ApplyTileViewUpdate(CreateTileViewUpdateRequest());
+        }
+
+        /// <summary>
+        /// Queues the latest viewport while the user is panning. Only one
+        /// worker is active; newer requests replace work which has not started.
+        /// </summary>
+        private void QueueBoundsUpdate()
+        {
+            if (!IsStarted || Provider.Equals(EmptyProvider.Instance))
+            {
+                return;
+            }
+
+            var request = CreateTileViewUpdateRequest();
+
+            lock (_tileViewUpdateSync)
+            {
+                _pendingTileViewUpdate = request;
+
+                if (_tileViewUpdateWorkerRunning)
+                {
+                    return;
+                }
+
+                _tileViewUpdateWorkerRunning = true;
+            }
+
+            ThreadPool.QueueUserWorkItem(_ => ProcessQueuedTileViewUpdates());
+        }
+
+        private void ProcessQueuedTileViewUpdates()
+        {
+            while (true)
+            {
+                TileViewUpdateRequest request;
+
+                lock (_tileViewUpdateSync)
+                {
+                    request = _pendingTileViewUpdate;
+                    _pendingTileViewUpdate = null;
+
+                    if (request == null)
+                    {
+                        _tileViewUpdateWorkerRunning = false;
+                        return;
+                    }
+                }
+
+                ApplyTileViewUpdate(request);
+            }
+        }
+
+        private TileViewUpdateRequest CreateTileViewUpdateRequest()
+        {
+            return new TileViewUpdateRequest
+            {
+                Generation = Interlocked.Increment(ref _tileViewGeneration),
+                Zoom = Zoom,
+                CenterTile = CenterTileXYLocation,
+                MapArea = _sizeOfMapArea,
+                MinimumTile = _minOfTiles,
+                MaximumTile = _maxOfTiles,
+                TileWidth = TileRect.Width,
+                TileHeight = TileRect.Height,
+                ScaleX = ScaleX,
+                ScaleY = ScaleY,
+                Provider = Provider
+            };
+        }
+
+        private bool IsTileViewUpdateCurrent(TileViewUpdateRequest request)
+        {
+            return request != null &&
+                   request.Generation == Volatile.Read(ref _tileViewGeneration) &&
+                   IsStarted &&
+                   request.Zoom == Zoom &&
+                   ReferenceEquals(request.Provider, Provider);
+        }
+
+        private void ApplyTileViewUpdate(TileViewUpdateRequest request)
+        {
+            if (!IsTileViewUpdateCurrent(request))
+            {
+                return;
+            }
+
             UpdatingBounds = true;
+
             try
             {
-#if DEBUG
-                var swTotal = System.Diagnostics.Stopwatch.StartNew();
-#endif
-                // --- формування TileDrawingList ---
-                TileDrawingListLock.AcquireWriterLock();
-                try
+                var tiles = TilePrefetchPlanner.Build(
+                    request.CenterTile,
+                    request.MapArea,
+                    request.MinimumTile,
+                    request.MaximumTile,
+                    request.TileWidth,
+                    request.TileHeight,
+                    request.ScaleX,
+                    request.ScaleY,
+                    AdditionalPrefetchTileMargin,
+                    GMaps.Instance.ShuffleTilesOnLoad);
+                var raiseTileLoadStart = false;
+                var wakeTileLoaders = false;
+                var completedCanceledBatchId = 0;
+
+                lock (_tileViewCommitSync)
                 {
-                    TileDrawingList.Clear();
-
-                    for (long i = (int)Math.Floor(-_sizeOfMapArea.Width * ScaleX),
-                            countI = (int)Math.Ceiling(_sizeOfMapArea.Width * ScaleX);
-                        i <= countI;
-                        i++)
+                    if (!IsTileViewUpdateCurrent(request) || Matrix == null)
                     {
-                        for (long j = (int)Math.Floor(-_sizeOfMapArea.Height * ScaleY),
-                             countJ = (int)Math.Ceiling(_sizeOfMapArea.Height * ScaleY);
-                             j <= countJ;
-                             j++)
-                        {
-                            var p = CenterTileXYLocation;
-                            p.X += i;
-                            p.Y += j;
-
-#if ContinuesMap
-                    // wrap-around логіка для безперервної карти
-#endif
-
-                            if (p.X >= _minOfTiles.Width && p.Y >= _minOfTiles.Height &&
-                                p.X <= _maxOfTiles.Width && p.Y <= _maxOfTiles.Height)
-                            {
-                                var dt = new DrawTile()
-                                {
-                                    PosXY = p,
-                                    PosPixel = new GPoint(p.X * TileRect.Width, p.Y * TileRect.Height),
-                                    DistanceSqr = (CenterTileXYLocation.X - p.X) * (CenterTileXYLocation.X - p.X) +
-                                                  (CenterTileXYLocation.Y - p.Y) * (CenterTileXYLocation.Y - p.Y)
-                                };
-
-                                if (!TileDrawingList.Contains(dt))
-                                {
-                                    TileDrawingList.Add(dt);
-                                }
-                            }
-                        }
+                        return;
                     }
 
-                    if (GMaps.Instance.ShuffleTilesOnLoad)
-                        Stuff.Shuffle(TileDrawingList);
-                    else
-                        TileDrawingList.Sort();
-                }
-                finally
-                {
-                    TileDrawingListLock.ReleaseWriterLock();
-                }
-
-                // --- черга завантаження (з блокуванням) ---
 #if !NETFRAMEWORK
-                Monitor.Enter(TileLoadQueue);
-                try
-                {
-#endif
-                    TileDrawingListLock.AcquireReaderLock();
+                    var missingTasks = new HashSet<LoadTask>(
+                        new LoadTaskComparer());
+
+                    Matrix.EnterReadLock();
                     try
                     {
-                        foreach (var p in TileDrawingList)
+                        foreach (var tile in tiles)
                         {
-                            var task = new LoadTask(p.PosXY, Zoom, this);
-#if NETFRAMEWORK
-                    AddLoadTask(task);
-#else
-                            if (!TileLoadQueue.Contains(task))
+                            if (!Matrix.GetTileWithNoLock(
+                                    request.Zoom,
+                                    tile.PosXY).NotEmpty)
                             {
-                                TileLoadQueue.Push(task);
+                                missingTasks.Add(new LoadTask(
+                                    tile.PosXY,
+                                    request.Zoom,
+                                    this));
                             }
-#endif
                         }
                     }
                     finally
                     {
-                        TileDrawingListLock.ReleaseReaderLock();
+                        Matrix.LeaveReadLock();
                     }
-#if !NETFRAMEWORK
-                }
-                finally
-                {
-                    Monitor.Exit(TileLoadQueue);
-                }
-#endif
 
-#if DEBUG
-                swTotal.Stop();
-                Debug.WriteLine($"    [UpdateBounds] Total: {swTotal.ElapsedMilliseconds}ms, Tiles: {TileDrawingList.Count}");
-#endif
-
-#if !NETFRAMEWORK
-                // --- запуск потоків завантаження ---
-                lock (_gThreadPool)
-                {
-                    while (_gThreadPool.Count < GThreadPoolSize)
+                    if (!IsTileViewUpdateCurrent(request))
                     {
-                        var t = new Thread(TileLoadThread)
+                        return;
+                    }
+#endif
+
+                    TileDrawingListLock.AcquireWriterLock();
+                    try
+                    {
+                        TileDrawingList.Clear();
+                        TileDrawingList.AddRange(tiles);
+                    }
+                    finally
+                    {
+                        TileDrawingListLock.ReleaseWriterLock();
+                    }
+
+#if NETFRAMEWORK
+                    foreach (var tile in tiles)
+                    {
+                        AddLoadTask(new LoadTask(
+                            tile.PosXY,
+                            request.Zoom,
+                            this));
+                    }
+
+                    raiseTileLoadStart = tiles.Count > 0;
+#else
+                    Monitor.Enter(TileLoadQueue);
+                    try
+                    {
+                        var wasLoading = TileLoadQueue.Count > 0 ||
+                                         _tileLoadsInProgress.Count > 0;
+                        var queuedTasks = new HashSet<LoadTask>(
+                            _tileLoadsInProgress,
+                            new LoadTaskComparer());
+
+                        // Rebuild from the newest prepared window. This drops
+                        // stale pending requests but leaves active I/O alone.
+                        TileLoadQueue.Clear();
+
+                        foreach (var tile in tiles)
                         {
-                            Name = "TileLoader: " + _gThreadPool.Count,
-                            IsBackground = true,
-                            Priority = ThreadPriority.BelowNormal
-                        };
-                        _gThreadPool.Add(t);
-                        Debug.WriteLine("add " + t.Name + " to GThreadPool");
-                        t.Start();
+                            var task = new LoadTask(
+                                tile.PosXY,
+                                request.Zoom,
+                                this);
+
+                            if (missingTasks.Contains(task) &&
+                                queuedTasks.Add(task))
+                            {
+                                TileLoadQueue.Push(task);
+                            }
+                        }
+
+                        if (TileLoadQueue.Count > 0)
+                        {
+                            _tileLoadBatchId++;
+                            raiseTileLoadStart = !wasLoading;
+                            wakeTileLoaders = true;
+                        }
+                        else if (wasLoading &&
+                                 _tileLoadsInProgress.Count == 0 &&
+                                 _completedTileLoadBatchId !=
+                                 _tileLoadBatchId)
+                        {
+                            _completedTileLoadBatchId = _tileLoadBatchId;
+                            completedCanceledBatchId = _tileLoadBatchId;
+                        }
+                    }
+                    finally
+                    {
+                        Monitor.Exit(TileLoadQueue);
+                    }
+#endif
+                }
+
+                if (raiseTileLoadStart)
+                {
+                    _lastTileLoadStart = DateTime.Now;
+                    OnTileLoadStart?.Invoke();
+                }
+
+#if !NETFRAMEWORK
+                EnsureTileLoaderThreads();
+
+                if (wakeTileLoaders)
+                {
+                    Monitor.Enter(TileLoadQueue);
+                    try
+                    {
+                        Monitor.PulseAll(TileLoadQueue);
+                    }
+                    finally
+                    {
+                        Monitor.Exit(TileLoadQueue);
                     }
                 }
 #endif
 
-                _lastTileLoadStart = DateTime.Now;
-                Debug.WriteLine("OnTileLoadStart - at zoom " + Zoom + ", time: " + _lastTileLoadStart.TimeOfDay);
+                UpdateGroundResolution();
+                Refresh?.Set();
 
 #if !NETFRAMEWORK
-                _loadWaitCount = 0;
-                Monitor.Enter(TileLoadQueue);
-                try
+                if (completedCanceledBatchId > 0 &&
+                    IsTileLoadBatchStillComplete(
+                        completedCanceledBatchId))
                 {
-                    Monitor.PulseAll(TileLoadQueue);
-                }
-                finally
-                {
-                    Monitor.Exit(TileLoadQueue);
+                    OnLoadComplete("TileViewUpdate");
                 }
 #endif
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[UpdateBounds] ERROR: {ex}");
-                // Можна перекинути виняток далі, але краще не приховувати
-                // throw; // якщо хочете, щоб падіння було видно
             }
             finally
             {
                 UpdatingBounds = false;
             }
+        }
 
-            if (OnTileLoadStart != null)
+#if !NETFRAMEWORK
+        private void EnsureTileLoaderThreads()
+        {
+            lock (_gThreadPool)
             {
-                OnTileLoadStart();
+                while (IsStarted && _gThreadPool.Count < GThreadPoolSize)
+                {
+                    var thread = new Thread(TileLoadThread)
+                    {
+                        Name = "TileLoader: " + _gThreadPool.Count,
+                        IsBackground = true,
+                        Priority = ThreadPriority.BelowNormal
+                    };
+
+                    _gThreadPool.Add(thread);
+                    thread.Start();
+                }
             }
         }
+
+        private bool IsTileLoadBatchStillComplete(int batchId)
+        {
+            Monitor.Enter(TileLoadQueue);
+            try
+            {
+                return batchId == _tileLoadBatchId &&
+                       batchId == _completedTileLoadBatchId &&
+                       TileLoadQueue.Count == 0 &&
+                       _tileLoadsInProgress.Count == 0;
+            }
+            finally
+            {
+                Monitor.Exit(TileLoadQueue);
+            }
+        }
+#endif
 
         /// <summary>
         ///     updates ground resolution info
@@ -1417,6 +1562,9 @@ namespace GMap.NET.Internals
         {
             if (IsStarted)
             {
+                CancelAsyncTasks();
+                IsStarted = false;
+
                 if (_invalidator != null)
                 {
                     _invalidator.CancelAsync();
@@ -1435,13 +1583,13 @@ namespace GMap.NET.Internals
                 int x = Interlocked.Decrement(ref Instances);
                 Debug.WriteLine("OnMapClose: " + x);
 
-                CancelAsyncTasks();
-                IsStarted = false;
-
-                if (Matrix != null)
+                lock (_tileViewCommitSync)
                 {
-                    Matrix.Dispose();
-                    Matrix = null;
+                    if (Matrix != null)
+                    {
+                        Matrix.Dispose();
+                        Matrix = null;
+                    }
                 }
 
                 if (FailedLoads != null)
@@ -1509,5 +1657,86 @@ namespace GMap.NET.Internals
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// Builds the immutable tile window used for drawing and background
+    /// prefetch. Kept separate from Core so window sizing and load order can
+    /// be verified without starting network or WPF infrastructure.
+    /// </summary>
+    internal static class TilePrefetchPlanner
+    {
+        internal static List<DrawTile> Build(
+            GPoint centerTile,
+            GSize mapArea,
+            GSize minimumTile,
+            GSize maximumTile,
+            long tileWidth,
+            long tileHeight,
+            double scaleX,
+            double scaleY,
+            int additionalMargin,
+            bool shuffle)
+        {
+            additionalMargin = Math.Max(0, additionalMargin);
+
+            var minimumX = (long)Math.Floor(-mapArea.Width * scaleX) -
+                           additionalMargin;
+            var maximumX = (long)Math.Ceiling(mapArea.Width * scaleX) +
+                           additionalMargin;
+            var minimumY = (long)Math.Floor(-mapArea.Height * scaleY) -
+                           additionalMargin;
+            var maximumY = (long)Math.Ceiling(mapArea.Height * scaleY) +
+                           additionalMargin;
+
+            var width = Math.Max(0L, maximumX - minimumX + 1);
+            var height = Math.Max(0L, maximumY - minimumY + 1);
+            var capacity = (int)Math.Min(int.MaxValue, width * height);
+            var tiles = new List<DrawTile>(capacity);
+
+            for (var xOffset = minimumX; xOffset <= maximumX; xOffset++)
+            {
+                for (var yOffset = minimumY; yOffset <= maximumY; yOffset++)
+                {
+                    var position = centerTile;
+                    position.X += xOffset;
+                    position.Y += yOffset;
+
+                    if (position.X < minimumTile.Width ||
+                        position.Y < minimumTile.Height ||
+                        position.X > maximumTile.Width ||
+                        position.Y > maximumTile.Height)
+                    {
+                        continue;
+                    }
+
+                    tiles.Add(new DrawTile
+                    {
+                        PosXY = position,
+                        PosPixel = new GPoint(
+                            position.X * tileWidth,
+                            position.Y * tileHeight),
+                        DistanceSqr =
+                            (centerTile.X - position.X) *
+                            (centerTile.X - position.X) +
+                            (centerTile.Y - position.Y) *
+                            (centerTile.Y - position.Y)
+                    });
+                }
+            }
+
+            if (shuffle)
+            {
+                Stuff.Shuffle(tiles);
+            }
+            else
+            {
+                // DrawTile sorts farthest first. Pushing in this order leaves
+                // the nearest, visible tiles on top of the loader stack.
+                tiles.Sort();
+            }
+
+            return tiles;
+        }
     }
 }

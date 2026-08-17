@@ -143,6 +143,16 @@ namespace MapsWPF
         // Cache statistics debouncing
         private DispatcherTimer _cacheStatsUpdateTimer;
 
+        // Coordinate labels are useful during navigation, but converting every
+        // mouse/drag event to UTM/MGRS is much more expensive than moving the map.
+        private DispatcherTimer _mapPositionUiUpdateTimer;
+        private PointLatLng _pendingMapPosition;
+        private bool _hasPendingMapPosition;
+
+        private DispatcherTimer _cursorCoordinateUpdateTimer;
+        private PointLatLng _pendingCursorPosition;
+        private bool _hasPendingCursorPosition;
+
         private static readonly HttpClient _httpClient = new HttpClient();
 
         private readonly Services.StatisticsService _statisticsService;
@@ -263,6 +273,18 @@ namespace MapsWPF
             _cacheStatsUpdateTimer = new DispatcherTimer();
             _cacheStatsUpdateTimer.Interval = TimeSpan.FromMilliseconds(500);
             _cacheStatsUpdateTimer.Tick += CacheStatsUpdateTimer_Tick;
+
+            _mapPositionUiUpdateTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _mapPositionUiUpdateTimer.Tick += MapPositionUiUpdateTimer_Tick;
+
+            _cursorCoordinateUpdateTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _cursorCoordinateUpdateTimer.Tick += CursorCoordinateUpdateTimer_Tick;
 
             // Load startup settings (injected via constructor)
 
@@ -2976,7 +2998,7 @@ namespace MapsWPF
                 }
 
                 MainMap.TargetDistance = distM;
-                MainMap.InvalidateVisual();
+                MainMap.InvalidateHud();
             }
         }
 
@@ -3044,10 +3066,6 @@ namespace MapsWPF
             return Task.CompletedTask;
         }
 
-        // State for drag interception
-        private System.Windows.Point _lastMousePos;
-        private bool _isDragging = false;
-
         void MainMap_MouseMove(object sender, MouseEventArgs e)
         {
             if (MainMap.IsDragging)
@@ -3061,15 +3079,11 @@ namespace MapsWPF
 
             // Update Map property for overlay
             MainMap.MousePositionLatLng = cursorLatLng;
-            MainMap.InvalidateVisual();
-
-            if (_coordinateConverter.TryLatLngToUTM(cursorLatLng.Lat, cursorLatLng.Lng, out var utmCursor, out var zoneCursor, out var bandCursor))
+            _pendingCursorPosition = cursorLatLng;
+            _hasPendingCursorPosition = true;
+            if (!_cursorCoordinateUpdateTimer.IsEnabled)
             {
-                LabelMgrsCursorValue.Content = _coordinateConverter.FormatShortMGRSFromUTM(utmCursor, zoneCursor, bandCursor);
-            }
-            else
-            {
-                LabelMgrsCursorValue.Content = "-";
+                _cursorCoordinateUpdateTimer.Start();
             }
 
             if (Keyboard.IsKeyDown(Key.LeftAlt))
@@ -3118,7 +3132,8 @@ namespace MapsWPF
 
             // Previously we used an elapsed-based heuristic to guess tile source (RAM/DB/Net).
             // That was inaccurate (slow disk or GC could be misclassified as network).
-            // Now rely on GMaps counters (updated periodically by GetCacheStats) to show accurate data.
+            // Now rely on GMaps counters; refresh the UI once after a tile batch
+            // finishes instead of scanning the cache directory forever.
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
                 // Hide progress and show stats
@@ -3126,13 +3141,14 @@ namespace MapsWPF
                 if (LoadingStatsGrid != null) LoadingStatsGrid.Visibility = Visibility.Visible;
 
                 GroupBox3.Header = "Loading: " + MainMap.ElapsedMilliseconds + "ms";
-                if (!_cacheStatsUpdateTimer.IsEnabled) _cacheStatsUpdateTimer.Start();
-                else { _cacheStatsUpdateTimer.Stop(); _cacheStatsUpdateTimer.Start(); }
+                _cacheStatsUpdateTimer.Stop();
+                _cacheStatsUpdateTimer.Start();
             }));
         }
 
         private void CacheStatsUpdateTimer_Tick(object sender, EventArgs e)
         {
+            _cacheStatsUpdateTimer.Stop();
             try
             {
                 var stats = GetCacheStats();
@@ -3193,6 +3209,38 @@ namespace MapsWPF
             {
                 _settlementGeometryService.ReleaseMemory();
             }
+        }
+
+        private void CursorCoordinateUpdateTimer_Tick(object sender, EventArgs e)
+        {
+            if (!_hasPendingCursorPosition)
+            {
+                _cursorCoordinateUpdateTimer.Stop();
+                return;
+            }
+
+            var cursorLatLng = _pendingCursorPosition;
+            _hasPendingCursorPosition = false;
+
+            if (_coordinateConverter.TryLatLngToUTM(
+                    cursorLatLng.Lat,
+                    cursorLatLng.Lng,
+                    out var utmCursor,
+                    out var zoneCursor,
+                    out var bandCursor))
+            {
+                LabelMgrsCursorValue.Content =
+                    _coordinateConverter.FormatShortMGRSFromUTM(
+                        utmCursor,
+                        zoneCursor,
+                        bandCursor);
+            }
+            else
+            {
+                LabelMgrsCursorValue.Content = "-";
+            }
+
+            _cursorCoordinateUpdateTimer.Stop();
         }
 
         private void NotifySettlementCacheLoadWarningIfNeeded()
@@ -3365,7 +3413,47 @@ namespace MapsWPF
 
         void MainMap_OnCurrentPositionChanged(PointLatLng point)
         {
+            _pendingMapPosition = point;
+            _hasPendingMapPosition = true;
 
+            if (MainMap.IsDragging)
+            {
+                if (!_mapPositionUiUpdateTimer.IsEnabled)
+                {
+                    _mapPositionUiUpdateTimer.Start();
+                }
+
+                return;
+            }
+
+            UpdateMapPositionLabels(point);
+            MainMap.InvalidateHud();
+            _hasPendingMapPosition = false;
+            _mapPositionUiUpdateTimer.Stop();
+        }
+
+        private void MapPositionUiUpdateTimer_Tick(object sender, EventArgs e)
+        {
+            // Coordinate conversion and FormattedText allocation do not help
+            // the drag itself. Keep the latest position and refresh once the
+            // pointer is released, leaving the UI thread to render the map.
+            if (MainMap.IsDragging)
+            {
+                return;
+            }
+
+            if (_hasPendingMapPosition)
+            {
+                UpdateMapPositionLabels(_pendingMapPosition);
+                MainMap.InvalidateHud();
+                _hasPendingMapPosition = false;
+            }
+
+            _mapPositionUiUpdateTimer.Stop();
+        }
+
+        private void UpdateMapPositionLabels(PointLatLng point)
+        {
             LabelLatValue.Content = point.Lat.ToString("F8", CultureInfo.InvariantCulture);
             LabelLngValue.Content = point.Lng.ToString("F8", CultureInfo.InvariantCulture);
 
@@ -3392,6 +3480,7 @@ namespace MapsWPF
             Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
             {
                 LabelZoomValue.Content = MainMap.Zoom.ToString("F1", CultureInfo.InvariantCulture);
+                MainMap.InvalidateHud();
             }));
         }
 
@@ -4467,13 +4556,13 @@ namespace MapsWPF
         private void CheckBoxShowCoordinates_Checked(object sender, RoutedEventArgs e)
         {
             MainMap.ShowCoordinates = true;
-            MainMap.InvalidateVisual();
+            MainMap.InvalidateHud();
         }
 
         private void CheckBoxShowCoordinates_Unchecked(object sender, RoutedEventArgs e)
         {
             MainMap.ShowCoordinates = false;
-            MainMap.InvalidateVisual();
+            MainMap.InvalidateHud();
         }
 
         private void checkBoxCacheRoute_Checked(object sender, RoutedEventArgs e)
@@ -5425,7 +5514,7 @@ namespace MapsWPF
 
         public void SetAzimuthDisplay(string text)
         {
-            try { Dispatcher.Invoke(() => { if (LabelAzimuthValue != null) LabelAzimuthValue.Content = text; try { MainMap.AzimuthText = text; MainMap.InvalidateVisual(); } catch { } }); } catch { }
+            try { Dispatcher.Invoke(() => { if (LabelAzimuthValue != null) LabelAzimuthValue.Content = text; try { MainMap.AzimuthText = text; MainMap.InvalidateHud(); } catch { } }); } catch { }
         }
 
         public string GetAzimuthText()

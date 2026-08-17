@@ -13,5 +13,7 @@
     InternalsVisibleTo(
         "GMap.NET.WindowsPresentation"),
     InternalsVisibleTo(
+        "MapsWPF.Tests"),
+    InternalsVisibleTo(
         "GMap.NET.Avalonia")
 ]

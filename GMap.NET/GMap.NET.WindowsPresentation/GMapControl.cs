@@ -259,8 +259,6 @@ namespace GMap.NET.WindowsPresentation
         {
             if (mapControl != null && mapControl.MapProvider.Projection != null)
             {
-                Debug.WriteLine("Zoom: " + oldValue + " -> " + value);
-
                 double remainder = value % 1;
 
                 if (mapControl.ScaleMode != ScaleModes.Integer && remainder != 0 && mapControl.ActualWidth > 0)
@@ -307,7 +305,15 @@ namespace GMap.NET.WindowsPresentation
                         }
                     }
 
-                    mapControl._core.Zoom = Convert.ToInt32(scaleDown ? Math.Ceiling(value) : value - remainder);
+                    mapControl._isApplyingZoom = true;
+                    try
+                    {
+                        mapControl._core.Zoom = Convert.ToInt32(scaleDown ? Math.Ceiling(value) : value - remainder);
+                    }
+                    finally
+                    {
+                        mapControl._isApplyingZoom = false;
+                    }
                 }
                 else
                 {
@@ -319,7 +325,15 @@ namespace GMap.NET.WindowsPresentation
                     if (zoomMode == ZoomMode.XY || zoomMode == ZoomMode.Y)
                         mapControl._core.ScaleY = 1;
 
-                    mapControl._core.Zoom = (int)Math.Floor(value);
+                    mapControl._isApplyingZoom = true;
+                    try
+                    {
+                        mapControl._core.Zoom = (int)Math.Floor(value);
+                    }
+                    finally
+                    {
+                        mapControl._isApplyingZoom = false;
+                    }
                 }
 
                 if (mapControl.IsLoaded)
@@ -368,6 +382,54 @@ namespace GMap.NET.WindowsPresentation
         private ScaleModes _scaleMode = ScaleModes.Integer;
 
         readonly Core _core = new Core();
+        private bool _isApplyingZoom;
+        private bool _dragFrameInvalidationPending;
+
+        private readonly List<DrawTile> _tileDrawingSnapshot = new();
+        private readonly List<TileRenderImage> _tileRenderImages = new();
+        private readonly List<TileRenderCell> _tileRenderCells = new();
+        private readonly Dictionary<Rect, RectangleGeometry>
+            _tileClipGeometryCache = new();
+
+        private readonly struct TileRenderImage
+        {
+            public TileRenderImage(
+                ImageSource image,
+                Rect drawRect,
+                Rect clipRect,
+                bool requiresClip,
+                bool drawSelectionFill)
+            {
+                Image = image;
+                DrawRect = drawRect;
+                ClipRect = clipRect;
+                RequiresClip = requiresClip;
+                DrawSelectionFill = drawSelectionFill;
+            }
+
+            public ImageSource Image { get; }
+            public Rect DrawRect { get; }
+            public Rect ClipRect { get; }
+            public bool RequiresClip { get; }
+            public bool DrawSelectionFill { get; }
+        }
+
+        private readonly struct TileRenderCell
+        {
+            public TileRenderCell(
+                Rect rect,
+                bool found,
+                Exception failure)
+            {
+                Rect = rect;
+                Found = found;
+                Failure = failure;
+            }
+
+            public Rect Rect { get; }
+            public bool Found { get; }
+            public Exception Failure { get; }
+        }
 
         PointLatLng _selectionStart;
         PointLatLng _selectionEnd;
@@ -597,7 +659,10 @@ namespace GMap.NET.WindowsPresentation
                         var target = VisualTreeHelper.GetChild(items, 0);
                         _mapCanvas = target as Canvas;
 
-                        _mapCanvas.RenderTransform = MapTranslateTransform;
+                        // Markers/routes use coordinates already projected by
+                        // FromLatLngToLocal. During fractional zoom their pan
+                        // offset must be scaled exactly like the tile layer.
+                        _mapCanvas.RenderTransform = MapOverlayTranslateTransform;
                     }
                 }
 
@@ -693,7 +758,7 @@ namespace GMap.NET.WindowsPresentation
 
                 _core.RenderMode = RenderMode.WPF;
 
-                _core.OnMapZoomChanged += ForceUpdateOverlays;
+                _core.OnMapZoomChanged += CoreOnMapZoomChanged;
                 _core.OnCurrentPositionChanged += CoreOnCurrentPositionChanged;
                 Loaded += GMapControl_Loaded;
                 Dispatcher.ShutdownStarted += Dispatcher_ShutdownStarted;
@@ -719,6 +784,18 @@ namespace GMap.NET.WindowsPresentation
             finally
             {
                 _isUpdatingPositionFromCore = false;
+            }
+        }
+
+        private void CoreOnMapZoomChanged()
+        {
+            // ZoomPropertyChanged performs the one required regeneration after
+            // changing the scale. Keep this handler for zoom changes initiated
+            // internally by GMap.NET, but avoid the duplicate regeneration for
+            // the normal property-change path.
+            if (!_isApplyingZoom)
+            {
+                ForceUpdateOverlays();
             }
         }
 
@@ -971,7 +1048,10 @@ namespace GMap.NET.WindowsPresentation
                     localPath.Add(new Point(p.X - offset.X, p.Y - offset.Y));
                 }
 
-                var shape = s.CreatePath(localPath, true);
+                // RegenerateShape replaces Data on an existing Path. Creating a
+                // temporary blur effect here only allocates an object which is
+                // immediately discarded and makes zoom heavier.
+                var shape = s.CreatePath(localPath, false);
 
                 if (marker.Shape is System.Windows.Shapes.Path)
                 {
@@ -1038,6 +1118,42 @@ namespace GMap.NET.WindowsPresentation
             }
         }
 
+        private void RequestDragFrame()
+        {
+            if (_disposed || _dragFrameInvalidationPending)
+            {
+                return;
+            }
+
+            _dragFrameInvalidationPending = true;
+            CompositionTarget.Rendering += CompositionTargetOnDragRendering;
+        }
+
+        private void CompositionTargetOnDragRendering(
+            object sender,
+            EventArgs e)
+        {
+            CompositionTarget.Rendering -= CompositionTargetOnDragRendering;
+            _dragFrameInvalidationPending = false;
+
+            if (!_disposed)
+            {
+                InvalidateVisual(true);
+            }
+        }
+
+        private void UpdateOverlaysAfterMapOffset()
+        {
+            if (IsRotated)
+            {
+                ForceUpdateOverlays();
+            }
+            else
+            {
+                UpdateMarkersOffset();
+            }
+        }
+
         public Brush EmptyMapBackground = Brushes.WhiteSmoke;
 
         /// <summary>
@@ -1051,166 +1167,276 @@ namespace GMap.NET.WindowsPresentation
                 return;
             }
 
+            // Copy the prepared window under a short lock. The background
+            // prefetch worker can then publish a newer window without waiting
+            // for WPF to finish drawing every image.
+            _tileDrawingSnapshot.Clear();
             _core.TileDrawingListLock.AcquireReaderLock();
-            _core.Matrix.EnterReadLock();
-
             try
             {
-                foreach (var tilePoint in _core.TileDrawingList)
+                _tileDrawingSnapshot.AddRange(_core.TileDrawingList);
+            }
+            finally
+            {
+                _core.TileDrawingListLock.ReleaseReaderLock();
+            }
+
+            var matrix = _core.Matrix;
+            if (matrix == null)
+            {
+                return;
+            }
+
+            _tileRenderImages.Clear();
+            _tileRenderCells.Clear();
+
+            // Snapshot frozen ImageSource references under the matrix lock and
+            // release it before issuing WPF draw commands. Tile loaders no
+            // longer contend with the UI for the duration of the whole frame.
+            matrix.EnterReadLock();
+            try
+            {
+                foreach (var tilePoint in _tileDrawingSnapshot)
                 {
-                    _core.TileRect.Location = tilePoint.PosPixel;
-                    _core.TileRect.OffsetNegative(_core.CompensationOffset);
+                    var tileRect = new Rect(
+                        tilePoint.PosPixel.X - _core.CompensationOffset.X,
+                        tilePoint.PosPixel.Y - _core.CompensationOffset.Y,
+                        _core.TileRect.Width,
+                        _core.TileRect.Height);
 
-                    //if(region.IntersectsWith(Core.tileRect) || IsRotated)
+                    if (!IsTileVisible(tileRect))
                     {
-                        bool found = false;
+                        continue;
+                    }
 
-                        var t = _core.Matrix.GetTileWithNoLock(_core.Zoom, tilePoint.PosXY);
+                    var imageRect = new Rect(
+                        tileRect.X + 0.6,
+                        tileRect.Y + 0.6,
+                        tileRect.Width + 0.6,
+                        tileRect.Height + 0.6);
+                    var found = false;
+                    var tile = matrix.GetTileWithNoLock(
+                        _core.Zoom,
+                        tilePoint.PosXY);
 
-                        if (t.NotEmpty)
+                    if (tile.NotEmpty)
+                    {
+                        foreach (GMapImage image in tile.Overlays)
                         {
-                            foreach (GMapImage img in t.Overlays)
+                            var imageSource = image?.Img;
+                            if (imageSource == null)
                             {
-                                if (img != null && img.Img != null)
-                                {
-                                    if (!found)
-                                        found = true;
-
-                                    var imgRect = new Rect(_core.TileRect.X + 0.6,
-                                        _core.TileRect.Y + 0.6,
-                                        _core.TileRect.Width + 0.6,
-                                        _core.TileRect.Height + 0.6);
-
-                                    if (!img.IsParent)
-                                    {
-                                        g.DrawImage(img.Img, imgRect);
-                                    }
-                                    else
-                                    {
-                                        // TODO: move calculations to loader thread
-                                        var geometry = new RectangleGeometry(imgRect);
-                                        var parentImgRect =
-                                            new Rect(_core.TileRect.X - _core.TileRect.Width * img.Xoff + 0.6,
-                                                _core.TileRect.Y - _core.TileRect.Height * img.Yoff + 0.6,
-                                                _core.TileRect.Width * img.Ix + 0.6,
-                                                _core.TileRect.Height * img.Ix + 0.6);
-
-                                        g.PushClip(geometry);
-                                        g.DrawImage(img.Img, parentImgRect);
-                                        g.Pop();
-                                        geometry = null;
-                                    }
-                                }
-                            }
-                        }
-                        else if (FillEmptyTiles && MapProvider.Projection is MercatorProjection)
-                        {
-                            #region -- fill empty tiles --
-
-                            int zoomOffset = 1;
-                            var parentTile = Tile.Empty;
-                            long ix = 0;
-
-                            while (!parentTile.NotEmpty && zoomOffset < _core.Zoom && zoomOffset <= LevelsKeepInMemory)
-                            {
-                                ix = (long)Math.Pow(2, zoomOffset);
-                                parentTile = _core.Matrix.GetTileWithNoLock(_core.Zoom - zoomOffset++,
-                                    new GPoint((int)(tilePoint.PosXY.X / ix), (int)(tilePoint.PosXY.Y / ix)));
+                                continue;
                             }
 
-                            if (parentTile.NotEmpty)
+                            found = true;
+
+                            if (!image.IsParent)
                             {
-                                long xOff = Math.Abs(tilePoint.PosXY.X - parentTile.Pos.X * ix);
-                                long yOff = Math.Abs(tilePoint.PosXY.Y - parentTile.Pos.Y * ix);
-
-                                var geometry =
-                                    new RectangleGeometry(new Rect(_core.TileRect.X + 0.6,
-                                        _core.TileRect.Y + 0.6,
-                                        _core.TileRect.Width + 0.6,
-                                        _core.TileRect.Height + 0.6));
-                                var parentImgRect = new Rect(_core.TileRect.X - _core.TileRect.Width * xOff + 0.6,
-                                    _core.TileRect.Y - _core.TileRect.Height * yOff + 0.6,
-                                    _core.TileRect.Width * ix + 0.6,
-                                    _core.TileRect.Height * ix + 0.6);
-
-                                // render tile 
-                                {
-                                    foreach (GMapImage img in parentTile.Overlays)
-                                    {
-                                        if (img != null && img.Img != null && !img.IsParent)
-                                        {
-                                            if (!found)
-                                                found = true;
-
-                                            g.PushClip(geometry);
-                                            g.DrawImage(img.Img, parentImgRect);
-                                            g.DrawRectangle(SelectedAreaFill, null, geometry.Bounds);
-                                            g.Pop();
-                                        }
-                                    }
-                                }
-
-                                geometry = null;
+                                _tileRenderImages.Add(new TileRenderImage(
+                                    imageSource,
+                                    imageRect,
+                                    Rect.Empty,
+                                    requiresClip: false,
+                                    drawSelectionFill: false));
+                                continue;
                             }
 
-                            #endregion
-                        }
+                            var parentImageRect = new Rect(
+                                tileRect.X - tileRect.Width * image.Xoff + 0.6,
+                                tileRect.Y - tileRect.Height * image.Yoff + 0.6,
+                                tileRect.Width * image.Ix + 0.6,
+                                tileRect.Height * image.Ix + 0.6);
 
-                        // add text if tile is missing
-                        if (!found)
-                        {
-                            lock (_core.FailedLoads)
-                            {
-                                var lt = new LoadTask(tilePoint.PosXY, _core.Zoom);
-
-                                if (_core.FailedLoads.ContainsKey(lt))
-                                {
-                                    g.DrawRectangle(EmptyTileBrush,
-                                        EmptyTileBorders,
-                                        new Rect(_core.TileRect.X,
-                                            _core.TileRect.Y,
-                                            _core.TileRect.Width,
-                                            _core.TileRect.Height));
-
-                                    var ex = _core.FailedLoads[lt];
-
-                                    var tileText = new FormattedText("Exception: " + ex.Message,
-                                        CultureInfo.CurrentUICulture,
-                                        FlowDirection.LeftToRight,
-                                        _tileTypeface,
-                                        14,
-                                        Brushes.Red);
-
-                                    tileText.MaxTextWidth = _core.TileRect.Width - 11;
-
-                                    g.DrawText(tileText, new Point(_core.TileRect.X + 11, _core.TileRect.Y + 11));
-
-                                    g.DrawText(EmptyTileText,
-                                        new Point(
-                                            _core.TileRect.X + _core.TileRect.Width / 2 - EmptyTileText.Width / 2,
-                                            _core.TileRect.Y + _core.TileRect.Height / 2 - EmptyTileText.Height / 2));
-                                }
-                            }
-                        }
-
-                        if (ShowTileGridLines)
-                        {
-                            // draw only tile borders when grid is enabled; do not render DEBUG tile text
-                            g.DrawRectangle(null,
-                                EmptyTileBorders,
-                                new Rect(_core.TileRect.X,
-                                    _core.TileRect.Y,
-                                    _core.TileRect.Width,
-                                    _core.TileRect.Height));
+                            _tileRenderImages.Add(new TileRenderImage(
+                                imageSource,
+                                parentImageRect,
+                                imageRect,
+                                requiresClip: true,
+                                drawSelectionFill: false));
                         }
                     }
+                    else if (FillEmptyTiles &&
+                             MapProvider.Projection is MercatorProjection)
+                    {
+                        var parentTile = Tile.Empty;
+                        long parentScale = 0;
+
+                        for (var zoomOffset = 1;
+                             !parentTile.NotEmpty &&
+                             zoomOffset < _core.Zoom &&
+                             zoomOffset <= LevelsKeepInMemory;
+                             zoomOffset++)
+                        {
+                            parentScale = 1L << zoomOffset;
+                            parentTile = matrix.GetTileWithNoLock(
+                                _core.Zoom - zoomOffset,
+                                new GPoint(
+                                    tilePoint.PosXY.X / parentScale,
+                                    tilePoint.PosXY.Y / parentScale));
+                        }
+
+                        if (parentTile.NotEmpty)
+                        {
+                            var xOffset = Math.Abs(
+                                tilePoint.PosXY.X -
+                                parentTile.Pos.X * parentScale);
+                            var yOffset = Math.Abs(
+                                tilePoint.PosXY.Y -
+                                parentTile.Pos.Y * parentScale);
+                            var parentImageRect = new Rect(
+                                tileRect.X - tileRect.Width * xOffset + 0.6,
+                                tileRect.Y - tileRect.Height * yOffset + 0.6,
+                                tileRect.Width * parentScale + 0.6,
+                                tileRect.Height * parentScale + 0.6);
+
+                            foreach (GMapImage image in parentTile.Overlays)
+                            {
+                                var imageSource = image?.Img;
+                                if (imageSource != null && !image.IsParent)
+                                {
+                                    found = true;
+                                    _tileRenderImages.Add(
+                                        new TileRenderImage(
+                                            imageSource,
+                                            parentImageRect,
+                                            imageRect,
+                                            requiresClip: true,
+                                            drawSelectionFill: true));
+                                }
+                            }
+                        }
+                    }
+
+                    Exception failure = null;
+                    if (!found && _core.FailedLoads != null)
+                    {
+                        lock (_core.FailedLoads)
+                        {
+                            _core.FailedLoads.TryGetValue(
+                                new LoadTask(tilePoint.PosXY, _core.Zoom),
+                                out failure);
+                        }
+                    }
+
+                    _tileRenderCells.Add(new TileRenderCell(
+                        tileRect,
+                        found,
+                        failure));
                 }
             }
             finally
             {
-                _core.Matrix.LeaveReadLock();
-                _core.TileDrawingListLock.ReleaseReaderLock();
+                matrix.LeaveReadLock();
             }
+
+            foreach (var image in _tileRenderImages)
+            {
+                if (image.RequiresClip)
+                {
+                    var clip = GetTileClipGeometry(image.ClipRect);
+                    g.PushClip(clip);
+                    g.DrawImage(image.Image, image.DrawRect);
+
+                    if (image.DrawSelectionFill)
+                    {
+                        g.DrawRectangle(
+                            SelectedAreaFill,
+                            null,
+                            image.ClipRect);
+                    }
+
+                    g.Pop();
+                }
+                else
+                {
+                    g.DrawImage(image.Image, image.DrawRect);
+                }
+            }
+
+            foreach (var cell in _tileRenderCells)
+            {
+                if (!cell.Found && cell.Failure != null)
+                {
+                    g.DrawRectangle(
+                        EmptyTileBrush,
+                        EmptyTileBorders,
+                        cell.Rect);
+
+                    var tileText = new FormattedText(
+                        "Exception: " + cell.Failure.Message,
+                        CultureInfo.CurrentUICulture,
+                        FlowDirection.LeftToRight,
+                        _tileTypeface,
+                        14,
+                        Brushes.Red);
+
+                    tileText.MaxTextWidth = cell.Rect.Width - 11;
+
+                    g.DrawText(
+                        tileText,
+                        new Point(cell.Rect.X + 11, cell.Rect.Y + 11));
+                    g.DrawText(
+                        EmptyTileText,
+                        new Point(
+                            cell.Rect.X + cell.Rect.Width / 2 -
+                            EmptyTileText.Width / 2,
+                            cell.Rect.Y + cell.Rect.Height / 2 -
+                            EmptyTileText.Height / 2));
+                }
+
+                if (ShowTileGridLines)
+                {
+                    g.DrawRectangle(
+                        null,
+                        EmptyTileBorders,
+                        cell.Rect);
+                }
+            }
+        }
+
+        private bool IsTileVisible(Rect tileRect)
+        {
+            if (IsRotated)
+            {
+                return true;
+            }
+
+            var screenRect = tileRect;
+            screenRect.Offset(
+                MapTranslateTransform.X,
+                MapTranslateTransform.Y);
+
+            if (MapScaleTransform != null)
+            {
+                screenRect = MapScaleTransform.TransformBounds(screenRect);
+            }
+
+            return screenRect.IntersectsWith(new Rect(
+                0,
+                0,
+                Math.Max(0, ActualWidth),
+                Math.Max(0, ActualHeight)));
+        }
+
+        private RectangleGeometry GetTileClipGeometry(Rect clipRect)
+        {
+            if (_tileClipGeometryCache.TryGetValue(
+                    clipRect,
+                    out var geometry))
+            {
+                return geometry;
+            }
+
+            if (_tileClipGeometryCache.Count >= 512)
+            {
+                _tileClipGeometryCache.Clear();
+            }
+
+            geometry = new RectangleGeometry(clipRect);
+            geometry.Freeze();
+            _tileClipGeometryCache[clipRect] = geometry;
+            return geometry;
         }
 
         /// <summary>
@@ -1714,7 +1940,11 @@ namespace GMap.NET.WindowsPresentation
                 _core.Position = Position;
                 if (_core.IsStarted)
                 {
-                    ForceUpdateOverlays();
+                    // Position changes only translate already projected
+                    // markers. Their geometry changes when zoom or rotation
+                    // changes, not on every pan position update.
+                    UpdateMarkersOffset();
+                    InvalidateVisual();
                 }
             }
             finally
@@ -2024,7 +2254,7 @@ namespace GMap.NET.WindowsPresentation
                         roundedOffsetY
                     );
 
-                    ForceUpdateOverlays();
+                    UpdateOverlaysAfterMapOffset();
                     InvalidateVisual(true);
                 }
             }
@@ -2362,7 +2592,7 @@ namespace GMap.NET.WindowsPresentation
     roundedOffsetY
 );
 
-                ForceUpdateOverlays();
+                UpdateOverlaysAfterMapOffset();
                 InvalidateVisual(true);
 
             }
@@ -2410,7 +2640,6 @@ namespace GMap.NET.WindowsPresentation
             if (IsDragging)
             {
                 IsDragging = false;
-                Debug.WriteLine("IsDragging = " + IsDragging);
                 Cursor = _cursorBefore;
             }
 
@@ -2489,7 +2718,6 @@ namespace GMap.NET.WindowsPresentation
                 {
                     _onMouseUpTimestamp = e.Timestamp & Int32.MaxValue;
                     IsDragging = false;
-                    Debug.WriteLine("IsDragging = " + IsDragging);
                     Cursor = _cursorBefore;
                     Mouse.Capture(null);
                 }
@@ -2535,12 +2763,6 @@ namespace GMap.NET.WindowsPresentation
 
             if ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp < 55)
             {
-                Debug.WriteLine(
-                    "OnMouseMove skipped: " +
-                    ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp) +
-                    "ms"
-                );
-
                 return;
             }
 
@@ -2577,7 +2799,6 @@ namespace GMap.NET.WindowsPresentation
                 if (!IsDragging)
                 {
                     IsDragging = true;
-                    Debug.WriteLine("IsDragging = " + IsDragging);
                     _cursorBefore = Cursor;
                     Cursor = Cursors.SizeAll;
                     Mouse.Capture(this);
@@ -2603,7 +2824,7 @@ namespace GMap.NET.WindowsPresentation
                     ClampVisibleBoundsToAllowedBounds();
                 }
 
-                if (IsRotated || _scaleMode != ScaleModes.Integer)
+                if (IsRotated)
                 {
                     ForceUpdateOverlays();
                 }
@@ -2612,7 +2833,7 @@ namespace GMap.NET.WindowsPresentation
                     UpdateMarkersOffset();
                 }
 
-                InvalidateVisual(true);
+                RequestDragFrame();
             }
             else
             {
@@ -2692,7 +2913,6 @@ namespace GMap.NET.WindowsPresentation
                     {
                         _onMouseUpTimestamp = e.Timestamp & Int32.MaxValue;
                         IsDragging = false;
-                        Debug.WriteLine("IsDragging = " + IsDragging);
                         Cursor = _cursorBefore;
                         Mouse.Capture(null);
                     }
@@ -2741,8 +2961,6 @@ namespace GMap.NET.WindowsPresentation
                 // http://greatmaps.codeplex.com/workitem/16013
                 if ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp < 55)
                 {
-                    Debug.WriteLine("OnMouseMove skipped: " + ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp) +
-                                    "ms");
                     return;
                 }
 
@@ -2770,7 +2988,6 @@ namespace GMap.NET.WindowsPresentation
                     if (!IsDragging)
                     {
                         IsDragging = true;
-                        Debug.WriteLine("IsDragging = " + IsDragging);
                         _cursorBefore = Cursor;
                         Cursor = Cursors.SizeAll;
                         Mouse.Capture(this);
@@ -2888,7 +3105,6 @@ namespace GMap.NET.WindowsPresentation
                     if (!IsDragging)
                     {
                         IsDragging = true;
-                        Debug.WriteLine("IsDragging = " + IsDragging);
                         _cursorBefore = Cursor;
                         Cursor = Cursors.SizeAll;
                         Mouse.Capture(this);
@@ -2944,7 +3160,6 @@ namespace GMap.NET.WindowsPresentation
                         {
                             _onMouseUpTimestamp = e.Timestamp & Int32.MaxValue;
                             IsDragging = false;
-                            Debug.WriteLine("IsDragging = " + IsDragging);
                             Cursor = _cursorBefore;
                             Mouse.Capture(null);
                         }
@@ -3019,8 +3234,6 @@ namespace GMap.NET.WindowsPresentation
                     {
                         if ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp < 55)
                         {
-                            Debug.WriteLine("OnMouseMove skipped: " +
-                                            ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp) + "ms");
                             return;
                         }
 
@@ -3056,8 +3269,7 @@ namespace GMap.NET.WindowsPresentation
                             if (!IsDragging)
                             {
                                 IsDragging = true;
-                                Debug.WriteLine("IsDragging = " + IsDragging);
-                                _cursorBefore = Cursor;
+                            _cursorBefore = Cursor;
                                 Cursor = Cursors.SizeAll;
                                 Mouse.Capture(this);
                             }
@@ -3177,7 +3389,6 @@ namespace GMap.NET.WindowsPresentation
                         {
                             _onMouseUpTimestamp = e.Timestamp & Int32.MaxValue;
                             IsDragging = false;
-                            Debug.WriteLine("IsDragging = " + IsDragging);
                             Cursor = _cursorBefore;
                             Mouse.Capture(null);
                         }
@@ -3523,8 +3734,17 @@ namespace GMap.NET.WindowsPresentation
             if (_disposed) return;
             _disposed = true;
 
+            if (_dragFrameInvalidationPending)
+            {
+                CompositionTarget.Rendering -=
+                    CompositionTargetOnDragRendering;
+                _dragFrameInvalidationPending = false;
+            }
+
+            _tileClipGeometryCache.Clear();
+
             // Відписуємося від усіх подій control (незалежно від стану Core)
-            _core.OnMapZoomChanged -= ForceUpdateOverlays;
+            _core.OnMapZoomChanged -= CoreOnMapZoomChanged;
             _core.OnCurrentPositionChanged -= CoreOnCurrentPositionChanged;
             Loaded -= GMapControl_Loaded;
             Dispatcher.ShutdownStarted -= Dispatcher_ShutdownStarted;

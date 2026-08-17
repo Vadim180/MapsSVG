@@ -1,5 +1,7 @@
+using System;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace MapsWPF
 {
@@ -9,6 +11,8 @@ namespace MapsWPF
     /// </summary>
     public sealed class MapHudOverlay : FrameworkElement
     {
+        private readonly DispatcherTimer _refreshTimer;
+
         public static readonly DependencyProperty MapSourceProperty =
             DependencyProperty.Register(
                 nameof(MapSource),
@@ -26,6 +30,16 @@ namespace MapsWPF
         {
             IsHitTestVisible = false;
             ClipToBounds = true;
+
+            // Coordinate conversion (UTM/MGRS) is considerably more expensive
+            // than moving the map itself. Cap HUD redraws while the pointer is
+            // moving, without throttling the map or its tiles.
+            _refreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(33)
+            };
+            _refreshTimer.Tick += RefreshTimer_Tick;
+            SizeChanged += (_, _) => InvalidateVisual();
         }
 
         protected override void OnRender(DrawingContext drawingContext)
@@ -59,6 +73,15 @@ namespace MapsWPF
 
         private void Map_HudInvalidated(object sender, System.EventArgs e)
         {
+            if (!_refreshTimer.IsEnabled)
+            {
+                _refreshTimer.Start();
+            }
+        }
+
+        private void RefreshTimer_Tick(object sender, EventArgs e)
+        {
+            _refreshTimer.Stop();
             InvalidateVisual();
         }
     }

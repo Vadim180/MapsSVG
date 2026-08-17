@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Windows.Input;
+using System.Windows.Media;
 using GMap.NET;
 using GMap.NET.WindowsPresentation;
 
@@ -20,8 +21,21 @@ public sealed class GMapControlConfigurator
 
         map.MouseWheelZoomEnabled = true;
 
+        // Fractional zoom scales raster tiles. Linear sampling is much cheaper
+        // than WPF's high-quality resampler while the map is moving and does
+        // not affect tiles displayed at their native integer zoom.
+        RenderOptions.SetBitmapScalingMode(
+            map,
+            BitmapScalingMode.LowQuality);
+
         map.ScaleMode = ScaleModes.Dynamic;
-        map.MouseWheelZoomStep = 0.1;
+        // Four quarter-steps per zoom level are enough for smooth navigation
+        // and avoid ten overlay/tile refresh cycles for one wheel range.
+        map.MouseWheelZoomStep = 0.25;
+
+        // Keep only nearby tile levels in the decompressed matrix. The
+        // persistent SQLite cache remains available when the user returns.
+        map.LevelsKeepInMemory = 2;
 
         map.MultiTouchEnabled = false;
     }
