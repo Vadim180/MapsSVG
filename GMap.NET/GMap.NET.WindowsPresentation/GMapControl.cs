@@ -17,6 +17,8 @@ using System.Windows.Threading;
 using GMap.NET.Internals;
 using GMap.NET.MapProviders;
 using GMap.NET.Projections;
+using System.IO;
+using System.Text;
 
 namespace GMap.NET.WindowsPresentation
 {
@@ -25,7 +27,19 @@ namespace GMap.NET.WindowsPresentation
     /// </summary>
     public partial class GMapControl : ItemsControl, Interface, IDisposable
     {
-        #region DependencyProperties and related stuff
+        private const double ZoomOutLimitEpsilon = 0.01;
+        private bool _isUpdatingPositionFromCore;
+
+        private bool _isClampingVisibleBounds;
+
+        private bool _disposed = false;
+                
+        private bool _leftStuckBeforeZoom;
+        private bool _rightStuckBeforeZoom;
+        private bool _topStuckBeforeZoom;
+        private bool _bottomStuckBeforeZoom;
+
+        public bool IsViewportResizeBoundsCorrectionSuspended { get; set; }
 
         /// <summary>
         ///     type of map
@@ -78,26 +92,6 @@ namespace GMap.NET.WindowsPresentation
                 OnCoerceZoom));
 
         /// <summary>
-        ///     The zoom x property
-        /// </summary>
-        public static readonly DependencyProperty ZoomXProperty = DependencyProperty.Register("ZoomX",
-            typeof(double),
-            typeof(GMapControl),
-            new UIPropertyMetadata(0.0,
-                ZoomXPropertyChanged,
-                OnCoerceZoom));
-
-        /// <summary>
-        ///     The zoom y property
-        /// </summary>
-        public static readonly DependencyProperty ZoomYProperty = DependencyProperty.Register("ZoomY",
-            typeof(double),
-            typeof(GMapControl),
-            new UIPropertyMetadata(0.0,
-                ZoomYPropertyChanged,
-                OnCoerceZoom));
-
-        /// <summary>
         ///     The multi touch enabled property
         /// </summary>
         public static readonly DependencyProperty MultiTouchEnabledProperty = DependencyProperty.Register(
@@ -125,26 +119,6 @@ namespace GMap.NET.WindowsPresentation
             set { SetValue(ZoomProperty, value); }
         }
 
-        /// <summary>
-        ///     Map Zoom X
-        /// </summary>
-        [Category("GMap.NET")]
-        public double ZoomX
-        {
-            get { return (double)GetValue(ZoomXProperty); }
-            set { SetValue(ZoomXProperty, value); }
-        }
-
-        /// <summary>
-        ///     Map Zoom Y
-        /// </summary>
-        [Category("GMap.NET")]
-        public double ZoomY
-        {
-            get { return (double)GetValue(ZoomYProperty); }
-            set { SetValue(ZoomYProperty, value); }
-        }
-
         [Category("GMap.NET")]
         public PointLatLng CenterPosition
         {
@@ -170,8 +144,16 @@ namespace GMap.NET.WindowsPresentation
             get { return _scaleMode; }
             set
             {
+                if (_scaleMode == value)
+                {
+                    return;
+                }
+
                 _scaleMode = value;
-                InvalidateVisual();
+
+                ReapplyCurrentZoomTransform();
+
+                InvalidateVisual(true);
             }
         }
 
@@ -359,26 +341,6 @@ namespace GMap.NET.WindowsPresentation
         }
 
         /// <summary>
-        ///     Zooms the x property changed.
-        /// </summary>
-        /// <param name="d">The d.</param>
-        /// <param name="e">The <see cref="DependencyPropertyChangedEventArgs" /> instance containing the event data.</param>
-        private static void ZoomXPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            ZoomPropertyChanged((GMapControl)d, (double)e.NewValue, (double)e.OldValue, ZoomMode.X);
-        }
-
-        /// <summary>
-        ///     Zooms the y property changed.
-        /// </summary>
-        /// <param name="d">The d.</param>
-        /// <param name="e">The <see cref="DependencyPropertyChangedEventArgs" /> instance containing the event data.</param>
-        private static void ZoomYPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            ZoomPropertyChanged((GMapControl)d, (double)e.NewValue, (double)e.OldValue, ZoomMode.Y);
-        }
-
-        /// <summary>
         ///     Handles the <see cref="E:MultiTouchEnabledChanged" /> event.
         /// </summary>
         /// <param name="d">The d.</param>
@@ -404,8 +366,6 @@ namespace GMap.NET.WindowsPresentation
         readonly ScaleTransform _lastScaleTransform = new ScaleTransform();
 
         private ScaleModes _scaleMode = ScaleModes.Integer;
-
-        #endregion
 
         readonly Core _core = new Core();
 
@@ -481,17 +441,6 @@ namespace GMap.NET.WindowsPresentation
                 Brushes.Blue);
 
         /// <summary>
-        ///     map zooming type for mouse wheel
-        /// </summary>
-        [Category("GMap.NET")]
-        [Description("map zooming type for mouse wheel")]
-        public MouseWheelZoomType MouseWheelZoomType
-        {
-            get { return _core.MouseWheelZoomType; }
-            set { _core.MouseWheelZoomType = value; }
-        }
-
-        /// <summary>
         ///     enable map zoom on mouse wheel
         /// </summary>
         [Category("GMap.NET")]
@@ -502,10 +451,26 @@ namespace GMap.NET.WindowsPresentation
             set { _core.MouseWheelZoomEnabled = value; }
         }
 
+
+        private double _mouseWheelZoomStep = 0.5;
+
+        /// <summary>
+        /// Zoom step for one mouse wheel notch.
+        /// 1.0 keeps the original behavior.
+        /// 0.5 / 0.25 make zoom smoother.
+        /// </summary>
+        [Category("GMap.NET")]
+        [Description("zoom step for one mouse wheel notch")]
+        public double MouseWheelZoomStep
+        {
+            get { return _mouseWheelZoomStep; }
+            set { _mouseWheelZoomStep = Math.Max(0.05, value); }
+        }
+
         /// <summary>
         ///     map dragg button
         /// </summary>
-        [Category("GMap.NET")] public MouseButton DragButton = MouseButton.Right;
+        [Category("GMap.NET")] public MouseButton DragButton = MouseButton.Left; // changed: drag map with left mouse button
 
         /// <summary>
         ///     use circle for selection
@@ -565,7 +530,17 @@ namespace GMap.NET.WindowsPresentation
         /// <summary>
         ///     map boundaries
         /// </summary>
-        public RectLatLng? BoundsOfMap = null;
+        private RectLatLng? _boundsOfMap = null;
+
+        public RectLatLng? BoundsOfMap
+        {
+            get { return _boundsOfMap; }
+            set
+            {
+                _boundsOfMap = value;
+
+            }
+        }
 
         /// <summary>
         ///     occurs when mouse selection is changed
@@ -573,12 +548,11 @@ namespace GMap.NET.WindowsPresentation
         public event SelectionChange OnSelectionChange;
 
         private static readonly DependencyPropertyKey MarkersKey
-            = DependencyProperty.RegisterReadOnly("Markers",
-                typeof(ObservableCollection<GMapMarker>),
-                typeof(GMapControl),
-                new FrameworkPropertyMetadata(null,
-                    FrameworkPropertyMetadataOptions.None,
-                    OnMarkersPropChanged));
+    = DependencyProperty.RegisterReadOnly("Markers",
+        typeof(ObservableCollection<GMapMarker>),
+        typeof(GMapControl),
+        new FrameworkPropertyMetadata(null,
+            FrameworkPropertyMetadataOptions.None)); // ← без callback
 
         public static readonly DependencyProperty MarkersProperty = MarkersKey.DependencyProperty;
 
@@ -590,16 +564,7 @@ namespace GMap.NET.WindowsPresentation
             get { return (ObservableCollection<GMapMarker>)GetValue(MarkersProperty); }
             private set { SetValue(MarkersKey, value); }
         }
-
-        private static void OnMarkersPropChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            ((GMapControl)d).OnMarkersPropChanged(e);
-        }
-
-        private void OnMarkersPropChanged(DependencyPropertyChangedEventArgs e)
-        {
-        }
-
+          
         /// <summary>
         ///     current markers overlay offset
         /// </summary>
@@ -608,7 +573,6 @@ namespace GMap.NET.WindowsPresentation
         internal readonly TranslateTransform MapOverlayTranslateTransform = new TranslateTransform();
 
         internal ScaleTransform MapScaleTransform = new ScaleTransform();
-        internal RotateTransform MapRotateTransform = new RotateTransform();
 
         protected bool DesignModeInConstruct
         {
@@ -745,7 +709,17 @@ namespace GMap.NET.WindowsPresentation
 
         private void CoreOnCurrentPositionChanged(PointLatLng pointLatLng)
         {
-            Position = pointLatLng;
+            if (_isUpdatingPositionFromCore) return; // додатковий захист
+
+            _isUpdatingPositionFromCore = true;
+            try
+            {
+                Position = pointLatLng;
+            }
+            finally
+            {
+                _isUpdatingPositionFromCore = false;
+            }
         }
 
         static GMapControl()
@@ -863,6 +837,9 @@ namespace GMap.NET.WindowsPresentation
                 }
 
                 _core.OnMapOpen().ProgressChanged += InvalidatorEngage;
+
+                ReapplyCurrentZoomTransform();
+
                 ForceUpdateOverlays();
 
                 if (Application.Current != null)
@@ -870,7 +847,7 @@ namespace GMap.NET.WindowsPresentation
                     _loadedApp = Application.Current;
 
                     _loadedApp.Dispatcher.Invoke(DispatcherPriority.ApplicationIdle,
-                        new Action(delegate()
+                        new Action(delegate ()
                             {
                                 _loadedApp.SessionEnding += Current_SessionEnding;
                             }
@@ -896,14 +873,25 @@ namespace GMap.NET.WindowsPresentation
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
+        /// 
+        private bool _isApplyingBoundsAfterSizeChanged;
+
         void GMapControl_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             var constraint = e.NewSize;
 
-            // 50px outside control
-            //region = new GRect(-50, -50, (int)constraint.Width + 100, (int)constraint.Height + 100);
+            _core.OnMapSizeChanged(
+                (int)constraint.Width,
+                (int)constraint.Height
+            );
 
-            _core.OnMapSizeChanged((int)constraint.Width, (int)constraint.Height);
+            if (MapScaleTransform != null)
+            {
+                MapScaleTransform.CenterX = constraint.Width / 2.0;
+                MapScaleTransform.CenterY = constraint.Height / 2.0;
+            }
+
+            ReapplyCurrentZoomTransform();
 
             if (_core.IsStarted)
             {
@@ -913,6 +901,49 @@ namespace GMap.NET.WindowsPresentation
                 }
 
                 ForceUpdateOverlays();
+
+                if (!IsViewportResizeBoundsCorrectionSuspended &&
+      BoundsOfMap.HasValue &&
+      !BoundsOfMap.Value.IsEmpty)
+                {
+                    ApplyBoundsAfterViewportSizeChanged();
+                }
+            }
+        }
+
+        private void ApplyBoundsAfterViewportSizeChanged()
+        {
+            if (_isApplyingBoundsAfterSizeChanged)
+            {
+                return;
+            }
+
+            if (!_core.IsStarted ||
+                !BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty)
+            {
+                return;
+            }
+
+            _isApplyingBoundsAfterSizeChanged = true;
+
+            try
+            {
+                var bounds = BoundsOfMap.Value;
+
+                FitZoomToBoundsIfNeeded(bounds);
+
+                ForceUpdateOverlays();
+                InvalidateVisual(true);
+
+                ClampVisibleBoundsToAllowedBounds();
+
+                ForceUpdateOverlays();
+                InvalidateVisual(true);
+            }
+            finally
+            {
+                _isApplyingBoundsAfterSizeChanged = false;
             }
         }
 
@@ -942,9 +973,9 @@ namespace GMap.NET.WindowsPresentation
 
                 var shape = s.CreatePath(localPath, true);
 
-                if (marker.Shape is Path)
+                if (marker.Shape is System.Windows.Shapes.Path)
                 {
-                    (marker.Shape as Path).Data = shape.Data;
+                    (marker.Shape as System.Windows.Shapes.Path).Data = shape.Data;
                 }
                 else
                 {
@@ -1164,41 +1195,13 @@ namespace GMap.NET.WindowsPresentation
 
                         if (ShowTileGridLines)
                         {
+                            // draw only tile borders when grid is enabled; do not render DEBUG tile text
                             g.DrawRectangle(null,
                                 EmptyTileBorders,
                                 new Rect(_core.TileRect.X,
                                     _core.TileRect.Y,
                                     _core.TileRect.Width,
                                     _core.TileRect.Height));
-
-                            if (tilePoint.PosXY == _core.CenterTileXYLocation)
-                            {
-                                var tileText = new FormattedText("CENTER:" + tilePoint.ToString(),
-                                    CultureInfo.CurrentUICulture,
-                                    FlowDirection.LeftToRight,
-                                    _tileTypeface,
-                                    16,
-                                    Brushes.Red);
-                                tileText.MaxTextWidth = _core.TileRect.Width;
-                                g.DrawText(tileText,
-                                    new Point(
-                                        _core.TileRect.X + _core.TileRect.Width / 2 - EmptyTileText.Width / 2,
-                                        _core.TileRect.Y + _core.TileRect.Height / 2 - tileText.Height / 2));
-                            }
-                            else
-                            {
-                                var tileText = new FormattedText("TILE: " + tilePoint.ToString(),
-                                    CultureInfo.CurrentUICulture,
-                                    FlowDirection.LeftToRight,
-                                    _tileTypeface,
-                                    16,
-                                    Brushes.Red);
-                                tileText.MaxTextWidth = _core.TileRect.Width;
-                                g.DrawText(tileText,
-                                    new Point(
-                                        _core.TileRect.X + _core.TileRect.Width / 2 - EmptyTileText.Width / 2,
-                                        _core.TileRect.Y + _core.TileRect.Height / 2 - tileText.Height / 2));
-                            }
                         }
                     }
                 }
@@ -1379,28 +1382,71 @@ namespace GMap.NET.WindowsPresentation
         /// </summary>
         /// <param name="x"></param>
         /// <param name="y"></param>
+        /// <summary>
+        /// Виконує безпосереднє піксельне зміщення карти без перевірки BoundsOfMap.
+        ///
+        /// Цей метод використовується внутрішніми корекціями viewport.
+        /// Він не повинен викликати ClampVisibleBoundsToAllowedBounds(),
+        /// інакше виникне рекурсія:
+        /// clamp → offset → clamp → offset.
+        /// </summary>
+        private void ApplyRawOffset(int x, int y)
+        {
+            if (!IsLoaded)
+            {
+                return;
+            }
+
+            if (IsRotated)
+            {
+                var angleRad = Bearing * Math.PI / 180.0;
+                var cos = Math.Cos(angleRad);
+                var sin = Math.Sin(angleRad);
+
+                var dx = x * cos - y * sin;
+                var dy = x * sin + y * cos;
+
+                _core.DragOffset(
+                    new GPoint(
+                        (long)dx,
+                        (long)dy
+                    )
+                );
+
+                ForceUpdateOverlays();
+                return;
+            }
+
+            _core.DragOffset(
+                new GPoint(
+                    x,
+                    y
+                )
+            );
+
+            UpdateMarkersOffset();
+            InvalidateVisual(true);
+        }
+
+        /// <summary>
+        /// Публічно зміщує карту в пікселях.
+        ///
+        /// Після звичайного програмного зміщення, наприклад через WASD,
+        /// фактичний viewport повертається всередину BoundsOfMap.
+        /// </summary>
         public void Offset(int x, int y)
         {
-            if (IsLoaded)
+            if (!IsLoaded)
             {
-                if (IsRotated)
-                {
-                    var p = new Point(x, y);
-                    p = _rotationMatrixInvert.Transform(p);
-                    x = (int)p.X;
-                    y = (int)p.Y;
+                return;
+            }
 
-                    _core.DragOffset(new GPoint(x, y));
+            ApplyRawOffset(x, y);
 
-                    ForceUpdateOverlays();
-                }
-                else
-                {
-                    _core.DragOffset(new GPoint(x, y));
-
-                    UpdateMarkersOffset();
-                    InvalidateVisual(true);
-                }
+            if (BoundsOfMap.HasValue &&
+                !BoundsOfMap.Value.IsEmpty)
+            {
+                ClampVisibleBoundsToAllowedBounds();
             }
         }
 
@@ -1477,21 +1523,6 @@ namespace GMap.NET.WindowsPresentation
         /// <summary>
         ///     apply transformation if in rotation mode
         /// </summary>
-        Point ApplyRotation(double x, double y)
-        {
-            var ret = new Point(x, y);
-
-            if (IsRotated)
-            {
-                ret = _rotationMatrix.Transform(ret);
-            }
-
-            return ret;
-        }
-
-        /// <summary>
-        ///     apply transformation if in rotation mode
-        /// </summary>
         Point ApplyRotationInversion(double x, double y)
         {
             var ret = new Point(x, y);
@@ -1546,11 +1577,6 @@ namespace GMap.NET.WindowsPresentation
                     drawingContext.PushTransform(MapTranslateTransform);
                     {
                         DrawMap(drawingContext);
-
-#if DEBUG
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(-20, 0), new Point(20, 0));
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(0, -20), new Point(0, 20));
-#endif
                     }
                     drawingContext.Pop();
                     drawingContext.Pop();
@@ -1560,10 +1586,6 @@ namespace GMap.NET.WindowsPresentation
                     drawingContext.PushTransform(MapTranslateTransform);
                     {
                         DrawMap(drawingContext);
-#if DEBUG
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(-20, 0), new Point(20, 0));
-                        drawingContext.DrawLine(_virtualCenterCrossPen, new Point(0, -20), new Point(0, 20));
-#endif
                     }
                     drawingContext.Pop();
                 }
@@ -1631,10 +1653,6 @@ namespace GMap.NET.WindowsPresentation
         public Pen CenterCrossPen = new Pen(Brushes.Red, 1);
         public bool ShowCenter = true;
 
-#if DEBUG
-        readonly Pen _virtualCenterCrossPen = new Pen(Brushes.Blue, 1);
-#endif
-
         HelperLineOptions _helperLineOption = HelperLineOptions.DontShow;
 
         /// <summary>
@@ -1686,6 +1704,25 @@ namespace GMap.NET.WindowsPresentation
             }
         }
 
+        private void PositionChanged(DependencyPropertyChangedEventArgs e)
+        {
+            if (_isUpdatingPositionFromCore) return;
+
+            _isUpdatingPositionFromCore = true;
+            try
+            {
+                _core.Position = Position;
+                if (_core.IsStarted)
+                {
+                    ForceUpdateOverlays();
+                }
+            }
+            finally
+            {
+                _isUpdatingPositionFromCore = false;
+            }
+        }
+
         /// <summary>
         ///     Reverses MouseWheel zooming direction
         /// </summary>
@@ -1701,89 +1738,633 @@ namespace GMap.NET.WindowsPresentation
             set { SetValue(InvertedMouseWheelZoomingProperty, value); }
         }
 
-        /// <summary>
-        ///     Lets you zoom by MouseWheel even when pointer is in area of marker
-        /// </summary>
-        public static readonly DependencyProperty IgnoreMarkerOnMouseWheelProperty = DependencyProperty.Register(
-            "IgnoreMarkerOnMouseWheel",
-            typeof(bool),
-            typeof(GMapControl),
-            new PropertyMetadata(false));
-
-        public bool IgnoreMarkerOnMouseWheel
+        private double NormalizeZoom(double zoom)
         {
-            get { return (bool)GetValue(IgnoreMarkerOnMouseWheelProperty); }
-            set { SetValue(IgnoreMarkerOnMouseWheelProperty, value); }
+            var clampedZoom = Math.Max(
+                MinZoom,
+                Math.Min(MaxZoom, zoom)
+            );
+
+            return Math.Round(
+                clampedZoom,
+                2,
+                MidpointRounding.AwayFromZero
+            );
+        }
+
+        private double GetZoomOutTarget()
+        {
+            var requestedZoom = GetPreviousZoomGridValue();
+
+            if (!BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty)
+            {
+                return requestedZoom;
+            }
+
+            var minimumAllowedZoom = GetMinimumAllowedZoomForCurrentView(
+                BoundsOfMap.Value
+            );
+
+            var debugRequestedZoom = requestedZoom;
+            var debugMinimumAllowedZoom = minimumAllowedZoom;
+            var debugCurrentZoom = Zoom;
+
+            double targetZoom;
+
+            if (requestedZoom < minimumAllowedZoom)
+            {
+                var normalizedMinimumZoom = NormalizeBoundsZoom(minimumAllowedZoom);
+
+                // Важливо:
+                // wheel-down не має права збільшувати zoom.
+                // Якщо мінімальний дозволений zoom вже більший або майже дорівнює поточному,
+                // значить ми вже на межі — нічого не робимо.
+                if (normalizedMinimumZoom >= Zoom - ZoomOutLimitEpsilon)
+                {
+                    targetZoom = Zoom;
+                }
+                else
+                {
+                    targetZoom = normalizedMinimumZoom;
+                }
+            }
+            else
+            {
+                targetZoom = requestedZoom;
+            }
+
+            return targetZoom;
+        }
+
+        private double GetZoomInTarget()
+        {
+            return GetNextZoomGridValue();
+        }
+
+        // Обчислює реальний мінімальний zoom, потрібний для вміщення
+        // поточного viewport у робочу область.
+        //
+        // Важливо: результат тут не обмежується MaxZoom.
+        // Це дозволяє виявити ситуацію, коли користувацький MaxZoom
+        // занадто малий і bounds фізично неможливо виконати.
+        private double CalculateRequiredZoomForBounds(RectLatLng bounds)
+        {
+            if (bounds.IsEmpty ||
+                bounds.WidthLng <= 0 ||
+                bounds.HeightLat <= 0)
+            {
+                return MinZoom;
+            }
+
+            var visibleBounds = GetVisibleBoundsFromScreen();
+
+            if (visibleBounds.IsEmpty ||
+                visibleBounds.WidthLng <= 0 ||
+                visibleBounds.HeightLat <= 0)
+            {
+                return MinZoom;
+            }
+
+            var widthRatio = visibleBounds.WidthLng / bounds.WidthLng;
+            var heightRatio = visibleBounds.HeightLat / bounds.HeightLat;
+
+            var requiredRatio = Math.Max(widthRatio, heightRatio);
+
+            if (requiredRatio <= 0)
+            {
+                return MinZoom;
+            }
+
+            var requiredZoom = Zoom + Math.Log(requiredRatio, 2.0);
+
+            return Math.Max(MinZoom, requiredZoom);
+        }
+
+        private double GetMinimumAllowedZoomForCurrentView(RectLatLng bounds)
+        {
+            var requiredZoom = CalculateRequiredZoomForBounds(bounds);
+
+            return NormalizeBoundsZoom(requiredZoom);
+        }
+
+        // Повертає найменший цілий MaxZoom, за якого поточний viewport
+        // може повністю поміститися всередині BoundsOfMap.
+        public int GetMinimumCompatibleMaxZoom()
+        {
+            if (!BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty ||
+                ActualWidth <= 0 ||
+                ActualHeight <= 0)
+            {
+                return MinZoom;
+            }
+
+            var requiredZoom = CalculateRequiredZoomForBounds(BoundsOfMap.Value);
+
+            if (double.IsNaN(requiredZoom) ||
+                double.IsInfinity(requiredZoom))
+            {
+                return MinZoom;
+            }
+
+            return Math.Max(
+                MinZoom,
+                (int)Math.Ceiling(requiredZoom - 0.000000001)
+            );
+        }
+
+        private RectLatLng GetVisibleBoundsFromScreen()
+        {
+            if (ActualWidth <= 0 || ActualHeight <= 0)
+            {
+                return RectLatLng.Empty;
+            }
+
+            var width = Math.Max(1, (int)ActualWidth - 1);
+            var height = Math.Max(1, (int)ActualHeight - 1);
+
+            var topLeft = FromLocalToLatLng(0, 0);
+            var topRight = FromLocalToLatLng(width, 0);
+            var bottomLeft = FromLocalToLatLng(0, height);
+            var bottomRight = FromLocalToLatLng(width, height);
+
+            var top = Math.Max(
+                Math.Max(topLeft.Lat, topRight.Lat),
+                Math.Max(bottomLeft.Lat, bottomRight.Lat)
+            );
+
+            var bottom = Math.Min(
+                Math.Min(topLeft.Lat, topRight.Lat),
+                Math.Min(bottomLeft.Lat, bottomRight.Lat)
+            );
+
+            var left = Math.Min(
+                Math.Min(topLeft.Lng, topRight.Lng),
+                Math.Min(bottomLeft.Lng, bottomRight.Lng)
+            );
+
+            var right = Math.Max(
+                Math.Max(topLeft.Lng, topRight.Lng),
+                Math.Max(bottomLeft.Lng, bottomRight.Lng)
+            );
+
+            return RectLatLng.FromLTRB(
+                left,
+                top,
+                right,
+                bottom
+            );
+        }
+
+        private PointLatLng GetVisibleCenterFromScreen()
+        {
+            var visible = GetVisibleBoundsFromScreen();
+
+            if (visible.IsEmpty ||
+                visible.WidthLng <= 0 ||
+                visible.HeightLat <= 0)
+            {
+                return Position;
+            }
+
+            return new PointLatLng(
+                visible.Bottom + visible.HeightLat / 2.0,
+                visible.Left + visible.WidthLng / 2.0
+            );
+        }
+
+        private void ClampVisibleBoundsToAllowedBounds()
+        {
+            if (_isClampingVisibleBounds)
+            {
+                return;
+            }
+
+            _isClampingVisibleBounds = true;
+
+            try
+            {
+                if (!BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty ||
+                ActualWidth <= 0 ||
+                ActualHeight <= 0)
+                {
+                    return;
+                }
+
+                var bounds = BoundsOfMap.Value;
+
+                for (var pass = 0; pass < 4; pass++)
+                {
+                    var visibleBounds = GetVisibleBoundsFromScreen();
+
+                    if (visibleBounds.IsEmpty ||
+                        visibleBounds.WidthLng <= 0 ||
+                        visibleBounds.HeightLat <= 0)
+                    {
+                        return;
+                    }
+
+                    var lngPerPixel = visibleBounds.WidthLng / ActualWidth;
+                    var latPerPixel = visibleBounds.HeightLat / ActualHeight;
+
+                    if (lngPerPixel <= 0 ||
+                        latPerPixel <= 0)
+                    {
+                        return;
+                    }
+
+                    var offsetX = 0.0;
+                    var offsetY = 0.0;
+
+                    var visibleCenterLng = visibleBounds.Left + visibleBounds.WidthLng / 2.0;
+                    var visibleCenterLat = visibleBounds.Bottom + visibleBounds.HeightLat / 2.0;
+
+                    var boundsCenterLng = bounds.Left + bounds.WidthLng / 2.0;
+                    var boundsCenterLat = bounds.Bottom + bounds.HeightLat / 2.0;
+
+                    if (visibleBounds.WidthLng >= bounds.WidthLng)
+                    {
+                        offsetX = (visibleCenterLng - boundsCenterLng) / lngPerPixel;
+                    }
+                    else if (visibleBounds.Left < bounds.Left)
+                    {
+                        offsetX = -(bounds.Left - visibleBounds.Left) / lngPerPixel;
+                    }
+                    else if (visibleBounds.Right > bounds.Right)
+                    {
+                        offsetX = (visibleBounds.Right - bounds.Right) / lngPerPixel;
+                    }
+
+                    if (visibleBounds.HeightLat >= bounds.HeightLat)
+                    {
+                        offsetY = (boundsCenterLat - visibleCenterLat) / latPerPixel;
+                    }
+                    else if (visibleBounds.Top > bounds.Top)
+                    {
+                        offsetY = -(visibleBounds.Top - bounds.Top) / latPerPixel;
+                    }
+                    else if (visibleBounds.Bottom < bounds.Bottom)
+                    {
+                        offsetY = (bounds.Bottom - visibleBounds.Bottom) / latPerPixel;
+                    }
+
+                    var roundedOffsetX = (int)Math.Round(offsetX);
+                    var roundedOffsetY = (int)Math.Round(offsetY);
+
+                    if (roundedOffsetX == 0 &&
+                        roundedOffsetY == 0)
+                    {
+                        return;
+                    }
+
+                    ApplyExternalOffsetAndRebaseDrag(
+                        roundedOffsetX,
+                        roundedOffsetY
+                    );
+
+                    ForceUpdateOverlays();
+                    InvalidateVisual(true);
+                }
+            }
+            finally
+            {
+                _isClampingVisibleBounds = false;
+            }
+        }
+
+        private void FitZoomToBoundsIfNeeded(RectLatLng bounds)
+        {
+            if (bounds.IsEmpty)
+            {
+                return;
+            }
+
+            var minimumAllowedZoom = GetMinimumAllowedZoomForCurrentView(bounds);
+
+            if (minimumAllowedZoom > Zoom + 0.0001)
+            {
+                //Zoom = NormalizeZoom(minimumAllowedZoom);
+                Zoom = NormalizeBoundsZoom(minimumAllowedZoom);
+            }
+        }
+
+        private double GetNextZoomGridValue()
+        {
+            var step = MouseWheelZoomStep;
+
+            if (step <= 0)
+            {
+                return NormalizeZoom(Zoom + 1.0);
+            }
+
+            var nextZoom = Math.Ceiling(
+                (Zoom + 0.000001) / step
+            ) * step;
+
+            if (Math.Abs(nextZoom - Zoom) < 0.0001)
+            {
+                nextZoom += step;
+            }
+
+            return NormalizeZoom(nextZoom);
+        }
+
+        private double GetPreviousZoomGridValue()
+        {
+            var step = MouseWheelZoomStep;
+
+            if (step <= 0)
+            {
+                return NormalizeZoom(Zoom - 1.0);
+            }
+
+            var previousZoom = Math.Floor(
+                (Zoom - 0.000001) / step
+            ) * step;
+
+            if (Math.Abs(previousZoom - Zoom) < 0.0001)
+            {
+                previousZoom -= step;
+            }
+
+            return NormalizeZoom(previousZoom);
+        }
+
+        private void CaptureStuckBounds()
+        {
+            _leftStuckBeforeZoom = false;
+            _rightStuckBeforeZoom = false;
+            _topStuckBeforeZoom = false;
+            _bottomStuckBeforeZoom = false;
+
+            if (!BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty ||
+                ActualWidth <= 0 ||
+                ActualHeight <= 0)
+            {
+                return;
+            }
+
+            var visible = GetVisibleBoundsFromScreen();
+
+            if (visible.IsEmpty ||
+                visible.WidthLng <= 0 ||
+                visible.HeightLat <= 0)
+            {
+                return;
+            }
+
+            var bounds = BoundsOfMap.Value;
+
+            var lngTolerance = visible.WidthLng / ActualWidth * 4.0;
+            var latTolerance = visible.HeightLat / ActualHeight * 4.0;
+
+            _leftStuckBeforeZoom = visible.Left <= bounds.Left + lngTolerance;
+            _rightStuckBeforeZoom = visible.Right >= bounds.Right - lngTolerance;
+
+            _topStuckBeforeZoom = visible.Top >= bounds.Top - latTolerance;
+            _bottomStuckBeforeZoom = visible.Bottom <= bounds.Bottom + latTolerance;
+        }
+
+        public void ApplyBoundsOfMapToViewport()
+        {
+            ApplyBoundsAfterViewportSizeChanged();
+        }
+
+        private double NormalizeBoundsZoom(double zoom)
+        {
+            var clampedZoom = Math.Max(
+                MinZoom,
+                Math.Min(MaxZoom, zoom)
+            );
+
+            return Math.Ceiling(clampedZoom * 10000.0) / 10000.0;
         }
 
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
             base.OnMouseWheel(e);
 
-            if (MouseWheelZoomEnabled && (IsMouseDirectlyOver || IgnoreMarkerOnMouseWheel) && !_core.IsDragging)
+            if (!MouseWheelZoomEnabled || _core.IsDragging)
             {
-                var p = e.GetPosition(this);
+                return;
+            }
 
-                if (MapScaleTransform != null)
+            var wheelDelta = InvertedMouseWheelZooming
+                ? -e.Delta
+                : e.Delta;
+
+            var isZoomIn = wheelDelta > 0;
+            var isZoomOut = wheelDelta < 0;
+
+            if (!isZoomIn && !isZoomOut)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            var zoomBefore = Zoom;
+
+            CaptureStuckBounds();
+
+            var hasStuckBounds =
+                isZoomOut &&
+                (_leftStuckBeforeZoom ||
+                 _rightStuckBeforeZoom ||
+                 _topStuckBeforeZoom ||
+                 _bottomStuckBeforeZoom);
+
+            var targetZoom = isZoomIn
+                ? GetZoomInTarget()
+                : GetZoomOutTarget();
+
+            var isBoundsLimitedZoomOut = false;
+
+            if (isZoomOut &&
+                BoundsOfMap.HasValue &&
+                !BoundsOfMap.Value.IsEmpty)
+            {
+                var minimumAllowedZoom = GetMinimumAllowedZoomForCurrentView(
+                    BoundsOfMap.Value
+                );
+
+                isBoundsLimitedZoomOut = targetZoom <= minimumAllowedZoom + 0.01;
+            }
+
+            var mousePos = e.GetPosition(this);
+
+            if (Math.Abs(targetZoom - Zoom) < 0.0001)
+            {
+                if (hasStuckBounds)
                 {
-                    p = MapScaleTransform.Inverse.Transform(p);
+                    CorrectStuckBoundsByPixelOffset();
+                    ClampVisibleBoundsToAllowedBounds();
+                }
+                else if (isBoundsLimitedZoomOut)
+                {
+                    ClampVisibleBoundsToAllowedBounds();
                 }
 
-                p = ApplyRotationInversion(p.X, p.Y);
+                e.Handled = true;
+                return;
+            }
 
-                if (_core.MouseLastZoom.X != (int)p.X && _core.MouseLastZoom.Y != (int)p.Y)
+            var hasActiveBounds =
+     BoundsOfMap.HasValue &&
+     !BoundsOfMap.Value.IsEmpty;
+
+            // Без робочої області опорною точкою має бути Position.
+            // При активній робочій області залишаємо фактичний центр viewport,
+            // оскільки його положення могло бути скориговане через RenderOffset.
+            var positionBaseBeforeZoom = hasActiveBounds
+                ? GetVisibleCenterFromScreen()
+                : Position;
+
+            var anchorBeforeZoom = FromLocalToLatLng(
+                (int)mousePos.X,
+                (int)mousePos.Y
+            );
+
+            Zoom = targetZoom;
+
+            if (hasStuckBounds)
+            {
+                CorrectStuckBoundsByPixelOffset();
+
+                e.Handled = true;
+                return;
+            }
+
+            if (isBoundsLimitedZoomOut)
+            {
+                ClampVisibleBoundsToAllowedBounds();
+                e.Handled = true;
+                return;
+            }
+
+            var anchorAfterZoom = FromLocalToLatLng(
+                (int)mousePos.X,
+                (int)mousePos.Y
+            );
+
+            var desiredPosition = new PointLatLng(
+     positionBaseBeforeZoom.Lat +
+         (anchorBeforeZoom.Lat - anchorAfterZoom.Lat),
+
+     positionBaseBeforeZoom.Lng +
+         (anchorBeforeZoom.Lng - anchorAfterZoom.Lng)
+ );
+
+            Position = desiredPosition;
+
+            if (hasActiveBounds)
+            {
+                ClampVisibleBoundsToAllowedBounds();
+            }
+
+            e.Handled = true;
+        }
+
+        // У WPF GMap дробовий zoom реалізується через MapScaleTransform.
+        // Внутрішній Core.BoundsOfMap працює з цілим zoom Core та RenderOffset,
+        // тому може блокувати коректне зміщення карти або неправильно визначати
+        // фактичну видиму область.
+        //
+        // Через це обмеження робочої області контролюється на рівні GMapControl
+        // за реальною видимою областю екрана. Під час програмної корекції
+        // Core.BoundsOfMap тимчасово вимикається, щоб Core не заблокував Offset.
+        private void ApplyExternalOffsetAndRebaseDrag(int x, int y)
+        {
+            var wasCoreDragging = _core.IsDragging;
+            var mouseCurrent = _core.MouseCurrent;
+
+            ApplyRawOffset(x, y);
+
+            if (wasCoreDragging)
+            {
+                //_core.RebaseDragAfterExternalOffset(mouseCurrent);
+                _core.RebaseDragAfterExternalOffset(mouseCurrent);
+
+            }
+        }
+
+        private void CorrectStuckBoundsByPixelOffset()
+        {
+
+            if (!BoundsOfMap.HasValue ||
+                BoundsOfMap.Value.IsEmpty ||
+                ActualWidth <= 0 ||
+                ActualHeight <= 0)
+            {
+                return;
+            }
+
+            var bounds = BoundsOfMap.Value;
+
+            for (var pass = 0; pass < 5; pass++)
+            {
+                var visible = GetVisibleBoundsFromScreen();
+
+                if (visible.IsEmpty ||
+                    visible.WidthLng <= 0 ||
+                    visible.HeightLat <= 0)
                 {
-                    if (MouseWheelZoomType == MouseWheelZoomType.MousePositionAndCenter)
-                    {
-                        Position = FromLocalToLatLng((int)p.X, (int)p.Y);
-                    }
-                    else if (MouseWheelZoomType == MouseWheelZoomType.ViewCenter)
-                    {
-                        Position = FromLocalToLatLng((int)ActualWidth / 2, (int)ActualHeight / 2);
-                    }
-                    else if (MouseWheelZoomType == MouseWheelZoomType.MousePositionWithoutCenter)
-                    {
-                        Position = FromLocalToLatLng((int)p.X, (int)p.Y);
-                    }
-
-                    _core.MouseLastZoom.X = (int)p.X;
-                    _core.MouseLastZoom.Y = (int)p.Y;
+                    return;
                 }
 
-                // set mouse position to map center
-                if (MouseWheelZoomType != MouseWheelZoomType.MousePositionWithoutCenter)
+                var lngPerPixel = visible.WidthLng / ActualWidth;
+                var latPerPixel = visible.HeightLat / ActualHeight;
+
+                if (lngPerPixel <= 0 ||
+                    latPerPixel <= 0)
                 {
-                    var ps =
-                        PointToScreen(new Point(ActualWidth / 2, ActualHeight / 2));
-                    Stuff.SetCursorPos((int)ps.X, (int)ps.Y);
+                    return;
                 }
 
-                _core.MouseWheelZooming = true;
+                var offsetX = 0.0;
+                var offsetY = 0.0;
 
-                if (e.Delta > 0)
+                if (_leftStuckBeforeZoom)
                 {
-                    if (!InvertedMouseWheelZooming)
-                    {
-                        Zoom = (int)Zoom + 1;
-                    }
-                    else
-                    {
-                        Zoom = (int)(Zoom + 0.99) - 1;
-                    }
+                    // Тримаємо Visible.Left рівно біля Bounds.Left
+                    offsetX = -(bounds.Left - visible.Left) / lngPerPixel;
                 }
-                else
+                else if (_rightStuckBeforeZoom)
                 {
-                    if (InvertedMouseWheelZooming)
-                    {
-                        Zoom = (int)Zoom + 1;
-                    }
-                    else
-                    {
-                        Zoom = (int)(Zoom + 0.99) - 1;
-                    }
+                    // Тримаємо Visible.Right рівно біля Bounds.Right
+                    offsetX = (visible.Right - bounds.Right) / lngPerPixel;
                 }
 
-                _core.MouseWheelZooming = false;
+                if (_topStuckBeforeZoom)
+                {
+                    // Тримаємо Visible.Top рівно біля Bounds.Top
+                    offsetY = -(visible.Top - bounds.Top) / latPerPixel;
+                }
+                else if (_bottomStuckBeforeZoom)
+                {
+                    // Тримаємо Visible.Bottom рівно біля Bounds.Bottom
+                    offsetY = (bounds.Bottom - visible.Bottom) / latPerPixel;
+                }
+
+                var roundedOffsetX = (int)Math.Round(offsetX);
+                var roundedOffsetY = (int)Math.Round(offsetY);
+
+                if (Math.Abs(roundedOffsetX) < 1 &&
+                    Math.Abs(roundedOffsetY) < 1)
+                {
+                    return;
+                }
+
+                ApplyExternalOffsetAndRebaseDrag(
+    roundedOffsetX,
+    roundedOffsetY
+);
+
+                ForceUpdateOverlays();
+                InvalidateVisual(true);
+
             }
         }
 
@@ -1822,6 +2403,61 @@ namespace GMap.NET.WindowsPresentation
             }
         }
 
+        private void StopMouseDragState(int timestamp)
+        {
+            _onMouseUpTimestamp = timestamp & Int32.MaxValue;
+
+            if (IsDragging)
+            {
+                IsDragging = false;
+                Debug.WriteLine("IsDragging = " + IsDragging);
+                Cursor = _cursorBefore;
+            }
+
+            if (Mouse.Captured == this)
+            {
+                Mouse.Capture(null);
+            }
+
+            if (_core.IsDragging)
+            {
+                _core.EndDrag();
+            }
+
+            _core.MouseDown = GPoint.Empty;
+            _core.MouseCurrent = GPoint.Empty;
+        }
+
+        private bool IsDragButtonPressed(MouseEventArgs e)
+        {
+            if (DragButton == MouseButton.Left)
+            {
+                return e.LeftButton == MouseButtonState.Pressed;
+            }
+
+            if (DragButton == MouseButton.Right)
+            {
+                return e.RightButton == MouseButtonState.Pressed;
+            }
+
+            if (DragButton == MouseButton.Middle)
+            {
+                return e.MiddleButton == MouseButtonState.Pressed;
+            }
+
+            if (DragButton == MouseButton.XButton1)
+            {
+                return e.XButton1 == MouseButtonState.Pressed;
+            }
+
+            if (DragButton == MouseButton.XButton2)
+            {
+                return e.XButton2 == MouseButtonState.Pressed;
+            }
+
+            return false;
+        }
+
         int _onMouseUpTimestamp;
 
         protected override void OnMouseUp(MouseButtonEventArgs e)
@@ -1831,6 +2467,20 @@ namespace GMap.NET.WindowsPresentation
             if (_isSelected)
             {
                 _isSelected = false;
+            }
+
+            if (e.ChangedButton == DragButton)
+            {
+                StopMouseDragState(e.Timestamp);
+
+                if (BoundsOfMap.HasValue &&
+                    !BoundsOfMap.Value.IsEmpty)
+                {
+                    ClampVisibleBoundsToAllowedBounds();
+                }
+
+                e.Handled = true;
+                return;
             }
 
             if (_core.IsDragging)
@@ -1846,12 +2496,10 @@ namespace GMap.NET.WindowsPresentation
 
                 _core.EndDrag();
 
-                if (BoundsOfMap.HasValue && !BoundsOfMap.Value.Contains(Position))
+                if (BoundsOfMap.HasValue &&
+                    !BoundsOfMap.Value.IsEmpty)
                 {
-                    if (_core.LastLocationInBounds.HasValue)
-                    {
-                        Position = _core.LastLocationInBounds.Value;
-                    }
+                    ClampVisibleBoundsToAllowedBounds();
                 }
             }
             else
@@ -1885,12 +2533,21 @@ namespace GMap.NET.WindowsPresentation
         {
             base.OnMouseMove(e);
 
-            // wpf generates to many events if mouse is over some visual
-            // and OnMouseUp is fired, wtf, anyway...
-            // http://greatmaps.codeplex.com/workitem/16013
             if ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp < 55)
             {
-                Debug.WriteLine("OnMouseMove skipped: " + ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp) + "ms");
+                Debug.WriteLine(
+                    "OnMouseMove skipped: " +
+                    ((e.Timestamp & Int32.MaxValue) - _onMouseUpTimestamp) +
+                    "ms"
+                );
+
+                return;
+            }
+
+            if ((IsDragging || _core.IsDragging) &&
+    !IsDragButtonPressed(e))
+            {
+                StopMouseDragState(e.Timestamp);
                 return;
             }
 
@@ -1905,9 +2562,7 @@ namespace GMap.NET.WindowsPresentation
 
                 p = ApplyRotationInversion(p.X, p.Y);
 
-                // cursor has moved beyond drag tolerance
-                if (e.LeftButton == MouseButtonState.Pressed && DragButton == MouseButton.Left ||
-                    e.RightButton == MouseButtonState.Pressed && DragButton == MouseButton.Right)
+                if (IsDragButtonPressed(e)) // ← використовуємо єдиний helper
                 {
                     if (Math.Abs(p.X - _core.MouseDown.X) * 2 >= SystemParameters.MinimumHorizontalDragDistance ||
                         Math.Abs(p.Y - _core.MouseDown.Y) * 2 >= SystemParameters.MinimumVerticalDragDistance)
@@ -1928,58 +2583,62 @@ namespace GMap.NET.WindowsPresentation
                     Mouse.Capture(this);
                 }
 
-                if (BoundsOfMap.HasValue && !BoundsOfMap.Value.Contains(Position))
+                var p = e.GetPosition(this);
+
+                if (MapScaleTransform != null)
                 {
-                    // ...
+                    p = MapScaleTransform.Inverse.Transform(p);
+                }
+
+                p = ApplyRotationInversion(p.X, p.Y);
+
+                _core.MouseCurrent.X = (int)p.X;
+                _core.MouseCurrent.Y = (int)p.Y;
+
+                _core.Drag(_core.MouseCurrent);
+
+                if (BoundsOfMap.HasValue &&
+                    !BoundsOfMap.Value.IsEmpty)
+                {
+                    ClampVisibleBoundsToAllowedBounds();
+                }
+
+                if (IsRotated || _scaleMode != ScaleModes.Integer)
+                {
+                    ForceUpdateOverlays();
                 }
                 else
                 {
-                    var p = e.GetPosition(this);
-
-                    if (MapScaleTransform != null)
-                    {
-                        p = MapScaleTransform.Inverse.Transform(p);
-                    }
-
-                    p = ApplyRotationInversion(p.X, p.Y);
-
-                    _core.MouseCurrent.X = (int)p.X;
-                    _core.MouseCurrent.Y = (int)p.Y;
-                    {
-                        _core.Drag(_core.MouseCurrent);
-                    }
-
-                    if (IsRotated || _scaleMode != ScaleModes.Integer)
-                    {
-                        ForceUpdateOverlays();
-                    }
-                    else
-                    {
-                        UpdateMarkersOffset();
-                    }
+                    UpdateMarkersOffset();
                 }
 
                 InvalidateVisual(true);
             }
             else
             {
-                if (_isSelected && !_selectionStart.IsEmpty &&
-                    (Keyboard.Modifiers == ModifierKeys.Shift || Keyboard.Modifiers == ModifierKeys.Alt ||
+                if (_isSelected &&
+                    !_selectionStart.IsEmpty &&
+                    (Keyboard.Modifiers == ModifierKeys.Shift ||
+                     Keyboard.Modifiers == ModifierKeys.Alt ||
                      DisableAltForSelection))
                 {
                     var p = e.GetPosition(this);
                     _selectionEnd = FromLocalToLatLng((int)p.X, (int)p.Y);
-                    {
-                        var p1 = _selectionStart;
-                        var p2 = _selectionEnd;
 
-                        double x1 = Math.Min(p1.Lng, p2.Lng);
-                        double y1 = Math.Max(p1.Lat, p2.Lat);
-                        double x2 = Math.Max(p1.Lng, p2.Lng);
-                        double y2 = Math.Min(p1.Lat, p2.Lat);
+                    var p1 = _selectionStart;
+                    var p2 = _selectionEnd;
 
-                        SelectedArea = new RectLatLng(y1, x1, x2 - x1, y1 - y2);
-                    }
+                    var x1 = Math.Min(p1.Lng, p2.Lng);
+                    var y1 = Math.Max(p1.Lat, p2.Lat);
+                    var x2 = Math.Max(p1.Lng, p2.Lng);
+                    var y2 = Math.Min(p1.Lat, p2.Lat);
+
+                    SelectedArea = new RectLatLng(
+                        y1,
+                        x1,
+                        x2 - x1,
+                        y1 - y2
+                    );
                 }
 
                 if (_renderHelperLine)
@@ -2040,12 +2699,9 @@ namespace GMap.NET.WindowsPresentation
 
                     _core.EndDrag();
 
-                    if (BoundsOfMap.HasValue && !BoundsOfMap.Value.Contains(Position))
+                    if (BoundsOfMap.HasValue && !BoundsOfMap.Value.IsEmpty)
                     {
-                        if (_core.LastLocationInBounds.HasValue)
-                        {
-                            Position = _core.LastLocationInBounds.Value;
-                        }
+                        ClampVisibleBoundsToAllowedBounds();
                     }
                 }
                 else
@@ -2054,6 +2710,24 @@ namespace GMap.NET.WindowsPresentation
                     InvalidateVisual();
                 }
             }
+        }
+
+        private void ReapplyCurrentZoomTransform()
+        {
+            if (MapProvider == null ||
+                MapProvider.Projection == null ||
+                ActualWidth <= 0 ||
+                ActualHeight <= 0)
+            {
+                return;
+            }
+
+            ZoomPropertyChanged(
+                this,
+                Zoom,
+                Zoom,
+                ZoomMode.XY
+            );
         }
 
         protected override void OnStylusMove(StylusEventArgs e)
@@ -2144,6 +2818,8 @@ namespace GMap.NET.WindowsPresentation
         /// <param name="e">The data for the event.</param>
         protected override void OnManipulationDelta(ManipulationDeltaEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnManipulationDelta(e);
 
             if (MultiTouchEnabled && !TouchEnabled)
@@ -2162,8 +2838,6 @@ namespace GMap.NET.WindowsPresentation
                     else if (touchPoints.Length >= 2)
                     {
                         var centerOfTouchPoints = e.ManipulationOrigin;
-                        ZoomX *= delta.Scale.X;
-                        ZoomY *= delta.Scale.Y;
                     }
 
                     e.Handled = true;
@@ -2173,6 +2847,8 @@ namespace GMap.NET.WindowsPresentation
 
         protected override void OnManipulationStarted(ManipulationStartedEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnManipulationStarted(e);
 
             if (MultiTouchEnabled && !TouchEnabled)
@@ -2190,8 +2866,8 @@ namespace GMap.NET.WindowsPresentation
         /// <param name="deltaPoint">The delta point.</param>
         protected virtual void SingleTouchPanMap(Point deltaPoint)
         {
-            if (MultiTouchEnabled && !TouchEnabled) // redundent check in case this is invoked outside of the manipulation events
-            {
+            if (!MultiTouchEnabled) return;
+
                 deltaPoint = ApplyRotationInversion(deltaPoint.X, deltaPoint.Y);
 
                 _core.touchCurrent.X += (int)deltaPoint.X;
@@ -2237,8 +2913,8 @@ namespace GMap.NET.WindowsPresentation
                     }
 
                     InvalidateVisual();
-                }
-            }
+
+                }            
         }
 
         /// <summary>
@@ -2247,6 +2923,8 @@ namespace GMap.NET.WindowsPresentation
         /// <param name="e">The data for the event.</param>
         protected override void OnManipulationCompleted(ManipulationCompletedEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnManipulationCompleted(e);
 
             if (MultiTouchEnabled && !TouchEnabled)
@@ -2300,6 +2978,8 @@ namespace GMap.NET.WindowsPresentation
 
         protected override void OnTouchDown(TouchEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnTouchDown(e);
 
             if (MultiTouchEnabled)
@@ -2327,6 +3007,8 @@ namespace GMap.NET.WindowsPresentation
 
         protected override void OnTouchMove(TouchEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnTouchMove(e);
 
             if (MultiTouchEnabled)
@@ -2473,6 +3155,8 @@ namespace GMap.NET.WindowsPresentation
 
         protected override void OnTouchUp(TouchEventArgs e)
         {
+            if (!MultiTouchEnabled) return;
+
             base.OnTouchUp(e);
 
             if (MultiTouchEnabled && !TouchEnabled)
@@ -2529,12 +3213,10 @@ namespace GMap.NET.WindowsPresentation
             _core.ReloadMap();
         }
 
-#if !NETFRAMEWORK
         public Task ReloadMapAsync()
         {
             return _core.ReloadMapAsync();
         }
-#endif
 
         /// <summary>
         ///     sets position using geocoder
@@ -2731,15 +3413,6 @@ namespace GMap.NET.WindowsPresentation
             ((GMapControl)source).PositionChanged(e);
         }
 
-        private void PositionChanged(DependencyPropertyChangedEventArgs e)
-        {
-            _core.Position = Position;
-            if (_core.IsStarted)
-            {
-                ForceUpdateOverlays();
-            }
-        }
-
         [Browsable(false)]
         public GPoint PositionPixel
         {
@@ -2847,17 +3520,25 @@ namespace GMap.NET.WindowsPresentation
 
         public virtual void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
+
+            // Відписуємося від усіх подій control (незалежно від стану Core)
+            _core.OnMapZoomChanged -= ForceUpdateOverlays;
+            _core.OnCurrentPositionChanged -= CoreOnCurrentPositionChanged;
+            Loaded -= GMapControl_Loaded;
+            Dispatcher.ShutdownStarted -= Dispatcher_ShutdownStarted;
+            SizeChanged -= GMapControl_SizeChanged;
+
+            if (_loadedApp != null)
+            {
+                _loadedApp.SessionEnding -= Current_SessionEnding;
+                _loadedApp = null;
+            }
+
+            // Якщо Core запущено, закриваємо його
             if (_core.IsStarted)
             {
-                _core.OnMapZoomChanged -= ForceUpdateOverlays;
-                Loaded -= GMapControl_Loaded;
-                Dispatcher.ShutdownStarted -= Dispatcher_ShutdownStarted;
-                SizeChanged -= GMapControl_SizeChanged;
-                if (_loadedApp != null)
-                {
-                    _loadedApp.SessionEnding -= Current_SessionEnding;
-                }
-
                 _core.OnMapClose();
             }
         }

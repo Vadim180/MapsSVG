@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+	<PropertyGroup>
+		<AssemblyTitle>MapsWPF</AssemblyTitle>
+		<Description>MapsWPF</Description>
+		<Product>MapsWPF</Product>
+		<TargetFrameworks>net10.0-windows</TargetFrameworks>
+		<UseWPF>true</UseWPF>
+		<OutputType>WinExe</OutputType>
+		<SignAssembly>True</SignAssembly>
+		<Prefer32Bit>false</Prefer32Bit>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+		<OutputPath>..\Build\Debug\</OutputPath>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+		<OutputPath>..\Build\Release\</OutputPath>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\GMap.NET\GMap.NET.Core\GMap.NET.Core.csproj" />
+		<ProjectReference Include="..\GMap.NET\GMap.NET.WindowsPresentation\GMap.NET.WindowsPresentation.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="CoordinateSharp" Version="2.8.1.1" />
+		<PackageReference Include="Accord.Math" Version="3.8.2-alpha" />
+		<PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+		<None Include="C:\Users\Lion\.nuget\packages\accord\3.8.2-alpha\build\Accord.dll.config">
+			<Visible>False</Visible>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="Data\MDs\" />
+	  <Folder Include="Data\Templates\" />
+	</ItemGroup>
+
+</Project>

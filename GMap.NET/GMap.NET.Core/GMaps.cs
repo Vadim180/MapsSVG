@@ -92,6 +92,23 @@ namespace GMap.NET
         public readonly MemoryCache MemoryCache = new MemoryCache();
 
         /// <summary>
+        ///     Cache statistics counters
+        /// </summary>
+        public int TilesFromMemoryCache = 0;
+        public int TilesFromSQLiteCache = 0;
+        public int TilesFromNetwork = 0;
+
+        /// <summary>
+        ///     Reset cache statistics
+        /// </summary>
+        public void ResetCacheStatistics()
+        {
+            TilesFromMemoryCache = 0;
+            TilesFromSQLiteCache = 0;
+            TilesFromNetwork = 0;
+        }
+
+        /// <summary>
         ///     load tiles in random sequence
         /// </summary>
         public bool ShuffleTilesOnLoad = false;
@@ -703,105 +720,112 @@ namespace GMap.NET
             PureImage ret = null;
             result = null;
 
-            try
-            {
-                var rtile = new RawTile(provider.DbId, pos, zoom);
-
-                // let't check memory first
-                if (UseMemoryCache)
-                {
-                    byte[] m = MemoryCache.GetTileFromMemoryCache(rtile);
-                    if (m != null)
-                    {
-                        if (GMapProvider.TileImageProxy != null)
+                        try
                         {
-                            ret = GMapProvider.TileImageProxy.FromArray(m);
-                            if (ret == null)
+                            var rtile = new RawTile(provider.DbId, pos, zoom);
+
+                            // let't check memory first
+                            if (UseMemoryCache)
                             {
-#if DEBUG
-                                Debug.WriteLine("Image disposed in MemoryCache o.O, should never happen ;} " +
-                                                new RawTile(provider.DbId, pos, zoom));
-                                if (Debugger.IsAttached)
+                                byte[] m = MemoryCache.GetTileFromMemoryCache(rtile);
+                                if (m != null)
                                 {
-                                    Debugger.Break();
+                                    if (GMapProvider.TileImageProxy != null)
+                                    {
+                                        ret = GMapProvider.TileImageProxy.FromArray(m);
+                                        if (ret == null)
+                                        {
+            #if DEBUG
+                                            Debug.WriteLine("Image disposed in MemoryCache o.O, should never happen ;} " +
+                                                            new RawTile(provider.DbId, pos, zoom));
+                                            if (Debugger.IsAttached)
+                                            {
+                                                Debugger.Break();
+                                            }
+            #endif
+                                        }
+                                                                                        else
+                                                                                        {
+                                                                                            Interlocked.Increment(ref TilesFromMemoryCache);
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            if (ret == null)
+                                                                            {
+                                                                                if (Mode != AccessMode.ServerOnly && !provider.BypassCache)
+                                                                                {
+                                                                                    if (PrimaryCache != null)
+                                                                                    {
+                                                                                        // hold writer for 5s
+                                                                                        if (_cacheOnIdleRead)
+                                                                                        {
+                                                                                            Interlocked.Exchange(ref _readingCache, 5);
+                                                                                        }
+
+                                                                                        ret = PrimaryCache.GetImageFromCache(provider.DbId, pos, zoom);
+                                                                                        if (ret != null)
+                                                                                        {
+                                                                                            Interlocked.Increment(ref TilesFromSQLiteCache);
+                                                                                            if (UseMemoryCache)
+                                                                                            {
+                                                                                                MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
+                                                                                            }
+
+                                                                                            return ret;
+                                                                                        }
+                                                                                    }
+
+                                                                                    if (SecondaryCache != null)
+                                                                                    {
+                                                                                        // hold writer for 5s
+                                                                                        if (_cacheOnIdleRead)
+                                                                                        {
+                                                                                            Interlocked.Exchange(ref _readingCache, 5);
+                                                                                        }
+
+                                                                                        ret = SecondaryCache.GetImageFromCache(provider.DbId, pos, zoom);
+                                                                                        if (ret != null)
+                                                                                        {
+                                                                                            Interlocked.Increment(ref TilesFromSQLiteCache);
+                                                                                            if (UseMemoryCache)
+                                                                                            {
+                                                                                                MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
+                                                                                            }
+
+                                                                                            EnqueueCacheTask(new CacheQueueItem(rtile, ret.Data.GetBuffer(), CacheUsage.First));
+                                                                                            return ret;
+                                                                                        }
+                                                                                    }
+                                                                                }
+
+                                                                                if (Mode != AccessMode.CacheOnly)
+                                                                                {
+                                                                                    Interlocked.Increment(ref TilesFromNetwork);
+                                                                                    ret = provider.GetTileImage(pos, zoom);
+                                    {
+                                        // Enqueue Cache
+                                        if (ret != null)
+                                        {
+                                            if (UseMemoryCache)
+                                            {
+                                                MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
+                                            }
+
+                                            if (Mode != AccessMode.ServerOnly && !provider.BypassCache)
+                                            {
+                                                EnqueueCacheTask(new CacheQueueItem(rtile, ret.Data.GetBuffer(), CacheUsage.Both));
+                                            }
+                                        }
+                                    }
                                 }
-#endif
+                                else
+                                {
+                                    result = _noDataException;
+                                }
                             }
                         }
-                    }
-                }
-
-                if (ret == null)
-                {
-                    if (Mode != AccessMode.ServerOnly && !provider.BypassCache)
-                    {
-                        if (PrimaryCache != null)
-                        {
-                            // hold writer for 5s
-                            if (_cacheOnIdleRead)
-                            {
-                                Interlocked.Exchange(ref _readingCache, 5);
-                            }
-
-                            ret = PrimaryCache.GetImageFromCache(provider.DbId, pos, zoom);
-                            if (ret != null)
-                            {
-                                if (UseMemoryCache)
-                                {
-                                    MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
-                                }
-
-                                return ret;
-                            }
-                        }
-
-                        if (SecondaryCache != null)
-                        {
-                            // hold writer for 5s
-                            if (_cacheOnIdleRead)
-                            {
-                                Interlocked.Exchange(ref _readingCache, 5);
-                            }
-
-                            ret = SecondaryCache.GetImageFromCache(provider.DbId, pos, zoom);
-                            if (ret != null)
-                            {
-                                if (UseMemoryCache)
-                                {
-                                    MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
-                                }
-
-                                EnqueueCacheTask(new CacheQueueItem(rtile, ret.Data.GetBuffer(), CacheUsage.First));
-                                return ret;
-                            }
-                        }
-                    }
-
-                    if (Mode != AccessMode.CacheOnly)
-                    {
-                        ret = provider.GetTileImage(pos, zoom);
-                        {
-                            // Enqueue Cache
-                            if (ret != null)
-                            {
-                                if (UseMemoryCache)
-                                {
-                                    MemoryCache.AddTileToMemoryCache(rtile, ret.Data.GetBuffer());
-                                }
-
-                                if (Mode != AccessMode.ServerOnly && !provider.BypassCache)
-                                {
-                                    EnqueueCacheTask(new CacheQueueItem(rtile, ret.Data.GetBuffer(), CacheUsage.Both));
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        result = _noDataException;
-                    }
-                }
-            }
             catch (Exception ex)
             {
                 result = ex;

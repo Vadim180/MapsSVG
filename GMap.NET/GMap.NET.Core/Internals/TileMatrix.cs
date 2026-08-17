@@ -64,6 +64,14 @@ namespace GMap.NET.Internals
         }
 
         List<KeyValuePair<GPoint, Tile>> _tmp = new List<KeyValuePair<GPoint, Tile>>(44);
+        HashSet<GPoint> _visibleTilesSet = new HashSet<GPoint>(new GPointComparer());
+
+        /// <summary>
+        /// Maximum number of tiles to keep in memory per zoom level beyond the visible area.
+        /// Increasing this value reduces network requests when dragging back and forth,
+        /// but uses more memory. Default: 100 tiles (~10MB at 100KB per tile).
+        /// </summary>
+        public int MaxTilesPerLevelBeyondVisible { get; set; } = 100;
 
         public void ClearLevelAndPointsNotIn(int zoom, List<DrawTile> list)
         {
@@ -74,23 +82,47 @@ namespace GMap.NET.Internals
                 {
                     var l = _levels[zoom];
 
+                    // Only clear if we have significantly more tiles than visible + buffer
+                    int maxAllowed = list.Count + MaxTilesPerLevelBeyondVisible;
+                    if (l.Count <= maxAllowed)
+                    {
+                        // Don't clear - we're within the allowed buffer
+                        return;
+                    }
+
+                    // Build HashSet for O(1) lookup instead of O(n) list.Exists
+                    _visibleTilesSet.Clear();
+                    foreach (var dt in list)
+                    {
+                        _visibleTilesSet.Add(dt.PosXY);
+                    }
+
                     _tmp.Clear();
 
                     foreach (var t in l)
                     {
-                        if (!list.Exists(p => p.PosXY == t.Key))
+                        if (!_visibleTilesSet.Contains(t.Key))
                         {
                             _tmp.Add(t);
                         }
                     }
 
-                    foreach (var r in _tmp)
+                    // Only remove excess tiles beyond our buffer
+                    int tilesToRemove = l.Count - maxAllowed;
+                    if (tilesToRemove > 0 && _tmp.Count > 0)
                     {
-                        l.Remove(r.Key);
-                        r.Value.Dispose();
+                        // Remove only the oldest tiles (first ones in _tmp)
+                        int removeCount = Math.Min(tilesToRemove, _tmp.Count);
+                        for (int i = 0; i < removeCount; i++)
+                        {
+                            var r = _tmp[i];
+                            l.Remove(r.Key);
+                            r.Value.Dispose();
+                        }
                     }
 
                     _tmp.Clear();
+                    _visibleTilesSet.Clear();
                 }
             }
             finally

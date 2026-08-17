@@ -72,6 +72,8 @@ namespace GMap.NET.CacheProviders
             {
                 _cache = value;
 
+                // Keep generated map tiles in the per-user cache rather than
+                // writing a growing SQLite database into the application folder.
                 GtileCache = Path.Combine(_cache, "TileDBv5") + Path.DirectorySeparatorChar;
 
                 _dir = GtileCache + GMapProvider.LanguageStr + Path.DirectorySeparatorChar;
@@ -637,189 +639,222 @@ namespace GMap.NET.CacheProviders
 
         int _preAllocationPing;
 
-        bool PureImageCache.PutImageToCache(byte[] tile, int type, GPoint pos, int zoom)
-        {
-            bool ret = true;
-
-            if (_created)
-            {
-                try
-                {
-                    using (var cn = new SQLiteConnection())
-                    {
-                        cn.ConnectionString = _connectionString;
-                        cn.Open();
+                        bool PureImageCache.PutImageToCache(byte[] tile, int type, GPoint pos, int zoom)
                         {
-                            using (DbTransaction tr = cn.BeginTransaction())
+                            bool ret = true;
+
+                            if (_created)
                             {
                                 try
                                 {
-                                    using (DbCommand cmd = cn.CreateCommand())
+                                    using (var cn = new SQLiteConnection())
                                     {
-                                        cmd.Transaction = tr;
-                                        cmd.CommandText = singleSqlInsert;
+                                        cn.ConnectionString = _connectionString;
+                                        cn.Open();
+                                        {
+                                            using (DbTransaction tr = cn.BeginTransaction())
+                                            {
+                                                try
+                                                {
+                                                    using (DbCommand cmd = cn.CreateCommand())
+                                                    {
+                                                        cmd.Transaction = tr;
+                                                        cmd.CommandText = singleSqlInsert;
 
-                                        cmd.Parameters.Add(new SQLiteParameter("@p1", pos.X));
-                                        cmd.Parameters.Add(new SQLiteParameter("@p2", pos.Y));
-                                        cmd.Parameters.Add(new SQLiteParameter("@p3", zoom));
-                                        cmd.Parameters.Add(new SQLiteParameter("@p4", type));
-                                        cmd.Parameters.Add(new SQLiteParameter("@p5", DateTime.Now));
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p1", pos.X));
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p2", pos.Y));
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p3", zoom));
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p4", type));
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p5", DateTime.Now));
 
-                                        cmd.ExecuteNonQuery();
+                                                        cmd.ExecuteNonQuery();
+                                                    }
+
+                                                    using (DbCommand cmd = cn.CreateCommand())
+                                                    {
+                                                        cmd.Transaction = tr;
+
+                                                        cmd.CommandText = singleSqlInsertLast;
+                                                        cmd.Parameters.Add(new SQLiteParameter("@p1", tile));
+
+                                                        cmd.ExecuteNonQuery();
+                                                    }
+
+                                                    tr.Commit();
+                                                }
+                                                catch (Exception ex)
+                                                {
+                #if MONO
+                                            Console.WriteLine("PutImageToCache: " + ex.ToString());
+                #endif
+                                                    Debug.WriteLine("PutImageToCache: " + ex.ToString());
+
+                                                    tr.Rollback();
+                                                    ret = false;
+                                                }
+                                            }
+                                        }
+                                        cn.Close();
                                     }
 
-                                    using (DbCommand cmd = cn.CreateCommand())
+                                    if (Interlocked.Increment(ref _preAllocationPing) % 22 == 0)
                                     {
-                                        cmd.Transaction = tr;
-
-                                        cmd.CommandText = singleSqlInsertLast;
-                                        cmd.Parameters.Add(new SQLiteParameter("@p1", tile));
-
-                                        cmd.ExecuteNonQuery();
+                                        CheckPreAllocation();
                                     }
-
-                                    tr.Commit();
                                 }
                                 catch (Exception ex)
                                 {
-#if MONO
-                            Console.WriteLine("PutImageToCache: " + ex.ToString());
-#endif
+                #if MONO
+                                Console.WriteLine("PutImageToCache: " + ex.ToString());
+                #endif
                                     Debug.WriteLine("PutImageToCache: " + ex.ToString());
-
-                                    tr.Rollback();
                                     ret = false;
                                 }
                             }
-                        }
-                        cn.Close();
-                    }
 
-                    if (Interlocked.Increment(ref _preAllocationPing) % 22 == 0)
-                    {
-                        CheckPreAllocation();
-                    }
-                }
-                catch (Exception ex)
-                {
-#if MONO
-                Console.WriteLine("PutImageToCache: " + ex.ToString());
-#endif
-                    Debug.WriteLine("PutImageToCache: " + ex.ToString());
-                    ret = false;
-                }
-            }
-
-            return ret;
-        }
-
-        PureImage PureImageCache.GetImageFromCache(int type, GPoint pos, int zoom)
-        {
-            PureImage ret = null;
-            try
-            {
-                using (var cn = new SQLiteConnection())
-                {
-                    cn.ConnectionString = _connectionString;
-                    cn.Open();
-                    {
-                        if (!string.IsNullOrEmpty(_attachSqlQuery))
-                        {
-                            using (DbCommand com = cn.CreateCommand())
-                            {
-                                com.CommandText = _attachSqlQuery;
-                                int x = com.ExecuteNonQuery();
-                                //Debug.WriteLine("Attach: " + x);                         
-                            }
+                            return ret;
                         }
 
-                        using (DbCommand com = cn.CreateCommand())
+                        PureImage PureImageCache.GetImageFromCache(int type, GPoint pos, int zoom)
                         {
-                            com.CommandText = string.Format(_finnalSqlSelect, pos.X, pos.Y, zoom, type);
-
-                            using (var rd = com.ExecuteReader(System.Data.CommandBehavior.SequentialAccess))
+                            PureImage ret = null;
+                            try
                             {
-                                if (rd.Read())
+                                using (var cn = new SQLiteConnection())
                                 {
-                                    long length = rd.GetBytes(0, 0, null, 0, 0);
-                                    byte[] tile = new byte[length];
-                                    rd.GetBytes(0, 0, tile, 0, tile.Length);
+                                    cn.ConnectionString = _connectionString;
+                                    cn.Open();
                                     {
-                                        if (GMapProvider.TileImageProxy != null)
+                                        if (!string.IsNullOrEmpty(_attachSqlQuery))
                                         {
-                                            ret = GMapProvider.TileImageProxy.FromArray(tile);
+                                            using (DbCommand com = cn.CreateCommand())
+                                            {
+                                                com.CommandText = _attachSqlQuery;
+                                                int x = com.ExecuteNonQuery();
+                                                //Debug.WriteLine("Attach: " + x);                         
+                                            }
+                                        }
+
+                                        using (DbCommand com = cn.CreateCommand())
+                                        {
+                                            com.CommandText = string.Format(_finnalSqlSelect, pos.X, pos.Y, zoom, type);
+
+                                            using (var rd = com.ExecuteReader(System.Data.CommandBehavior.SequentialAccess))
+                                            {
+                                                if (rd.Read())
+                                                {
+                                                    long length = rd.GetBytes(0, 0, null, 0, 0);
+                                                    byte[] tile = new byte[length];
+                                                    rd.GetBytes(0, 0, tile, 0, tile.Length);
+                                                    {
+                                                        if (GMapProvider.TileImageProxy != null)
+                                                        {
+                                                            ret = GMapProvider.TileImageProxy.FromArray(tile);
+                                                        }
+                                                    }
+                                                }
+
+                                                rd.Close();
+                                            }
+                                        }
+
+                                        if (!string.IsNullOrEmpty(_detachSqlQuery))
+                                        {
+                                            using (DbCommand com = cn.CreateCommand())
+                                            {
+                                                com.CommandText = _detachSqlQuery;
+                                                int x = com.ExecuteNonQuery();
+                                                //Debug.WriteLine("Detach: " + x);
+                                            }
                                         }
                                     }
+                                    cn.Close();
                                 }
-
-                                rd.Close();
                             }
-                        }
-
-                        if (!string.IsNullOrEmpty(_detachSqlQuery))
-                        {
-                            using (DbCommand com = cn.CreateCommand())
+                            catch (Exception ex)
                             {
-                                com.CommandText = _detachSqlQuery;
-                                int x = com.ExecuteNonQuery();
-                                //Debug.WriteLine("Detach: " + x);
+                #if MONO
+                            Console.WriteLine("GetImageFromCache: " + ex.ToString());
+                #endif
+                                Debug.WriteLine("GetImageFromCache: " + ex.ToString());
+                                ret = null;
                             }
+
+                            return ret;
                         }
-                    }
-                    cn.Close();
-                }
-            }
-            catch (Exception ex)
-            {
-#if MONO
-            Console.WriteLine("GetImageFromCache: " + ex.ToString());
-#endif
-                Debug.WriteLine("GetImageFromCache: " + ex.ToString());
-                ret = null;
-            }
 
-            return ret;
-        }
-
-        int PureImageCache.DeleteOlderThan(DateTime date, int? type)
-        {
-            int affectedRows = 0;
-
-            try
-            {
-                using (var cn = new SQLiteConnection())
+                int PureImageCache.DeleteOlderThan(DateTime date, int? type)
                 {
-                    cn.ConnectionString = _connectionString;
-                    cn.Open();
-                    {
-                        using (DbCommand com = cn.CreateCommand())
-                        {
-                            com.CommandText =
-                                string.Format(
-                                    "DELETE FROM Tiles WHERE CacheTime is not NULL and CacheTime < datetime('{0}')",
-                                    date.ToString("s"));
-                            if (type.HasValue)
-                            {
-                                com.CommandText += " and Type = " + type;
-                            }
+                    int affectedRows = 0;
 
-                            affectedRows = com.ExecuteNonQuery();
+                    try
+                    {
+                        using (var cn = new SQLiteConnection())
+                        {
+                            cn.ConnectionString = _connectionString;
+                            cn.Open();
+                            {
+                                using (DbCommand com = cn.CreateCommand())
+                                {
+                                    com.CommandText =
+                                        string.Format(
+                                            "DELETE FROM Tiles WHERE CacheTime is not NULL and CacheTime < datetime('{0}')",
+                                            date.ToString("s"));
+                                    if (type.HasValue)
+                                    {
+                                        com.CommandText += " and Type = " + type;
+                                    }
+
+                                    affectedRows = com.ExecuteNonQuery();
+                                }
+                            }
                         }
                     }
+                    catch (Exception ex)
+                    {
+        #if MONO
+                    Console.WriteLine("DeleteOlderThan: " + ex);
+        #endif
+                        Debug.WriteLine("DeleteOlderThan: " + ex);
+                    }
+
+                    return affectedRows;
                 }
-            }
-            catch (Exception ex)
-            {
-#if MONO
-            Console.WriteLine("DeleteOlderThan: " + ex);
-#endif
-                Debug.WriteLine("DeleteOlderThan: " + ex);
-            }
 
-            return affectedRows;
+                /// <summary>
+                /// Get total count of tiles in database
+                /// </summary>
+                public int GetTileCount()
+                {
+                    int count = 0;
+                    try
+                    {
+                        using (var cn = new SQLiteConnection())
+                        {
+                            cn.ConnectionString = _connectionString;
+                            cn.Open();
+                            {
+                                using (DbCommand com = cn.CreateCommand())
+                                {
+                                    com.CommandText = "SELECT COUNT(*) FROM Tiles";
+                                    var result = com.ExecuteScalar();
+                                    if (result != null)
+                                    {
+                                        count = Convert.ToInt32(result);
+                                    }
+                                }
+                            }
+                            cn.Close();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine("GetTileCount: " + ex);
+                    }
+                    return count;
+                }
+
+                #endregion
+            }
+        #endif
         }
-
-        #endregion
-    }
-#endif
-}

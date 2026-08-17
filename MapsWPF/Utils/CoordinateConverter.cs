@@ -1,0 +1,287 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+
+using Accord.Math;
+
+using CoordinateSharp;
+
+namespace MapsWPF.Utils
+{
+    public class CoordinateConverter
+    {
+        private double[]? eastingCoeffs;
+        private double[]? northingCoeffs;
+        private double[,]? _inv;
+        private double _e0, _n0;
+
+        public void SetCoefficients(double[] easting, double[] northing)
+        {
+            eastingCoeffs = easting;
+            northingCoeffs = northing;
+            RebuildInverse();
+        }
+
+        public void Clear()
+        {
+            eastingCoeffs = null;
+            northingCoeffs = null;
+            _inv = null;
+        }
+
+        public PointF PixelToUTM(PointF pixel)
+        {
+            if (eastingCoeffs == null || northingCoeffs == null)
+                return PointF.Empty;
+
+            double x = pixel.X;
+            double y = pixel.Y;
+
+            double easting = eastingCoeffs[0] * x + eastingCoeffs[1] * y + eastingCoeffs[2];
+            double northing = northingCoeffs[0] * x + northingCoeffs[1] * y + northingCoeffs[2];
+
+            return new PointF((float)easting, (float)northing);
+        }
+
+        public PointF UTMToPixel(PointF utm)
+        {
+            if (_inv == null) return PointF.Empty;
+
+            double e = utm.X - _e0;
+            double n = utm.Y - _n0;
+
+            double x = _inv[0, 0] * e + _inv[0, 1] * n;
+            double y = _inv[1, 0] * e + _inv[1, 1] * n;
+
+            return new PointF((float)x, (float)y);
+        }
+
+        public void RebuildInverse()
+        {
+            if (eastingCoeffs == null || northingCoeffs == null || eastingCoeffs.Length < 3 || northingCoeffs.Length < 3)
+            {
+                _inv = null;
+                return;
+            }
+
+            try
+            {
+                var m = new double[,] {
+                  { eastingCoeffs[0], eastingCoeffs[1] },
+                  { northingCoeffs[0], northingCoeffs[1] }
+                };
+
+                _inv = Matrix.Inverse(m);
+                _e0 = eastingCoeffs[2];
+                _n0 = northingCoeffs[2];
+            }
+            catch
+            {
+                _inv = null;
+            }
+        }
+
+        /// <summary>
+        /// Повертає true, коли калібрування встановлено та інверсна матриця доступна.
+        /// </summary>
+        public bool IsCalibrated => _inv != null;
+
+        public double[] SolveAffineTransform(List<PointF> pixels, List<PointF> coords)
+        {
+            if (pixels.Count < 4 || coords.Count < 4)
+                return new double[3];
+
+            double[,] matrix = new double[4, 3];
+            var vector = new double[4];
+
+            for (int i = 0; i < 4; i++)
+            {
+                matrix[i, 0] = pixels[i].X;
+                matrix[i, 1] = pixels[i].Y;
+                matrix[i, 2] = 1;
+                vector[i] = coords[i].X;
+            }
+
+            return matrix.PseudoInverse().Dot(vector);
+        }
+
+        public string FormatShortMGRSFromUTM(PointF utm, int inputUtmZone, char bandLetter)
+        {
+            try
+            {
+                string band = bandLetter.ToString();
+
+                // Use the determined zone and band
+                var tempUtm = new UniversalTransverseMercator(band, inputUtmZone, utm.X, utm.Y);
+                var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+                // Note: We already have the zone, so we don't strictly need to recalculate it from Longitude 
+                // unless we suspect the PointF is on a boundary. trusting inputUtmZone for MGRS generation is safer for consistency.
+
+                // However, MGRS library might handle zone boundaries itself. 
+                // Let's just forward to MGRS string generation using this valid coordinate.
+
+                string fullMgrsString = coord.MGRS.ToString();
+
+                // Return the full MGRS string (do not truncate to 2-digit east/north)
+                return fullMgrsString;
+            }
+            catch
+            {
+                return "Невірні координати";
+            }
+        }
+
+        /// <summary>
+        /// Спроба перетворити UTM (Easting, Northing) в Lat/Lon (WGS84). Повертає true якщо вдалося.
+        /// Виконує двоетапну корекцію з визначенням зони за отриманою довготою.
+        /// </summary>
+        public bool TryUTMToLatLng(PointF utm, out double latitude, out double longitude)
+        {
+            latitude = double.NaN;
+            longitude = double.NaN;
+
+            try
+            {
+                string hemisphere = utm.Y > 0 ? "N" : "S";
+
+                // First-pass with a default zone (37) to get approximate longitude
+                var tempUtm = new UniversalTransverseMercator(hemisphere, 37, utm.X, utm.Y);
+                var approx = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+
+                double approxLon = approx.Longitude.DecimalDegree;
+
+                int utmZone = (int)Math.Floor((approxLon + 180) / 6) + 1;
+
+                // Recreate with correct zone
+                var correctedUtm = new UniversalTransverseMercator(hemisphere, utmZone, utm.X, utm.Y);
+                var corrected = UniversalTransverseMercator.ConvertUTMtoLatLong(correctedUtm);
+
+                latitude = corrected.Latitude.DecimalDegree;
+                longitude = corrected.Longitude.DecimalDegree;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Попытка перетворити UTM з явно вказаною зоною
+        /// </summary>
+        public bool TryUTMToLatLng(PointF utm, int inputUtmZone, out double latitude, out double longitude)
+        {
+            // Backwards compatibility default (guessing N)
+             return TryUTMToLatLng(utm, inputUtmZone, ' ', out latitude, out longitude);
+        }
+
+        public bool TryUTMToLatLng(PointF utm, int inputUtmZone, char bandLetter, out double latitude, out double longitude)
+        {
+            latitude = double.NaN;
+            longitude = double.NaN;
+
+            try
+            {
+                string hemisphere = "N";
+                if (bandLetter != ' ' && char.IsLetter(bandLetter))
+                {
+                   // Bands C..M are South, N..X are North
+                   hemisphere = (char.ToUpper(bandLetter) >= 'N') ? "N" : "S";
+                }
+                else
+                {
+                     // Fallback guess (legacy behavior, but dangerous near equator)
+                     hemisphere = "N"; // Default to North if unknown
+                }
+
+                var tempUtm = new UniversalTransverseMercator(hemisphere, inputUtmZone, utm.X, utm.Y);
+                var coord = UniversalTransverseMercator.ConvertUTMtoLatLong(tempUtm);
+
+                latitude = coord.Latitude.DecimalDegree;
+                longitude = coord.Longitude.DecimalDegree;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private char GetUTMBandLetter(double latitude)
+        {
+            string bands = "CDEFGHJKLMNPQRSTUVWX";
+            int index = (int)Math.Floor((latitude + 80) / 8);
+
+            if (index < 0) index = 0;
+            if (index > 19) index = 19;
+
+            return bands[index];
+        }
+
+        /// <summary>
+        /// Попытка перетворити широту/довготу в UTM (Easting, Northing) з визначенням зони та літери пояса.
+        /// Використовує CoordinateSharp для отримання значень UTM.
+        /// </summary>
+        public bool TryLatLngToUTM(double latitude, double longitude, out System.Drawing.PointF utm, out int utmZone, out char bandLetter)
+        {
+            utm = PointF.Empty;
+            utmZone = 0;
+            bandLetter = ' ';
+
+            try
+            {
+                // Create coordinate and read UTM values
+                var coord = new CoordinateSharp.Coordinate(latitude, longitude);
+
+                // CoordinateSharp provides UTM info on the Coordinate object
+                double easting = coord.UTM.Easting;
+                double northing = coord.UTM.Northing;
+
+                // Compute UTM zone from longitude
+                utmZone = (int)Math.Floor((longitude + 180) / 6) + 1;
+
+                bandLetter = GetUTMBandLetter(latitude);
+
+                utm = new PointF((float)easting, (float)northing);
+                return true;
+            }
+            catch
+            {
+                utm = PointF.Empty;
+                utmZone = 0;
+                bandLetter = ' ';
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Форматування UTM рядка для відображення.
+        /// </summary>
+        public string FormatUTM(PointF utm, int utmZone, char bandLetter)
+        {
+            if (utm == PointF.Empty)
+            {
+                return "N/A";
+            }
+
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0}{1} {2:F2} E {3:F2} N", utmZone, bandLetter, utm.X, utm.Y);
+        }
+
+        public bool TryMGRSToLatLng(string mgrs, out double lat, out double lng)
+        {
+            lat = 0; lng = 0;
+            try
+            {
+                if (CoordinateSharp.Coordinate.TryParse(mgrs, out var c))
+                {
+                    lat = c.Latitude.DecimalDegree;
+                    lng = c.Longitude.DecimalDegree;
+                    return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+    }
+}

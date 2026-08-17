@@ -1,0 +1,10 @@
+{
+  "Position_Point": {
+    "Poistio1": ["GREENDAY", "GREENDAY, Kasper"],
+    "ДЕТРОЙТ": ["GREENDAY", "Kasper", "Volt"]
+  },
+  "DroneByPosition": {
+    "ФОРПОСТ": ["BARABASH MAX FLY", "BARABASH 10", "BLINK 8", "F7"],
+    "ДЕТРОЙТ": ["Дикі шершні '10'", "Rusoriz '10'"]
+  }
+}

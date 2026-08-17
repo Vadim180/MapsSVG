@@ -10,6 +10,10 @@ namespace GMap.NET
     [Serializable]
     public struct GPoint
     {
+        // Увага: Empty фактично дорівнює координаті (0, 0).
+        // Але (0, 0) також може бути реальною координатою пікселя або тайла.
+        // Тому в критичній логіці IsEmpty не слід використовувати як єдину
+        // ознаку того, що значення ще не було встановлене.
         public static readonly GPoint Empty = new GPoint();
 
         public GPoint(long x, long y)
@@ -90,7 +94,15 @@ namespace GMap.NET
 
         public override int GetHashCode()
         {
-            return (int)(X ^ Y);
+            unchecked
+            {
+                var hash = 17;
+
+                hash = hash * 31 + X.GetHashCode();
+                hash = hash * 31 + Y.GetHashCode();
+
+                return hash;
+            }
         }
 
         public void Offset(long dx, long dy)
