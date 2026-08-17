@@ -72,9 +72,9 @@ namespace GMap.NET.CacheProviders
             {
                 _cache = value;
 
-                // DEBUG STORE CACHE IN CURRENT DIRECTORY
-                //GtileCache = Path.Combine(_cache, "TileDBv5") + Path.DirectorySeparatorChar;
-                GtileCache = Path.Combine(Directory.GetCurrentDirectory(), "TileDBv5") + Path.DirectorySeparatorChar;
+                // Keep generated map tiles in the per-user cache rather than
+                // writing a growing SQLite database into the application folder.
+                GtileCache = Path.Combine(_cache, "TileDBv5") + Path.DirectorySeparatorChar;
 
                 _dir = GtileCache + GMapProvider.LanguageStr + Path.DirectorySeparatorChar;
 

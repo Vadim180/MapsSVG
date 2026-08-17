@@ -384,4 +384,5 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 
-/TileDBv5/en/Data.gmdb
+# GMap.NET runtime tile cache (generated while panning and zooming the map)
+**/TileDBv5/
